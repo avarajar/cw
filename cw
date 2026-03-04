@@ -24,6 +24,13 @@ M='\033[0;35m' C='\033[0;36m' BOLD='\033[1m' DIM='\033[2m' NC='\033[0m'
 _log()  { echo -e "${G}[cw]${NC} $*"; }
 _warn() { echo -e "${Y}[cw]${NC} $*"; }
 _err()  { echo -e "${R}[cw]${NC} $*" >&2; }
+_set_tab_title() {
+    # Set window/tab title (standard)
+    printf '\033]1;%s\007' "$1"
+    printf '\033]2;%s\007' "$1"
+    # Set iTerm2 badge (persists even if Claude changes title)
+    printf '\033]1337;SetBadgeFormat=%s\007' "$(printf '%s' "$1" | base64)"
+}
 _dim()  { echo -e "${DIM}$*${NC}"; }
 
 _ensure_dirs() {
@@ -308,6 +315,7 @@ cmd_open() {
     _log "Opening ${C}$name${NC}  account=${M}$account${NC}"
 
     cd "$path"
+    _set_tab_title "$name"
     CLAUDE_CONFIG_DIR="$acct_dir" claude --dangerously-skip-permissions
 
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) OPEN $name mode=$mode account=$account" >> "$CW_SESSIONS_LOG"
@@ -491,6 +499,7 @@ with open('$session_meta', 'w') as f:
 
     # ── Run Claude ────────────────────────────────────────────────────
     cd "$wt_dir"
+    _set_tab_title "PR#$pr - $name"
     if ! $is_new; then
         CLAUDE_CONFIG_DIR="$acct_dir" claude --dangerously-skip-permissions --continue
     else
@@ -686,6 +695,7 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
     [[ -d "$wt_dir" ]] && open_dir="$wt_dir"
 
     cd "$open_dir"
+    _set_tab_title "$task - $name"
 
     if $is_new && [[ -n "$init_prompt" ]]; then
         local prompt_file="$session_dir/init_prompt.txt"
