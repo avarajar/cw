@@ -609,14 +609,39 @@ with open('$session_meta', 'w') as f:
         CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --continue
     else
         # Build review prompt: project skill > global skill > default
-        local review_skill=""
-        if [[ -f "$path/.claude/commands/review-pr.md" ]]; then
-            review_skill=$(cat "$path/.claude/commands/review-pr.md")
-            _dim "  Using project review skill"
-        elif [[ -f "$CW_HOME/commands/review-pr.md" ]]; then
-            review_skill=$(cat "$CW_HOME/commands/review-pr.md")
-            _dim "  Using global review skill"
+        # Search order:
+        #   1. .claude/skills/review-pr/SKILL.md  (project skill)
+        #   2. .claude/skills/code-review*/SKILL.md (project skill, alt name)
+        #   3. ~/.claude/skills/code-reviewer/SKILL.md (user global skill)
+        #   4. ~/.cw/commands/review-pr.md (CW global command)
+        #   5. built-in default
+        local review_skill="" skill_source=""
+        local _skill_file=""
+        # 1. Project skills (.claude/skills/)
+        for _name in review-pr code-review code-reviewer; do
+            if [[ -f "$path/.claude/skills/$_name/SKILL.md" ]]; then
+                _skill_file="$path/.claude/skills/$_name/SKILL.md"
+                skill_source="project skill ($_name)"
+                break
+            fi
+        done
+        # 2. User global skills (~/.claude/skills/)
+        if [[ -z "$_skill_file" ]]; then
+            for _name in code-reviewer review-pr code-review; do
+                if [[ -f "$HOME/.claude/skills/$_name/SKILL.md" ]]; then
+                    _skill_file="$HOME/.claude/skills/$_name/SKILL.md"
+                    skill_source="global skill ($_name)"
+                    break
+                fi
+            done
         fi
+        # 3. CW commands fallback (~/.cw/commands/)
+        if [[ -z "$_skill_file" ]] && [[ -f "$CW_HOME/commands/review-pr.md" ]]; then
+            _skill_file="$CW_HOME/commands/review-pr.md"
+            skill_source="CW command"
+        fi
+        [[ -n "$_skill_file" ]] && review_skill=$(cat "$_skill_file")
+        [[ -n "$skill_source" ]] && _dim "  Using $skill_source"
 
         local review_prompt="Review PR #$pr for project $name.
 
