@@ -4,9 +4,6 @@
 
 CW manages multiple Claude Code sessions across projects, accounts, and tasks — with isolated worktrees, persistent context, and automatic integration with Linear, Notion, and GitHub.
 
-<!-- TODO: Add GIF demo here -->
-<!-- ![CW Demo](docs/assets/demo.gif) -->
-
 ---
 
 ## Why CW?

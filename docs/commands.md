@@ -162,8 +162,21 @@ Full command reference.
 
 Available after sourcing `cw-shell-integration.sh`:
 
-| Alias | Command |
-|-------|---------|
-| `cww` | `cw work` |
-| `cwpr` | `cw review` |
-| `cwsp` | `cw spaces` |
+| Alias | Command | Description |
+|-------|---------|-------------|
+| `cww` | `cw work` | Work on task with worktree |
+| `cwpr` | `cw review` | PR review with worktree |
+| `cwsp` | `cw spaces` | Show active spaces |
+| `cwd` | `cw dashboard` | Full workspace overview |
+| `cws` | `cw status` | Quick status |
+| `cwrl` | `cw review --list` | List active reviews |
+| `cwl` | `cw project list` | List projects |
+| `cwc` | `cw open <project> --mode code` | Open in code mode |
+| `cwr` | `cw open <project> --mode review` | Open in review mode |
+| `cwi` | `cw open <project> --mode research` | Open in research mode |
+| `cwdoc` | `cw open <project> --mode docs` | Open in docs mode |
+| `cwp` | `cw open <project> --mode planning` | Open in planning mode |
+| `cwm` | `cw open <project> --mode comms` | Open in comms mode |
+| `cwf` | `cw open <project> --mode full` | Open in full mode |
+| `cwo` | Fuzzy project opener | Requires `fzf` |
+| `cc` | `cw launch` | Quick launch Claude |

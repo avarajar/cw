@@ -17,8 +17,8 @@ _cw_load_aliases
 # ── Quick aliases ───────────────────────────────────────────────────────────
 alias cwd='cw dashboard'
 alias cws='cw status'
-alias cwrl='cw review --list'         # listar reviews activos
-alias cwsp='cw spaces'                   # ver espacios activos
+alias cwrl='cw review --list'         # list active reviews
+alias cwsp='cw spaces'                   # show active spaces
 alias cwl='cw project list'
 
 # ── Mode shortcuts: cwc = code, cwr = review, etc. ─────────────────────────
@@ -37,13 +37,13 @@ cc() { cw launch "${1:-work}" "${@:2}"; }
 
 # ── Fuzzy project opener (requires fzf) ─────────────────────────────────────
 cwo() {
-    command -v fzf &>/dev/null || { echo "Requiere fzf"; return 1; }
-    [[ -f "$CW_HOME/projects.json" ]] || { echo "No hay proyectos"; return 1; }
+    command -v fzf &>/dev/null || { echo "Requires fzf"; return 1; }
+    [[ -f "$CW_HOME/projects.json" ]] || { echo "No projects found"; return 1; }
     local project; project=$(python3 -c "
 import json
 with open('$CW_HOME/projects.json') as f:
     for n in json.load(f): print(n)
-" 2>/dev/null | fzf --prompt="Proyecto ❯ " --height=10)
+" 2>/dev/null | fzf --prompt="Project ❯ " --height=10)
     [[ -n "$project" ]] && cw open "$project" "$@"
 }
 

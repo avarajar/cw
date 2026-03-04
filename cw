@@ -4,10 +4,11 @@
 # Orchestrates projects, accounts, modes, MCPs, agents and sessions
 # Multi-project orchestrator for Claude Code.
 #
-# Usage: cw <comando> [opciones]
+# Usage: cw <command> [options]
 # ============================================================================
 set -uo pipefail
 
+CW_VERSION="0.1.0"
 CW_HOME="${CW_HOME:-$HOME/.cw}"
 CW_ACCOUNTS_DIR="$CW_HOME/accounts"
 CW_REGISTRY="$CW_HOME/projects.json"
@@ -17,7 +18,36 @@ CW_ACTIVE="$CW_HOME/active-sessions.json"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Colores para output del CLI
+# Extra flags passed to every `claude` invocation
+CW_CLAUDE_FLAGS="${CW_CLAUDE_FLAGS:-}"
+
+# Resolve claude flags from config + env + CLI
+_resolve_claude_flags() {
+    # CLI flag (--skip-permissions) takes highest priority
+    if [[ "${_CW_SKIP_PERMS:-}" == "true" ]]; then
+        CW_CLAUDE_FLAGS="--dangerously-skip-permissions $CW_CLAUDE_FLAGS"
+        return
+    fi
+    # Then env var (already set above)
+    if [[ -n "$CW_CLAUDE_FLAGS" ]]; then
+        return
+    fi
+    # Then config file
+    if [[ -f "$CW_CONFIG" ]]; then
+        local val
+        val=$(python3 -c "
+import re
+with open('$CW_CONFIG') as f: text = f.read()
+m = re.search(r'^skip_permissions:\s*(true|false)', text, re.M)
+print(m.group(1) if m else 'false')
+" 2>/dev/null || echo "false")
+        if [[ "$val" == "true" ]]; then
+            CW_CLAUDE_FLAGS="--dangerously-skip-permissions"
+        fi
+    fi
+}
+
+# CLI output colors
 R='\033[0;31m' G='\033[0;32m' Y='\033[1;33m' B='\033[0;34m'
 M='\033[0;35m' C='\033[0;36m' BOLD='\033[1m' DIM='\033[2m' NC='\033[0m'
 
@@ -64,14 +94,33 @@ cmd_init() {
     [[ -f "$CW_ACTIVE" ]]   || echo '{}' > "$CW_ACTIVE"
 
     if [[ ! -f "$CW_CONFIG" ]]; then
-        cat > "$CW_CONFIG" << 'YAML'
+        # Ask about skip_permissions
+        echo ""
+        echo -e "  ${BOLD}Skip permission prompts?${NC}"
+        echo -e "  Claude Code normally asks for confirmation before running commands."
+        echo -e "  ${Y}--dangerously-skip-permissions${NC} disables this (faster, but less safe)."
+        echo ""
+        echo -e "  ${C}[1]${NC} No  — keep permission prompts ${DIM}(recommended for teams)${NC}"
+        echo -e "  ${C}[2]${NC} Yes — skip prompts ${DIM}(faster, trust Claude fully)${NC}"
+        echo ""
+        local skip_perms="false"
+        read -rp "  Choose [1]: " sp_choice
+        [[ "$sp_choice" == "2" ]] && skip_perms="true"
+        echo ""
+
+        cat > "$CW_CONFIG" << YAML
 # CW v3 Configuration
 default_account: work
 default_mode: code
 notifications: true
 max_concurrent: 8
 
-# Herramientas principales
+# Skip Claude permission prompts (--dangerously-skip-permissions)
+# Override per-command with: cw --skip-permissions work ...
+# Or per-session with: CW_CLAUDE_FLAGS="--dangerously-skip-permissions" cw work ...
+skip_permissions: $skip_perms
+
+# Default tools
 tools:
   tracker: linear
   docs: notion
@@ -123,7 +172,7 @@ cmd_account() {
         remove|rm)
             local name="${1:?Usage: cw account remove <name>}"
             read -rp "Delete account '$name'? [y/N] " c
-            [[ "$c" =~ ^[yY]$ ]] && rm -rf "$CW_ACCOUNTS_DIR/$name" && _log "Eliminada."
+            [[ "$c" =~ ^[yY]$ ]] && rm -rf "$CW_ACCOUNTS_DIR/$name" && _log "Removed."
             ;;
         *) _err "Subcommands: add | list | remove" ;;
     esac
@@ -215,33 +264,89 @@ _project_setup_mcps() {
     local account; account=$(_get_field "$pj" account "work")
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
 
+    # Check which MCPs are already installed
+    local existing=""
+    existing=$(CLAUDE_CONFIG_DIR="$acct_dir" claude mcp list 2>/dev/null || true)
+
     echo -e "\n${BOLD}Configure MCPs for ${C}$name${NC} (account: ${Y}$account${NC})\n"
-    echo -e "  ${C}[1]${NC} GitHub     — PRs, issues, code search"
-    echo -e "  ${C}[2]${NC} Linear     — Issues, projects, sprints"
-    echo -e "  ${C}[3]${NC} Notion     — Docs, wikis, knowledge base"
-    echo -e "  ${C}[4]${NC} Slack      — Mensajes, canales, threads"
-    echo -e "  ${C}[5]${NC} Todas"
-    echo -e "  ${C}[0]${NC} Cancelar\n"
+
+    # Show status for each MCP
+    local gh_status="${DIM}not installed${NC}" li_status="${DIM}not installed${NC}"
+    local no_status="${DIM}not installed${NC}" sl_status="${DIM}not installed${NC}"
+    [[ "$existing" == *"github"* ]] && gh_status="${G}installed${NC}"
+    [[ "$existing" == *"linear"* ]] && li_status="${G}installed${NC}"
+    [[ "$existing" == *"notion"* ]] && no_status="${G}installed${NC}"
+    [[ "$existing" == *"slack"* ]]  && sl_status="${G}installed${NC}"
+
+    echo -e "  ${C}[1]${NC} GitHub     — PRs, issues, code search       [$gh_status]"
+    echo -e "  ${C}[2]${NC} Linear     — Issues, projects, sprints      [$li_status]"
+    echo -e "  ${C}[3]${NC} Notion     — Docs, wikis, knowledge base    [$no_status]"
+    echo -e "  ${C}[4]${NC} Slack      — Messages, channels, threads    [$sl_status]"
+    echo -e "  ${C}[5]${NC} All"
+    echo -e "  ${C}[0]${NC} Cancel\n"
     read -rp "Select (e.g. 1,2,3): " choices
     [[ "$choices" == "0" ]] && return
     [[ "$choices" == "5" ]] && choices="1,2,3,4"
 
     echo ""
-    local cmds=()
-    [[ "$choices" == *"1"* ]] && cmds+=("claude mcp add --transport http github https://api.githubcopilot.com/mcp/ --scope user")
-    [[ "$choices" == *"2"* ]] && cmds+=("claude mcp add --transport http linear https://mcp.linear.app/mcp --scope user")
-    [[ "$choices" == *"3"* ]] && cmds+=("claude mcp add --transport http notion https://mcp.notion.com/mcp --scope user")
-    [[ "$choices" == *"4"* ]] && {
-        echo -e "  Slack: configure via ${C}https://mcp.composio.dev${NC} or connector in Claude Desktop.\n"
-    }
+    local installed=0
 
-    if [[ ${#cmds[@]} -gt 0 ]]; then
-        _log "Run in your terminal:\n"
-        for cmd in "${cmds[@]}"; do
-            echo -e "  ${BOLD}CLAUDE_CONFIG_DIR=$acct_dir $cmd${NC}"
-        done
-        echo -e "\n  Then follow the OAuth flow in your browser."
-        echo -e "  Verify with ${C}/mcp${NC} inside Claude Code.\n"
+    if [[ "$choices" == *"1"* ]]; then
+        if [[ "$existing" == *"github"* ]]; then
+            _dim "  GitHub: already installed, skipping"
+        else
+            _log "Installing GitHub MCP..."
+            if CLAUDE_CONFIG_DIR="$acct_dir" claude mcp add --transport http github https://api.githubcopilot.com/mcp/ --scope user 2>/dev/null; then
+                echo -e "  ${G}✓${NC} GitHub MCP added"
+                installed=$((installed+1))
+            else
+                _warn "GitHub MCP failed. Run manually:"
+                echo -e "    ${BOLD}CLAUDE_CONFIG_DIR=$acct_dir claude mcp add --transport http github https://api.githubcopilot.com/mcp/ --scope user${NC}"
+            fi
+        fi
+    fi
+
+    if [[ "$choices" == *"2"* ]]; then
+        if [[ "$existing" == *"linear"* ]]; then
+            _dim "  Linear: already installed, skipping"
+        else
+            _log "Installing Linear MCP..."
+            if CLAUDE_CONFIG_DIR="$acct_dir" claude mcp add --transport http linear https://mcp.linear.app/mcp --scope user 2>/dev/null; then
+                echo -e "  ${G}✓${NC} Linear MCP added"
+                installed=$((installed+1))
+            else
+                _warn "Linear MCP failed. Run manually:"
+                echo -e "    ${BOLD}CLAUDE_CONFIG_DIR=$acct_dir claude mcp add --transport http linear https://mcp.linear.app/mcp --scope user${NC}"
+            fi
+        fi
+    fi
+
+    if [[ "$choices" == *"3"* ]]; then
+        if [[ "$existing" == *"notion"* ]]; then
+            _dim "  Notion: already installed, skipping"
+        else
+            _log "Installing Notion MCP..."
+            if CLAUDE_CONFIG_DIR="$acct_dir" claude mcp add --transport http notion https://mcp.notion.com/mcp --scope user 2>/dev/null; then
+                echo -e "  ${G}✓${NC} Notion MCP added"
+                installed=$((installed+1))
+            else
+                _warn "Notion MCP failed. Run manually:"
+                echo -e "    ${BOLD}CLAUDE_CONFIG_DIR=$acct_dir claude mcp add --transport http notion https://mcp.notion.com/mcp --scope user${NC}"
+            fi
+        fi
+    fi
+
+    if [[ "$choices" == *"4"* ]]; then
+        echo -e "\n  ${Y}Slack${NC}: No official MCP yet. Options:"
+        echo -e "    • ${C}https://mcp.composio.dev${NC} — Composio connector"
+        echo -e "    • Custom MCP via stdio transport"
+    fi
+
+    echo ""
+    if [[ $installed -gt 0 ]]; then
+        _log "${G}✓${NC} $installed MCP(s) installed for account ${C}$account${NC}"
+        echo -e "  Each MCP will prompt for OAuth on first use inside Claude Code."
+        echo -e "  Verify with ${C}/mcp${NC} inside a Claude session.\n"
     fi
 }
 
@@ -316,9 +421,9 @@ cmd_open() {
 
     cd "$path"
     _set_tab_title "$name"
-    CLAUDE_CONFIG_DIR="$acct_dir" claude --dangerously-skip-permissions
+    CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS
 
-    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) OPEN $name mode=$mode account=$account" >> "$CW_SESSIONS_LOG"
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) OPEN $name account=$account" >> "$CW_SESSIONS_LOG"
 }
 
 
@@ -336,7 +441,7 @@ cmd_launch() {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# REVIEW — PR review con worktree + persistent session
+# REVIEW — PR review with worktree + persistent session
 # ════════════════════════════════════════════════════════════════════════════
 cmd_review() {
     local name="" pr="" done_flag=false cont_flag=false list_flag=false
@@ -389,7 +494,7 @@ cmd_review() {
     local wt_dir="$path/.reviews/pr-$pr"
     local notes_file="$session_dir/REVIEW_NOTES.md"
 
-    # ── Done: limpiar review ────────────────────────────────────────────
+    # ── Done: clean up review ────────────────────────────────────────────
     if $done_flag; then
         _space_done "$name" "$pr" "review" "$path" "$wt_dir" "$session_dir"
         (cd "$path" && git branch -D "pr-$pr" 2>/dev/null) || true
@@ -416,7 +521,7 @@ cmd_review() {
 
             # Fetch PR ref directly (works with GitHub)
             git fetch origin "pull/$pr/head:pr-$pr" 2>/dev/null || {
-                _log "${Y}Could not fetch PR #$pr directamente.${NC}"
+                _log "${Y}Could not fetch PR #$pr directly.${NC}"
                 _log "Creating worktree from HEAD. You can checkout manually."
             }
         )
@@ -501,9 +606,9 @@ with open('$session_meta', 'w') as f:
     cd "$wt_dir"
     _set_tab_title "PR#$pr - $name"
     if ! $is_new; then
-        CLAUDE_CONFIG_DIR="$acct_dir" claude --dangerously-skip-permissions --continue
+        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --continue
     else
-        CLAUDE_CONFIG_DIR="$acct_dir" claude --dangerously-skip-permissions
+        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS
     fi
 
 
@@ -511,7 +616,7 @@ with open('$session_meta', 'w') as f:
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# WORK — Feature/bugfix con worktree + persistent session
+# WORK — Feature/bugfix with worktree + persistent session
 # ════════════════════════════════════════════════════════════════════════════
 cmd_work() {
     local name="" task="" done_flag=false list_flag=false
@@ -700,18 +805,18 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
     if $is_new && [[ -n "$init_prompt" ]]; then
         local prompt_file="$session_dir/init_prompt.txt"
         printf '%s' "$init_prompt" > "$prompt_file"
-        CLAUDE_CONFIG_DIR="$acct_dir" claude --dangerously-skip-permissions "$(cat "$prompt_file")"
+        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "$(cat "$prompt_file")"
     elif ! $is_new; then
-        CLAUDE_CONFIG_DIR="$acct_dir" claude --dangerously-skip-permissions --continue
+        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --continue
     else
-        CLAUDE_CONFIG_DIR="$acct_dir" claude --dangerously-skip-permissions
+        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS
     fi
 
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) WORK $name task=$task account=$account" >> "$CW_SESSIONS_LOG"
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# SPACES — Ver todos los espacios activos
+# SPACES — Show all active spaces
 # ════════════════════════════════════════════════════════════════════════════
 cmd_spaces() {
     local filter="${1:-}"
@@ -876,7 +981,7 @@ cmd_dashboard() {
     echo -e "${BOLD}║        ${DIM}Multi-project Claude Code orchestrator${NC}${BOLD}             ║${NC}"
     echo -e "${BOLD}╚═══════════════════════════════════════════════════════════════╝${NC}"
 
-    # ── Cuentas ──────────────────────────────────────────────────────────
+    # ── Accounts ─────────────────────────────────────────────────────────
     echo -e "\n${BOLD}Accounts${NC}\n"
     if [[ -d "$CW_ACCOUNTS_DIR" ]]; then
         for dir in "$CW_ACCOUNTS_DIR"/*/; do
@@ -891,7 +996,7 @@ cmd_dashboard() {
     echo -e "\n${BOLD}Workspace${NC}  ${DIM}$ws${NC}\n"
 
     if [[ ! -d "$ws" ]]; then
-        echo -e "  ${Y}No encontrado: $ws${NC}\n"
+        echo -e "  ${Y}Not found: $ws${NC}\n"
         return
     fi
 
@@ -1025,7 +1130,7 @@ exit(1)
         echo ""
     fi
 
-    # ── Leyenda ──────────────────────────────────────────────────────────
+    # ── Legend ────────────────────────────────────────────────────────────
     echo -e "  ${DIM}${G}●${NC}${DIM} registered  ${Y}○${NC}${DIM} not registered  ${G}md${NC}${DIM}=CLAUDE.md  ${C}ag${NC}${DIM}=agents  ${C}cm${NC}${DIM}=commands  ${Y}mcp${NC}${DIM}=MCPs${NC}"
 
     cmd_spaces
@@ -1309,6 +1414,14 @@ ${BOLD}INFO${NC}
   dashboard                           Full workspace overview
   status                              Quick status
   help                                This help
+  version                             Show version
+
+${BOLD}GLOBAL FLAGS${NC}
+  --skip-permissions                  Skip Claude permission prompts for this run
+                                      (sets --dangerously-skip-permissions)
+                                      Can also be set permanently in ~/.cw/config.yaml:
+                                        skip_permissions: true
+                                      Or via env: CW_CLAUDE_FLAGS="--dangerously-skip-permissions"
 
 ${BOLD}EXAMPLES${NC}
   cw work daycast fix-auth                          # New task
@@ -1339,6 +1452,19 @@ EOF
 # MAIN
 # ════════════════════════════════════════════════════════════════════════════
 main() {
+    # Parse global flags before command
+    _CW_SKIP_PERMS="false"
+    local args=()
+    for arg in "$@"; do
+        case "$arg" in
+            --skip-permissions) _CW_SKIP_PERMS="true" ;;
+            *) args+=("$arg") ;;
+        esac
+    done
+    set -- "${args[@]+"${args[@]}"}"
+
+    _resolve_claude_flags
+
     local cmd="${1:-help}"; shift || true
     case "$cmd" in
         init)       cmd_init "$@" ;;
@@ -1352,6 +1478,7 @@ main() {
         dashboard)  cmd_dashboard "$@" ;;
         status)     cmd_status "$@" ;;
         help|-h|--help) cmd_help ;;
+        version|-v|--version) echo "cw $CW_VERSION" ;;
         *) _err "Unknown: $cmd"; cmd_help; exit 1 ;;
     esac
 }

@@ -4,10 +4,11 @@
 
 Before installing CW, make sure you have:
 
-1. **macOS** — CW uses iTerm2 AppleScript, so it's macOS only
-3. **Claude Code CLI** — Install via `npm install -g @anthropic-ai/claude-code` (see [docs](https://docs.anthropic.com/en/docs/claude-code))
-4. **Git 2.15+** — For worktree support. Check: `git --version`
-5. **Python 3.6+** — For JSON processing. Check: `python3 --version`
+1. **Claude Code CLI** — Install via `npm install -g @anthropic-ai/claude-code` (see [docs](https://docs.anthropic.com/en/docs/claude-code))
+2. **Git 2.15+** — For worktree support. Check: `git --version`
+3. **Python 3.6+** — For JSON processing. Check: `python3 --version`
+4. **Bash 4+ or Zsh** — Most modern systems have this
+5. *(Optional)* **iTerm2** (macOS) — For tab coloring, badges, and window management
 
 ## Installation
 
@@ -102,6 +103,6 @@ This:
 
 ## What's Next
 
-- Set up [MCP integrations](./mcps.md) for Linear, GitHub, Notion
+- Set up MCP integrations for Linear, GitHub, Notion (`cw project setup-mcps <name>`)
 - Customize the [CLAUDE.md template](./claude-md.md) for your projects
 - Learn about [session persistence](./architecture.md#session-persistence)

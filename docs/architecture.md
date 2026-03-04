@@ -13,7 +13,7 @@ CW is a Bash CLI that orchestrates Claude Code sessions with iTerm2. It manages 
 ```
 ~/.cw/
 ├── bin/
-│   └── cw                          # main script (~1500 lines bash)
+│   └── cw                          # main script (~1400 lines bash)
 ├── cw-shell-integration.sh         # PATH, completions, aliases
 ├── accounts/
 │   ├── work/                       # CLAUDE_CONFIG_DIR for "work"

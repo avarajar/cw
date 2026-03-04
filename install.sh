@@ -80,6 +80,11 @@ install_files() {
 
     cp "$source_dir/cw-shell-integration.sh" "$CW_HOME/cw-shell-integration.sh"
 
+    # Copy lib
+    if [[ -d "$source_dir/lib" ]]; then
+        cp "$source_dir"/lib/*.sh "$CW_HOME/lib/" 2>/dev/null || true
+    fi
+
     # Copy templates
     cp "$source_dir/templates/CLAUDE.template.md" "$CW_HOME/templates/CLAUDE.template.md"
 
