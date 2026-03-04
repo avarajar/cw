@@ -607,13 +607,21 @@ with open('$session_meta', 'w') as f:
     _set_tab_title "PR#$pr - $name"
     if ! $is_new; then
         # Re-review: check if previously requested changes were addressed
+        # Detect if gh CLI is available for PR fetching
+        local pr_fetch_instructions=""
+        if command -v gh &>/dev/null; then
+            pr_fetch_instructions="Fetch the latest review comments and requested changes:
+   \`gh pr view $pr --json reviews,comments\`
+   \`gh api repos/{owner}/{repo}/pulls/$pr/reviews\`
+   \`gh api repos/{owner}/{repo}/pulls/$pr/comments\`"
+        else
+            pr_fetch_instructions="Fetch the latest review comments and requested changes using the GitHub MCP tools (get_pull_request_reviews, get_pull_request_comments, get_pull_request). If no GitHub MCP is available, check REVIEW_NOTES.md for your previous findings and review the new commits manually."
+        fi
+
         local recheck_prompt="This is a follow-up review of PR #$pr for project $name.
 
 1. Read REVIEW_NOTES.md to recall your previous findings.
-2. Fetch the latest review comments and requested changes from the PR:
-   \`gh pr view $pr --json reviews,comments\`
-   \`gh api repos/{owner}/{repo}/pulls/$pr/reviews\`
-   \`gh api repos/{owner}/{repo}/pulls/$pr/comments\`
+2. $pr_fetch_instructions
 3. Pull latest changes: \`git pull origin\` (or \`git fetch origin && git rebase\`)
 4. For each previously requested change, verify if it was addressed in the new commits:
    - Run \`git log --oneline\` to see new commits since last review
