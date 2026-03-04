@@ -606,7 +606,28 @@ with open('$session_meta', 'w') as f:
     cd "$wt_dir"
     _set_tab_title "PR#$pr - $name"
     if ! $is_new; then
-        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --continue
+        # Re-review: check if previously requested changes were addressed
+        local recheck_prompt="This is a follow-up review of PR #$pr for project $name.
+
+1. Read REVIEW_NOTES.md to recall your previous findings.
+2. Fetch the latest review comments and requested changes from the PR:
+   \`gh pr view $pr --json reviews,comments\`
+   \`gh api repos/{owner}/{repo}/pulls/$pr/reviews\`
+   \`gh api repos/{owner}/{repo}/pulls/$pr/comments\`
+3. Pull latest changes: \`git pull origin\` (or \`git fetch origin && git rebase\`)
+4. For each previously requested change, verify if it was addressed in the new commits:
+   - Run \`git log --oneline\` to see new commits since last review
+   - Check the relevant files for each requested change
+5. Report:
+   - Resolved: which requested changes were fixed
+   - Still pending: which ones are not addressed yet
+   - New issues: anything new introduced in the latest commits
+6. Update REVIEW_NOTES.md with the follow-up findings.
+7. End with updated verdict: APPROVE | REQUEST CHANGES | NEEDS DISCUSSION."
+
+        local prompt_file="$session_dir/recheck_prompt.txt"
+        printf '%s' "$recheck_prompt" > "$prompt_file"
+        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --continue "$(cat "$prompt_file")"
     else
         # Build review prompt: project skill > global skill > default
         # Search order:
