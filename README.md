@@ -77,7 +77,7 @@ cw work my-app fix-auth --done
 **What happens:**
 
 1. Detects source URL → extracts task ID (e.g., `PROJ-123`)
-2. Opens Claude in the project with an init prompt
+2. Opens Claude in the project root
 3. Claude uses the relevant MCP (Linear/GitHub/Notion) to fetch the issue details and branch name
 4. Claude creates the git worktree at `.tasks/<task>/`
 5. Claude fills `TASK_NOTES.md` with the issue context
@@ -185,7 +185,7 @@ When you resume (`cw work my-app fix-auth` a second time):
 CW uses iTerm2 natively (no tmux):
 - **Colored tabs** — each mode has a distinct color
 - **Badges** — project/task name visible in the tab background
-- **Auto-layout** — Claude tab + Shell tab per workspace
+- **One window per workspace** — Claude has everything it needs in one tab
 
 ## Installation
 

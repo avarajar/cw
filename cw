@@ -341,152 +341,39 @@ cmd_open() {
 # ── Modo: CODE ──────────────────────────────────────────────────────────────
 _open_code() {
     local name="$1" path="$2" cc="$3" title="$4"
-
-    # Tab 1: Claude principal
-    _iterm_configured_window "code - $title" "$path" "$cc" "$name" "code"
-
-    # Tab 2: Shell
-    _iterm_configured_tab "shell - $title" "$path" "" "$name - shell" "shell"
-
-    # Tab 3: Git
-    _iterm_configured_tab "git - $title" "$path" "git status && echo '' && git log --oneline -8" "$name - git" "git"
-
-    # Back to first tab
-    _iterm_select_tab 1
+    _iterm_configured_window "$name" "$path" "$cc" "$name" "code"
 }
 
-# ── Modo: REVIEW ────────────────────────────────────────────────────────────
 _open_review() {
     local name="$1" path="$2" cc="$3" title="$4"
-
-    # Tab 1: Claude para review
-    _iterm_configured_window "review - $title" "$path" \
-        "echo '👀 PR Review — usa: $cc --from-pr <num>'" "$name" "review"
-
-    # Tab 2: Diff
-    _iterm_configured_tab "diff - $title" "$path" \
-        "echo '📝 Diff viewer — git diff main..HEAD'" "$name - diff" "review"
-
-    # Tab 3: Git log
-    _iterm_configured_tab "git - $title" "$path" \
-        "git log --oneline --graph -15" "$name - git" "git"
-
-    _iterm_select_tab 1
+    _iterm_configured_window "$name" "$path" "$cc" "$name" "review"
 }
 
-# ── Modo: RESEARCH ──────────────────────────────────────────────────────────
 _open_research() {
     local name="$1" path="$2" cc="$3" title="$4"
-
-    # Tab 1: Claude research
-    _iterm_configured_window "research - $title" "$path" "$cc" "$name" "research"
-
-    # Tab 2: Notes
-    _iterm_configured_tab "notes - $title" "$path" \
-        "mkdir -p docs/research && ls docs/research/ 2>/dev/null && echo '📓 Notes in docs/research/'" \
-        "$name - notes" "research"
-
-    # Tab 3: Shell
-    _iterm_configured_tab "shell - $title" "$path" "" "$name - shell" "shell"
-
-    _iterm_select_tab 1
+    _iterm_configured_window "$name" "$path" "$cc" "$name" "research"
 }
 
-# ── Modo: DOCS (Notion) ────────────────────────────────────────────────────
 _open_docs() {
     local name="$1" path="$2" cc="$3" title="$4"
-
-    # Tab 1: Claude + Notion
-    _iterm_configured_window "docs - $title" "$path" "$cc" "$name" "docs"
-
-    # Tab 2: Tips
-    _iterm_configured_tab "notion tips - $title" "$path" \
-        "echo '📚 Notion via MCP:' && echo '  → search Notion for <topic>' && echo '  → create a page in Notion titled <X>' && echo '  → update the page about <Y>'" \
-        "$name - notion" "docs"
-
-    # Tab 3: Shell
-    _iterm_configured_tab "shell - $title" "$path" "" "$name - shell" "shell"
-
-    _iterm_select_tab 1
+    _iterm_configured_window "$name" "$path" "$cc" "$name" "docs"
 }
 
-# ── Modo: PLANNING (Linear) ────────────────────────────────────────────────
 _open_planning() {
     local name="$1" path="$2" cc="$3" title="$4"
-
-    # Tab 1: Claude + Linear
-    _iterm_configured_window "planning - $title" "$path" "$cc" "$name" "planning"
-
-    # Tab 2: Tips
-    _iterm_configured_tab "linear tips - $title" "$path" \
-        "echo '📋 Linear via MCP:' && echo '  → list open issues for <project>' && echo '  → create issue: <description>' && echo '  → what is the status of sprint <N>?'" \
-        "$name - linear" "planning"
-
-    # Tab 3: Shell
-    _iterm_configured_tab "shell - $title" "$path" "" "$name - shell" "shell"
-
-    _iterm_select_tab 1
+    _iterm_configured_window "$name" "$path" "$cc" "$name" "planning"
 }
 
-# ── Modo: COMMS (Slack) ────────────────────────────────────────────────────
 _open_comms() {
     local name="$1" path="$2" cc="$3" title="$4"
-
-    # Tab 1: Claude + Slack
-    _iterm_configured_window "comms - $title" "$path" "$cc" "$name" "comms"
-
-    # Tab 2: Tips
-    _iterm_configured_tab "slack tips - $title" "$path" \
-        "echo '💬 Slack via MCP:' && echo '  → summarize #channel from today' && echo '  → find thread about <topic>' && echo '  → draft message about <X>'" \
-        "$name - slack" "comms"
-
-    _iterm_select_tab 1
+    _iterm_configured_window "$name" "$path" "$cc" "$name" "comms"
 }
 
-# ── Modo: FULL ──────────────────────────────────────────────────────────────
 _open_full() {
-    local name="$1" path="$2" cc="$3" title="$4" acct_dir="$5"
-
-    # Tab 1: Claude principal
-    _iterm_configured_window "claude - $title" "$path" "$cc" "$name" "code"
-
-    # Tab 2: Shell
-    _iterm_configured_tab "shell - $title" "$path" "" "$name - shell" "shell"
-
-    # Tab 3: Git
-    _iterm_configured_tab "git - $title" "$path" \
-        "git status" "$name - git" "git"
-
-    # Tab 4: Feature worktree
-    _iterm_configured_tab "feature - $title" "$path" \
-        "echo '🔧 Worktree: $cc --worktree feature-<name>'" "$name - feature" "feature"
-
-    # Tab 5: Bug worktree
-    _iterm_configured_tab "bug - $title" "$path" \
-        "echo '🐛 Worktree: $cc --worktree bugfix-<id>'" "$name - bug" "bug"
-
-    # Tab 6: PR Review
-    _iterm_configured_tab "review - $title" "$path" \
-        "echo '👀 Review: $cc --from-pr <num>'" "$name - review" "review"
-
-    # Tab 7: Research
-    _iterm_configured_tab "research - $title" "$path" \
-        "echo '🔬 Research: $cc'" "$name - research" "research"
-
-    # Tab 8: Docs / Notion
-    _iterm_configured_tab "docs - $title" "$path" \
-        "echo '📚 Docs/Notion: $cc'" "$name - docs" "docs"
-
-    # Tab 9: Planning / Linear
-    _iterm_configured_tab "planning - $title" "$path" \
-        "echo '📋 Planning/Linear: $cc'" "$name - planning" "planning"
-
-    # Tab 10: Comms / Slack
-    _iterm_configured_tab "comms - $title" "$path" \
-        "echo '💬 Comms/Slack: $cc'" "$name - comms" "comms"
-
-    _iterm_select_tab 1
+    local name="$1" path="$2" cc="$3" title="$4"
+    _iterm_configured_window "$name" "$path" "$cc" "$name" "code"
 }
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # LAUNCH — Quick Claude with account
@@ -668,16 +555,9 @@ with open('$session_meta', 'w') as f:
         claude_cmd="$cc --continue"
     fi
 
-    # Tab 1: Claude en el worktree (review mode)
-    _iterm_configured_window "review PR#$pr - $name" "$wt_dir" "$claude_cmd" "PR#$pr" "review"
+    # Open Claude
+    _iterm_configured_window "PR#$pr - $name" "$wt_dir" "$claude_cmd" "PR#$pr" "review"
 
-    # Tab 2: Diff view
-    _iterm_configured_tab "diff PR#$pr - $name" "$wt_dir" "git log --oneline -20 && echo '' && git diff --stat HEAD~5 2>/dev/null || git diff --stat" "diff" "review"
-
-    # Tab 3: Proyecto original (para comparar)
-    _iterm_configured_tab "main - $name" "$path" "git status" "$name" "code"
-
-    _iterm_select_tab 1
 
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) REVIEW $name pr=$pr account=$account" >> "$CW_SESSIONS_LOG"
 }
@@ -882,12 +762,7 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
     fi
 
     # Tab 1: Claude
-    _iterm_configured_window "task:$task - $name" "$open_dir" "$claude_cmd" "$task" "code"
-
-    # Tab 2: Shell
-    _iterm_configured_tab "shell - $name" "$open_dir" "" "$name" "shell"
-
-    _iterm_select_tab 1
+    _iterm_configured_window "$task - $name" "$open_dir" "$claude_cmd" "$task" "code"
 
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) WORK $name task=$task account=$account" >> "$CW_SESSIONS_LOG"
 }
