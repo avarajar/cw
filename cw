@@ -608,9 +608,45 @@ with open('$session_meta', 'w') as f:
     if ! $is_new; then
         CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --continue
     else
-        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS
-    fi
+        # Build review prompt: project skill > global skill > default
+        local review_skill=""
+        if [[ -f "$path/.claude/commands/review-pr.md" ]]; then
+            review_skill=$(cat "$path/.claude/commands/review-pr.md")
+            _dim "  Using project review skill"
+        elif [[ -f "$CW_HOME/commands/review-pr.md" ]]; then
+            review_skill=$(cat "$CW_HOME/commands/review-pr.md")
+            _dim "  Using global review skill"
+        fi
 
+        local review_prompt="Review PR #$pr for project $name.
+
+Read REVIEW_NOTES.md first for context.
+
+1. Run \`git log --oneline main..HEAD\` to see the PR commits.
+2. Run \`git diff main...HEAD\` to see all changes.
+3. Review every changed file thoroughly."
+
+        if [[ -n "$review_skill" ]]; then
+            review_prompt="$review_prompt
+
+Use these review instructions:
+$review_skill"
+        else
+            review_prompt="$review_prompt
+
+Review for: correctness, security, performance, tests, naming, error handling.
+For each finding: File:Line, Severity, Issue, Fix.
+End with: APPROVE | REQUEST CHANGES | NEEDS DISCUSSION."
+        fi
+
+        review_prompt="$review_prompt
+
+4. Fill in REVIEW_NOTES.md with your findings."
+
+        local prompt_file="$session_dir/init_prompt.txt"
+        printf '%s' "$review_prompt" > "$prompt_file"
+        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "$(cat "$prompt_file")"
+    fi
 
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) REVIEW $name pr=$pr account=$account" >> "$CW_SESSIONS_LOG"
 }
