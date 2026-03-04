@@ -26,11 +26,6 @@ err()  { echo -e "${R}[✗]${NC} $*" >&2; }
 check_requirements() {
     local missing=()
 
-    if [[ "$(uname)" != "Darwin" ]]; then
-        err "CW requires macOS (uses iTerm2 AppleScript)"
-        exit 1
-    fi
-
     if ! command -v git &>/dev/null; then
         missing+=("git")
     fi
@@ -41,11 +36,6 @@ check_requirements() {
 
     if ! command -v claude &>/dev/null; then
         warn "Claude Code CLI not found. Install: npm install -g @anthropic-ai/claude-code"
-    fi
-
-    # Check iTerm2
-    if [[ ! -d "/Applications/iTerm.app" ]]; then
-        warn "iTerm2 not found. Download: https://iterm2.com/"
     fi
 
     if [[ ${#missing[@]} -gt 0 ]]; then
@@ -88,7 +78,6 @@ install_files() {
     cp "$source_dir/cw" "$CW_HOME/bin/cw"
     chmod +x "$CW_HOME/bin/cw"
 
-    cp "$source_dir/lib/iterm2.sh" "$CW_HOME/lib/iterm2.sh"
     cp "$source_dir/cw-shell-integration.sh" "$CW_HOME/cw-shell-integration.sh"
 
     # Copy templates

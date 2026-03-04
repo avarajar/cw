@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ============================================================================
-# CW v3 — Claude Workspace Orchestrator (iTerm2 Native)
+# CW — Claude Workspace Manager
 # Orchestrates projects, accounts, modes, MCPs, agents and sessions
-# using iTerm2 tabs, panes, badges and colors — no tmux.
+# Multi-project orchestrator for Claude Code.
 #
 # Usage: cw <comando> [opciones]
 # ============================================================================
@@ -15,13 +15,7 @@ CW_SESSIONS_LOG="$CW_HOME/sessions.log"
 CW_CONFIG="$CW_HOME/config.yaml"
 CW_ACTIVE="$CW_HOME/active-sessions.json"
 
-# Cargar helpers de iTerm2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "$SCRIPT_DIR/lib/iterm2.sh" ]]; then
-    source "$SCRIPT_DIR/lib/iterm2.sh"
-elif [[ -f "$CW_HOME/lib/iterm2.sh" ]]; then
-    source "$CW_HOME/lib/iterm2.sh"
-fi
 
 # Colores para output del CLI
 R='\033[0;31m' G='\033[0;32m' Y='\033[1;33m' B='\033[0;34m'
@@ -56,7 +50,7 @@ _get_field() {
 # INIT
 # ════════════════════════════════════════════════════════════════════════════
 cmd_init() {
-    _log "Initializing CW v3 — iTerm2 Native..."
+    _log "Initializing CW..."
     _ensure_dirs
 
     [[ -f "$CW_REGISTRY" ]] || echo '{}' > "$CW_REGISTRY"
@@ -85,9 +79,6 @@ YAML
     _generate_mcp_docs
 
     # Copy lib
-    if [[ -f "$SCRIPT_DIR/lib/iterm2.sh" ]]; then
-        cp "$SCRIPT_DIR/lib/iterm2.sh" "$CW_HOME/lib/iterm2.sh"
-    fi
 
     _log "${G}✓${NC} Initialized at ${C}$CW_HOME${NC}"
     echo ""
@@ -296,16 +287,14 @@ print()
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# OPEN — Open workspace en iTerm2
+# OPEN — Open Claude in a project
 # ════════════════════════════════════════════════════════════════════════════
 cmd_open() {
     local name="${1:?Usage: cw open <project> [--mode X] [--account X] [--context X]}"; shift
-    local mode="" account="" context=""
+    local account="" context=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --mode|-m)    mode="$2"; shift 2 ;;
             --account|-a) account="$2"; shift 2 ;;
-            --context|-c) context="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -315,64 +304,16 @@ cmd_open() {
     [[ -d "$path" ]] || { _err "Path does not exist: $path"; return 1; }
 
     account="${account:-$(_get_field "$pj" account "work")}"
-    mode="${mode:-code}"
-
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
-    local cc="CLAUDE_CONFIG_DIR=$acct_dir claude --dangerously-skip-permissions"
-    local win_title="$name"
-    [[ -n "$context" ]] && win_title="$name ($context)"
+    _log "Opening ${C}$name${NC}  account=${M}$account${NC}"
 
-    _log "Opening ${C}$name${NC}  mode=${Y}$mode${NC}  account=${M}$account${NC}"
-
-    case "$mode" in
-        code)     _open_code "$name" "$path" "$cc" "$win_title" ;;
-        review)   _open_review "$name" "$path" "$cc" "$win_title" ;;
-        research) _open_research "$name" "$path" "$cc" "$win_title" ;;
-        docs)     _open_docs "$name" "$path" "$cc" "$win_title" ;;
-        planning) _open_planning "$name" "$path" "$cc" "$win_title" ;;
-        comms)    _open_comms "$name" "$path" "$cc" "$win_title" ;;
-        full)     _open_full "$name" "$path" "$cc" "$win_title" "$acct_dir" ;;
-        *) _err "Modes: code | review | research | docs | planning | comms | full"; return 1 ;;
-    esac
+    cd "$path"
+    CLAUDE_CONFIG_DIR="$acct_dir" claude --dangerously-skip-permissions
 
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) OPEN $name mode=$mode account=$account" >> "$CW_SESSIONS_LOG"
 }
 
-# ── Modo: CODE ──────────────────────────────────────────────────────────────
-_open_code() {
-    local name="$1" path="$2" cc="$3" title="$4"
-    _iterm_configured_window "$name" "$path" "$cc" "$name" "code"
-}
 
-_open_review() {
-    local name="$1" path="$2" cc="$3" title="$4"
-    _iterm_configured_window "$name" "$path" "$cc" "$name" "review"
-}
-
-_open_research() {
-    local name="$1" path="$2" cc="$3" title="$4"
-    _iterm_configured_window "$name" "$path" "$cc" "$name" "research"
-}
-
-_open_docs() {
-    local name="$1" path="$2" cc="$3" title="$4"
-    _iterm_configured_window "$name" "$path" "$cc" "$name" "docs"
-}
-
-_open_planning() {
-    local name="$1" path="$2" cc="$3" title="$4"
-    _iterm_configured_window "$name" "$path" "$cc" "$name" "planning"
-}
-
-_open_comms() {
-    local name="$1" path="$2" cc="$3" title="$4"
-    _iterm_configured_window "$name" "$path" "$cc" "$name" "comms"
-}
-
-_open_full() {
-    local name="$1" path="$2" cc="$3" title="$4"
-    _iterm_configured_window "$name" "$path" "$cc" "$name" "code"
-}
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -420,7 +361,6 @@ cmd_review() {
     local path; path=$(_get_field "$pj" path "")
     local account; account=$(_get_field "$pj" account "work")
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
-    local cc="CLAUDE_CONFIG_DIR=$acct_dir claude --dangerously-skip-permissions"
 
     [[ -z "$pr" ]] && { _err "Missing PR. Usage: cw review $name 123"; return 1; }
 
@@ -549,14 +489,13 @@ with open('$session_meta', 'w') as f:
 "
     fi
 
-    # ── Open in iTerm2 ────────────────────────────────────────────────
-    local claude_cmd="$cc"
+    # ── Run Claude ────────────────────────────────────────────────────
+    cd "$wt_dir"
     if ! $is_new; then
-        claude_cmd="$cc --continue"
+        CLAUDE_CONFIG_DIR="$acct_dir" claude --dangerously-skip-permissions --continue
+    else
+        CLAUDE_CONFIG_DIR="$acct_dir" claude --dangerously-skip-permissions
     fi
-
-    # Open Claude
-    _iterm_configured_window "PR#$pr - $name" "$wt_dir" "$claude_cmd" "PR#$pr" "review"
 
 
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) REVIEW $name pr=$pr account=$account" >> "$CW_SESSIONS_LOG"
@@ -618,7 +557,6 @@ cmd_work() {
     local path; path=$(_get_field "$pj" path "")
     local account; account=$(_get_field "$pj" account "work")
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
-    local cc="CLAUDE_CONFIG_DIR=$acct_dir claude --dangerously-skip-permissions"
 
     local session_dir="$CW_HOME/sessions/$name/task-$task"
     local session_meta="$session_dir/session.json"
@@ -742,27 +680,22 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
 "
     fi
 
-    # ── Open in iTerm2 ─────────────────────────────────────────────────
+    # ── Run Claude ──────────────────────────────────────────────────────
     # If worktree exists, open there. Otherwise project root.
     local open_dir="$path"
     [[ -d "$wt_dir" ]] && open_dir="$wt_dir"
 
-    local claude_cmd="$cc"
-    if $is_new && [[ -n "$init_prompt" ]]; then
-        # Save prompt to file, pipe to Claude
-        local prompt_file="$session_dir/init_prompt.txt"
-        local launcher="$session_dir/launch.sh"
-        printf '%s' "$init_prompt" > "$prompt_file"
-        printf '#!/bin/bash\ncd %s\nCLAUDE_CONFIG_DIR=%s claude --dangerously-skip-permissions "$(cat %s)"\n' \
-            "$open_dir" "$acct_dir" "$prompt_file" > "$launcher"
-        chmod +x "$launcher"
-        claude_cmd="bash $launcher"
-    elif ! $is_new; then
-        claude_cmd="$cc --continue"
-    fi
+    cd "$open_dir"
 
-    # Tab 1: Claude
-    _iterm_configured_window "$task - $name" "$open_dir" "$claude_cmd" "$task" "code"
+    if $is_new && [[ -n "$init_prompt" ]]; then
+        local prompt_file="$session_dir/init_prompt.txt"
+        printf '%s' "$init_prompt" > "$prompt_file"
+        CLAUDE_CONFIG_DIR="$acct_dir" claude --dangerously-skip-permissions "$(cat "$prompt_file")"
+    elif ! $is_new; then
+        CLAUDE_CONFIG_DIR="$acct_dir" claude --dangerously-skip-permissions --continue
+    else
+        CLAUDE_CONFIG_DIR="$acct_dir" claude --dangerously-skip-permissions
+    fi
 
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) WORK $name task=$task account=$account" >> "$CW_SESSIONS_LOG"
 }
@@ -930,7 +863,7 @@ cmd_dashboard() {
     echo ""
     echo -e "${BOLD}╔═══════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BOLD}║        ${C}CW v3 — Claude Workspace Orchestrator${NC}${BOLD}               ║${NC}"
-    echo -e "${BOLD}║        ${DIM}iTerm2 Native - Tabs - Badges - Colors${NC}${BOLD}             ║${NC}"
+    echo -e "${BOLD}║        ${DIM}Multi-project Claude Code orchestrator${NC}${BOLD}             ║${NC}"
     echo -e "${BOLD}╚═══════════════════════════════════════════════════════════════╝${NC}"
 
     # ── Cuentas ──────────────────────────────────────────────────────────
@@ -1336,7 +1269,7 @@ MD
 cmd_help() {
     cat << EOF
 
-${BOLD}CW v3 — Claude Workspace Orchestrator${NC}  (iTerm2 Native)
+${BOLD}CW — Claude Workspace Manager${NC}
 
 ${BOLD}MAIN COMMANDS${NC}
   work <project> <task>               Work on feature/bug (worktree + session)
@@ -1382,7 +1315,7 @@ ${BOLD}EXAMPLES${NC}
   cw open daycast                                   # Quick open (no worktree)
   cw dashboard                                      # Full overview
 
-${BOLD}iTerm2 SHORTCUTS${NC}
+${BOLD}TIPS${NC}
   Cmd + number        Jump to tab
   Cmd + arrow         Next/previous tab
   Cmd + T             New tab

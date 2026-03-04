@@ -14,8 +14,6 @@ CW is a Bash CLI that orchestrates Claude Code sessions with iTerm2. It manages 
 ~/.cw/
 ├── bin/
 │   └── cw                          # main script (~1500 lines bash)
-├── lib/
-│   └── iterm2.sh                   # iTerm2 AppleScript + escape sequences
 ├── cw-shell-integration.sh         # PATH, completions, aliases
 ├── accounts/
 │   ├── work/                       # CLAUDE_CONFIG_DIR for "work"
@@ -127,25 +125,6 @@ When a URL is passed as the task argument, CW detects the source and adjusts the
 | Plain text | No URL detected | Used as-is | Used as branch name directly |
 
 Claude handles the actual MCP calls and worktree creation via the init prompt.
-
-## iTerm2 Integration
-
-CW uses iTerm2's AppleScript API for window/tab management and proprietary escape sequences for styling:
-
-- **AppleScript** — create windows, create tabs, send keystrokes
-- **Escape sequences** — set tab colors, set badges, set titles
-
-This split exists because AppleScript's `set name` for tabs is unreliable (errors with special characters). Escape sequences work universally.
-
-### Tab Color Modes
-
-| Mode | RGB | Usage |
-|------|-----|-------|
-| code | (50, 120, 220) | Development work |
-| review | (180, 80, 200) | PR reviews |
-| shell | (80, 80, 80) | Shell tabs |
-| research | (50, 180, 120) | Research |
-| docs | (200, 120, 50) | Documentation |
 
 ## Account Routing
 

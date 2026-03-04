@@ -5,7 +5,6 @@
 Before installing CW, make sure you have:
 
 1. **macOS** — CW uses iTerm2 AppleScript, so it's macOS only
-2. **iTerm2** — Download from [iterm2.com](https://iterm2.com/)
 3. **Claude Code CLI** — Install via `npm install -g @anthropic-ai/claude-code` (see [docs](https://docs.anthropic.com/en/docs/claude-code))
 4. **Git 2.15+** — For worktree support. Check: `git --version`
 5. **Python 3.6+** — For JSON processing. Check: `python3 --version`
@@ -78,9 +77,9 @@ cw work my-app fix-login-bug
 ```
 
 This:
-1. Creates a git worktree at `my-app/.tasks/fix-login-bug/`
-2. Opens iTerm2 with Claude (correct account) + Shell tabs
-3. Claude starts with an init prompt to set up the worktree
+1. Creates session metadata
+2. Launches Claude in the project with the correct account
+3. Claude creates a git worktree at `.tasks/fix-login-bug/`
 4. Creates `TASK_NOTES.md` for persistent context
 
 When you're done:
@@ -98,7 +97,7 @@ cw review my-app 42
 This:
 1. Fetches PR #42 branch from remote
 2. Creates a worktree at `my-app/.reviews/pr-42/`
-3. Opens Claude in review mode + diff tab + main branch tab
+3. Launches Claude with the correct account
 4. Creates `REVIEW_NOTES.md` for findings
 
 ## What's Next
