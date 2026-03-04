@@ -672,13 +672,23 @@ with open('$session_meta', 'w') as f:
         [[ -n "$_skill_file" ]] && review_skill=$(cat "$_skill_file")
         [[ -n "$skill_source" ]] && _dim "  Using $skill_source"
 
+        # Detect gh CLI for PR details
+        local pr_detail_instructions=""
+        if command -v gh &>/dev/null; then
+            pr_detail_instructions="Fetch PR details: \`gh pr view $pr --json title,body,files,additions,deletions,commits\`
+   And the diff: \`gh pr diff $pr\`"
+        else
+            pr_detail_instructions="Fetch PR details using the GitHub MCP tools (get_pull_request, list_pull_request_files). If no GitHub MCP is available, use git commands only."
+        fi
+
         local review_prompt="Review PR #$pr for project $name.
 
 Read REVIEW_NOTES.md first for context.
 
-1. Run \`git log --oneline main..HEAD\` to see the PR commits.
-2. Run \`git diff main...HEAD\` to see all changes.
-3. Review every changed file thoroughly."
+1. $pr_detail_instructions
+2. Run \`git log --oneline main..HEAD\` to see the PR commits.
+3. Run \`git diff main...HEAD\` to see all changes.
+4. Review every changed file thoroughly."
 
         if [[ -n "$review_skill" ]]; then
             review_prompt="$review_prompt
@@ -695,7 +705,7 @@ End with: APPROVE | REQUEST CHANGES | NEEDS DISCUSSION."
 
         review_prompt="$review_prompt
 
-4. Fill in REVIEW_NOTES.md with your findings."
+5. Fill in REVIEW_NOTES.md with your findings."
 
         local prompt_file="$session_dir/init_prompt.txt"
         printf '%s' "$review_prompt" > "$prompt_file"
