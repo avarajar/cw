@@ -618,7 +618,7 @@ with open('$session_meta', 'w') as f:
         local review_skill="" skill_source=""
         local _skill_file=""
         # 1. Project skills (.claude/skills/)
-        for _name in review-pr code-review code-reviewer; do
+        for _name in code-review review-pr review code-reviewer; do
             if [[ -f "$path/.claude/skills/$_name/SKILL.md" ]]; then
                 _skill_file="$path/.claude/skills/$_name/SKILL.md"
                 skill_source="project skill ($_name)"
@@ -627,7 +627,7 @@ with open('$session_meta', 'w') as f:
         done
         # 2. User global skills (~/.claude/skills/)
         if [[ -z "$_skill_file" ]]; then
-            for _name in code-reviewer review-pr code-review; do
+            for _name in code-review code-reviewer review-pr review; do
                 if [[ -f "$HOME/.claude/skills/$_name/SKILL.md" ]]; then
                     _skill_file="$HOME/.claude/skills/$_name/SKILL.md"
                     skill_source="global skill ($_name)"
