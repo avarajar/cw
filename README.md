@@ -1,27 +1,47 @@
-# CW — Claude Workspace Manager
-
-**Multi-project workspace orchestrator for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).**
-
-CW manages multiple Claude Code sessions across projects, accounts, and tasks — with isolated worktrees, persistent context, and automatic integration with Linear, Notion, and GitHub.
+<p align="center">
+  <h1 align="center">CW</h1>
+  <p align="center">
+    <strong>Claude Workspace Manager</strong>
+    <br />
+    Multi-project orchestrator for <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a>
+  </p>
+  <p align="center">
+    <a href="#quick-start">Quick Start</a> &middot;
+    <a href="#how-it-works">How It Works</a> &middot;
+    <a href="docs/commands.md">Commands</a> &middot;
+    <a href="docs/architecture.md">Architecture</a>
+  </p>
+</p>
 
 ---
 
-## Why CW?
-
-If you work with Claude Code across multiple projects and accounts, you know the pain:
-
-- Switching `CLAUDE_CONFIG_DIR` for every project
-- Claude forgetting what you were doing when you come back
-- Branch conflicts when working on features while reviewing PRs
-- Manually copying ticket descriptions into context
-
-CW fixes all of that with one command:
+One command. Right account. Isolated worktree. Full context.
 
 ```bash
 cw work my-app https://linear.app/team/issue/PROJ-123/fix-auth-flow
 ```
 
-Claude launches with the right account, fetches the ticket from Linear, creates a worktree on the correct branch, and starts working with full context.
+CW launches Claude with the correct account, fetches the ticket from Linear, creates a worktree, and starts working — all automatically.
+
+---
+
+## The Problem
+
+Working with Claude Code across multiple projects means:
+
+- Juggling `CLAUDE_CONFIG_DIR` for every project
+- Losing context when conversations expire
+- Branch conflicts when reviewing PRs while coding
+- Copy-pasting ticket descriptions into Claude manually
+
+## The Solution
+
+```
+cw work my-app PROJ-123        →  worktree + Linear context + right account
+cw review my-app 42            →  isolated PR review with auto-start
+cw work my-app PROJ-123        →  resume exactly where you left off
+cw work my-app PROJ-123 --done →  cleanup worktree, archive session
+```
 
 ## Quick Start
 
@@ -31,118 +51,119 @@ git clone https://github.com/avarajar/cw.git && cd cw && ./install.sh
 
 # Setup
 cw init
-cw account add work              # creates a Claude account profile
+cw account add work
+cw launch work                    # authenticate with /login
 cw project register ~/code/my-app --account work
 
-# Work
-cw work my-app fix-auth          # launches Claude right here
+# Go
+cw work my-app fix-auth
 ```
 
 ## Core Commands
 
-### `cw work <project> <task>`
-
-Start or resume a feature/bug. CW creates an isolated worktree, tracks the session, and launches Claude in your current terminal.
+### Work
 
 ```bash
-cw work my-app fix-auth                                  # branch name
-cw work my-app https://linear.app/team/issue/PROJ-123    # Linear URL
-cw work my-app https://github.com/org/repo/issues/42     # GitHub issue
-cw work my-app https://notion.so/team/Auth-Redesign      # Notion page
+cw work my-app fix-auth                                # branch name
+cw work my-app PROJ-123                                # ticket ID
+cw work my-app https://linear.app/team/issue/PROJ-123  # Linear URL
+cw work my-app https://github.com/org/repo/issues/42   # GitHub issue
+cw work my-app https://notion.so/team/Auth-Redesign    # Notion page
 
-cw work my-app fix-auth             # resume (--continue)
-cw work my-app fix-auth --done      # close + cleanup
+cw work my-app fix-auth                                # resume
+cw work my-app fix-auth --done                         # close + cleanup
 ```
 
-When you pass a URL, Claude uses the relevant MCP (Linear, GitHub, Notion) to fetch issue details, find the branch name, create the worktree, and populate `TASK_NOTES.md` with context — all automatically.
+Creates an isolated worktree, tracks the session, fetches context from URLs via MCP, and launches Claude.
 
-### `cw review <project> <PR>`
-
-Review a PR in an isolated worktree.
+### Review
 
 ```bash
-cw review my-app 123
-cw review my-app https://github.com/org/repo/pull/123
-cw review my-app 123 --done
+cw review my-app 123                                   # by PR number
+cw review my-app https://github.com/org/repo/pull/123  # by URL
+cw review my-app 123                                   # re-review (checks resolved changes)
+cw review my-app 123 --done                            # close
 ```
 
-### `cw open <project>`
+First review runs your project's review skill automatically. Follow-up reviews check if requested changes were addressed.
 
-Quick-open Claude in a project. No worktree, no session tracking.
+### Quick Access
 
 ```bash
-cw open my-app
+cw open my-app          # open Claude in project (no worktree)
+cw spaces               # list all active tasks and reviews
+cw dashboard            # full workspace overview
 ```
 
-### `cw spaces`
+## Multi-Account Routing
 
-List all active tasks and reviews across projects.
-
-### `cw dashboard`
-
-Full workspace overview: accounts, projects, active spaces.
-
-## Multi-Account Support
-
-Each project is linked to a Claude account. CW auto-routes.
+Each project maps to a Claude account. CW handles the rest.
 
 ```bash
 cw account add work
 cw account add personal
 
-cw project register ~/code/company-app --account work
+cw project register ~/code/company-app  --account work
 cw project register ~/code/side-project --account personal
 
-cw work company-app feat-x     # uses "work" account
-cw work side-project feat-y    # uses "personal" account
+cw work company-app feat-x      # → work account
+cw work side-project feat-y     # → personal account
 ```
 
 ## How It Works
 
 ### Worktree Isolation
 
-Each task gets its own [git worktree](https://git-scm.com/docs/git-worktree) — no `checkout` conflicts, no stashing.
+Every task and review gets its own [git worktree](https://git-scm.com/docs/git-worktree). No checkout conflicts, no stashing.
 
 ```
 my-app/
-├── src/                    # main branch (untouched)
+├── src/                       # main branch (untouched)
 ├── .tasks/
-│   ├── fix-auth/           # worktree → fix-auth branch
-│   └── PROJ-123/           # worktree → branch from Linear
+│   ├── fix-auth/              # worktree → fix-auth branch
+│   └── PROJ-123/              # worktree → branch from Linear
 └── .reviews/
-    └── pr-123/             # worktree → PR branch
+    └── pr-123/                # worktree → PR branch
 ```
 
 ### Session Persistence
 
-Notes and metadata live outside git in `~/.cw/sessions/`:
+Context survives conversation loss. Notes and metadata live in `~/.cw/sessions/`, symlinked into worktrees:
 
 ```
 ~/.cw/sessions/my-app/
 ├── task-fix-auth/
-│   ├── session.json        # metadata, status, opens count
-│   ├── TASK_NOTES.md       # persistent context (symlinked into worktree)
-│   └── init_prompt.txt     # initial Claude prompt
+│   ├── session.json           # metadata, status, opens count
+│   ├── TASK_NOTES.md          # persistent context → symlinked into worktree
+│   └── init_prompt.txt        # initial Claude prompt
 └── review-pr-123/
     ├── session.json
     └── REVIEW_NOTES.md
 ```
 
-`TASK_NOTES.md` is symlinked into the worktree so Claude can read it, but it never touches git. When you resume, Claude uses `--continue`. If the conversation is lost, the notes file preserves context.
+When you resume, Claude uses `--continue`. If the conversation is lost, the notes file preserves context.
 
-### URL → Context Flow
+### URL → Context
 
 ```
 cw work my-app https://linear.app/.../PROJ-123
-  ↓
-Parse URL → detect Linear → extract PROJ-123
-  ↓
-Launch Claude with init prompt:
-  "Fetch PROJ-123 from Linear MCP, get the branch,
-   create worktree, fill TASK_NOTES.md"
-  ↓
-Claude handles everything interactively
+  → Parse URL, detect Linear, extract PROJ-123
+  → Launch Claude with init prompt
+  → Claude fetches issue via MCP, creates worktree, fills TASK_NOTES.md
 ```
+
+Works with **Linear**, **GitHub**, and **Notion** URLs.
+
+### Review Skills
+
+CW finds the best review skill for each project:
+
+| Priority | Location |
+|----------|----------|
+| 1 | `.claude/skills/{code-review,review-pr,review}/SKILL.md` (project) |
+| 2 | `~/.claude/skills/{code-review,code-reviewer}/SKILL.md` (global) |
+| 3 | `~/.cw/commands/review-pr.md` (CW fallback) |
+| 4 | Built-in default |
 
 ## Installation
 
@@ -153,7 +174,7 @@ Claude handles everything interactively
 - Python 3.6+
 - Bash 4+ or Zsh
 
-### Install
+### Setup
 
 ```bash
 git clone https://github.com/avarajar/cw.git
@@ -161,72 +182,88 @@ cd cw
 ./install.sh
 ```
 
-### Setup
+The installer adds shell integration to `.zshrc` / `.bashrc` with tab completion and aliases.
 
-```bash
-cw init
-cw account add work
-cw launch work                 # authenticate: /login
+## Configuration
 
-cw project register ~/code/my-app --account work
-cw dashboard                   # verify
+### `~/.cw/config.yaml`
+
+```yaml
+default_account: work
+skip_permissions: false     # set true to skip Claude permission prompts
+
+tools:
+  tracker: linear
+  docs: notion
+  chat: slack
+  repo: github
 ```
 
-### Shell Integration
-
-The installer adds to your `.zshrc` / `.bashrc`:
+### Permission Skipping
 
 ```bash
-source ~/.cw/cw-shell-integration.sh
+# Per-command
+cw --skip-permissions work my-app fix-auth
+
+# Permanent (config.yaml)
+skip_permissions: true
+
+# Per-session (env)
+CW_CLAUDE_FLAGS="--dangerously-skip-permissions" cw work my-app fix-auth
 ```
 
-This gives you tab completion for commands, projects, and active tasks, plus aliases: `cww` (work), `cwpr` (review), `cwsp` (spaces).
+### MCP Integrations
+
+```bash
+cw project setup-mcps my-app    # interactive setup for GitHub, Linear, Notion, Slack
+```
+
+Installs MCPs directly on the project's account. Shows status of already-installed MCPs.
+
+## Shell Aliases
+
+After installation, these aliases are available:
+
+| Alias | Command |
+|-------|---------|
+| `cww` | `cw work` |
+| `cwpr` | `cw review` |
+| `cwsp` | `cw spaces` |
+| `cwd` | `cw dashboard` |
+| `cws` | `cw status` |
+| `cwl` | `cw project list` |
+| `cwo` | Fuzzy project opener (requires `fzf`) |
+| `cc` | `cw launch` |
 
 ## Team Setup
 
-CW is the shared tool. Everything personal stays local.
+CW is shared. Personal data stays local.
 
-**Shared (this repo):** `cw`, `install.sh`, `cw-shell-integration.sh`, templates, docs.
+| Shared (this repo) | Personal (`~/.cw/`) |
+|---------------------|---------------------|
+| `cw`, `install.sh` | `accounts/` |
+| `cw-shell-integration.sh` | `projects.json` |
+| `templates/`, `docs/` | `sessions/` |
 
-**Personal (each member):** `~/.cw/accounts/`, `~/.cw/projects.json`, `~/.cw/sessions/`.
-
-Each team member clones the repo, runs `install.sh`, then registers their own projects with their own accounts. Project paths don't need to match.
-
-## File Structure
-
-```
-~/.cw/
-├── bin/cw                          # main script
-├── cw-shell-integration.sh         # completions + aliases
-├── accounts/
-│   ├── work/                       # Claude config dir
-│   └── personal/
-├── sessions/
-│   └── <project>/
-│       └── task-<n>/
-│           ├── session.json
-│           └── TASK_NOTES.md
-├── templates/
-│   └── CLAUDE.template.md
-└── projects.json                   # registered projects
-```
+Each member clones the repo, runs `install.sh`, registers their own projects. Paths don't need to match.
 
 ## All Commands
 
 | Command | Description |
-|---------|------------|
-| `cw work <project> <task\|URL>` | Work on feature/bug (worktree + session) |
-| `cw work <project> <task> --done` | Close task, archive session |
-| `cw review <project> <PR\|URL>` | Review PR (worktree + session) |
+|---------|-------------|
+| `cw work <project> <task\|URL>` | Work on feature/bug |
+| `cw work <project> <task> --done` | Close task, cleanup |
+| `cw review <project> <PR\|URL>` | Review PR |
 | `cw review <project> <PR> --done` | Close review |
-| `cw open <project>` | Quick open Claude in project |
-| `cw spaces` | Show all active spaces |
-| `cw dashboard` | Full workspace overview |
-| `cw account add <n>` | Add Claude account |
-| `cw account list` | List accounts |
-| `cw project register <path>` | Register project |
-| `cw project list` | List projects |
-| `cw project setup-mcps <n>` | Configure MCP integrations |
+| `cw open <project>` | Quick open (no worktree) |
+| `cw spaces` | Active spaces |
+| `cw dashboard` | Full overview |
+| `cw account add\|list\|remove` | Manage accounts |
+| `cw project register\|list\|info` | Manage projects |
+| `cw project setup-mcps <name>` | Configure MCPs |
+| `cw project setup-agents <name>` | Install agents |
+| `cw --skip-permissions <cmd>` | Skip permission prompts |
+| `cw version` | Show version |
 | `cw help` | Full help |
 
 ## License
