@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Personal config (never commit)
+accounts/
+sessions/
+projects.json
+cw.log
+
+# Editor
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
