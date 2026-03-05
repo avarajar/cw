@@ -1479,6 +1479,116 @@ MD
 }
 
 # ════════════════════════════════════════════════════════════════════════════
+# KANBAN — vibe-kanban integration
+# ════════════════════════════════════════════════════════════════════════════
+cmd_kanban() {
+    local subcmd="${1:-open}"; shift || true
+    case "$subcmd" in
+        sync) _kanban_sync ;;
+        *)    _kanban_open ;;
+    esac
+}
+
+_kanban_open() {
+    _log "Launching vibe-kanban..."
+    if ! command -v npx &>/dev/null; then
+        _err "npx not found. Install Node.js first."
+        return 1
+    fi
+    npx vibe-kanban &
+    _log "vibe-kanban started. Opening browser..."
+    sleep 2
+    open http://localhost:3535 2>/dev/null || xdg-open http://localhost:3535 2>/dev/null || true
+}
+
+_kanban_sync() {
+    _log "Syncing active CW sessions to vibe-kanban..."
+
+    if [[ ! -f "$CW_ACTIVE" ]]; then
+        _warn "No active sessions found."
+        return 0
+    fi
+
+    local sessions
+    sessions=$(python3 -c "
+import json
+with open('$CW_ACTIVE') as f:
+    active = json.load(f)
+for key, val in active.items():
+    print(f\"{val.get('project','?')}|{val.get('task', val.get('pr','?'))}|{val.get('worktree','')}\")
+" 2>/dev/null)
+
+    if [[ -z "$sessions" ]]; then
+        _warn "No active sessions to sync."
+        return 0
+    fi
+
+    echo ""
+    echo -e "${BOLD}Sessions to sync with vibe-kanban:${NC}"
+    echo "$sessions" | while IFS='|' read -r project task worktree; do
+        echo -e "  ${C}$project${NC} / ${Y}$task${NC}  ${DIM}$worktree${NC}"
+    done
+    echo ""
+    _log "Opening vibe-kanban — link these workspaces manually for now."
+    _log "Full automatic MCP sync coming in a future release."
+    _kanban_open
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# GSD — Get Shit Done workflow integration
+# ════════════════════════════════════════════════════════════════════════════
+cmd_gsd() {
+    local subcmd="${1:-init}"; shift || true
+    case "$subcmd" in
+        init)  _gsd_init "$@" ;;
+        sync)  _gsd_sync ;;
+        *)     _err "Usage: cw gsd [init|sync]" ;;
+    esac
+}
+
+_gsd_init() {
+    local target="${1:-$(pwd)}"
+    [[ -d "$target" ]] || { _err "Directory not found: $target"; return 1; }
+    _log "Initializing GSD in: ${C}$target${NC}"
+    if ! command -v npx &>/dev/null; then
+        _err "npx not found. Install Node.js first."
+        return 1
+    fi
+    if [[ -f "$target/STATE.md" ]]; then
+        _warn "GSD already initialized (STATE.md exists). Skipping."
+        return 0
+    fi
+    (cd "$target" && npx get-shit-done-cc@latest --claude --local)
+    _log "GSD initialized in ${C}$target${NC}"
+}
+
+_gsd_sync() {
+    _log "Syncing GSD to all active CW worktrees..."
+    local sessions_dir="$CW_HOME/sessions"
+    [[ -d "$sessions_dir" ]] || { _warn "No sessions directory found."; return 0; }
+    local count=0
+    for proj_dir in "$sessions_dir"/*/; do
+        for space_dir in "$proj_dir"/*/; do
+            local meta="$space_dir/session.json"
+            [[ -f "$meta" ]] || continue
+            local status worktree
+            status=$(python3 -c "import json; print(json.load(open('$meta')).get('status',''))" 2>/dev/null)
+            [[ "$status" != "active" ]] && continue
+            worktree=$(python3 -c "import json; print(json.load(open('$meta')).get('worktree',''))" 2>/dev/null)
+            [[ -d "$worktree" ]] || continue
+            if [[ -f "$worktree/STATE.md" ]]; then
+                _log "GSD already present: ${DIM}$worktree${NC}"
+            else
+                _log "Initializing GSD: ${C}$worktree${NC}"
+                _gsd_init "$worktree"
+                (( count++ )) || true
+            fi
+        done
+    done
+    _log "GSD sync complete. Initialized in ${Y}$count${NC} worktree(s)."
+}
+
+# ════════════════════════════════════════════════════════════════════════════
 # HELP
 # ════════════════════════════════════════════════════════════════════════════
 cmd_help() {
@@ -1538,6 +1648,12 @@ ${BOLD}EXAMPLES${NC}
   cw open daycast                                   # Quick open (no worktree)
   cw dashboard                                      # Full overview
 
+${BOLD}INTEGRATIONS${NC}
+  cw kanban                         Open vibe-kanban visual board in browser
+  cw kanban:sync                    List active sessions and open vibe-kanban to link them
+  cw gsd:init [path]                Initialize GSD workflow in a worktree
+  cw gsd:sync                       Initialize GSD in all active worktrees
+
 ${BOLD}TIPS${NC}
   Cmd + number        Jump to tab
   Cmd + arrow         Next/previous tab
@@ -1577,6 +1693,8 @@ main() {
         launch)     cmd_launch "$@" ;;
         dashboard)  cmd_dashboard "$@" ;;
         status)     cmd_status "$@" ;;
+        kanban|kanban:sync) cmd_kanban "${cmd#kanban:}" "$@" ;;
+        gsd|gsd:init|gsd:sync) cmd_gsd "${cmd#gsd:}" "$@" ;;
         help|-h|--help) cmd_help ;;
         version|-v|--version) echo "cw $CW_VERSION" ;;
         *) _err "Unknown: $cmd"; cmd_help; exit 1 ;;
