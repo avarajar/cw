@@ -1677,6 +1677,210 @@ _gsd_sync() {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
+# CREATE — Bootstrap a new project from a description
+# ════════════════════════════════════════════════════════════════════════════
+cmd_create() {
+    local description="" account="" team_flag=false team_prompt="" proj_name="" base_dir=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --account|-a)  account="$2"; shift 2 ;;
+            --name|-n)     proj_name="$2"; shift 2 ;;
+            --dir|-d)      base_dir="$2"; shift 2 ;;
+            --team)        team_flag=true; shift
+                           if [[ $# -gt 0 && "$1" != -* && "$1" != http* ]]; then
+                               team_prompt="$1"; shift
+                           fi ;;
+            -*)            shift ;;
+            *)             description="$1"; shift ;;
+        esac
+    done
+
+    [[ -z "$description" ]] && { _err "Usage: cw create \"<description or URL>\" [--account X] [--team]"; return 1; }
+
+    # ── Parse URL source ──────────────────────────────────────────────
+    local source="" source_url=""
+    if [[ "$description" == http* ]]; then
+        source_url="$description"
+        if [[ "$description" == *linear.app* ]]; then
+            source="linear"
+        elif [[ "$description" == *notion.so* ]] || [[ "$description" == *notion.site* ]]; then
+            source="notion"
+        elif [[ "$description" == *github.com* ]]; then
+            source="github"
+        else
+            source="url"
+        fi
+    fi
+
+    # ── Pick account ──────────────────────────────────────────────────
+    if [[ -z "$account" ]]; then
+        local accounts=()
+        for dir in "$CW_ACCOUNTS_DIR"/*/; do
+            [[ -d "$dir" ]] || continue
+            accounts+=("$(basename "$dir")")
+        done
+        if [[ ${#accounts[@]} -eq 0 ]]; then
+            _err "No accounts. Run: cw account add <name>"
+            return 1
+        elif [[ ${#accounts[@]} -eq 1 ]]; then
+            account="${accounts[0]}"
+        else
+            echo -e "\n${BOLD}Select account:${NC}"
+            local i=1
+            for a in "${accounts[@]}"; do
+                echo -e "  ${C}$i${NC}) $a"
+                ((i++))
+            done
+            echo ""
+            read -rp "Account [1]: " choice
+            choice=${choice:-1}
+            account="${accounts[$((choice - 1))]}"
+        fi
+    fi
+    local acct_dir="$CW_ACCOUNTS_DIR/$account"
+    [[ -d "$acct_dir" ]] || { _err "Account '$account' not found."; return 1; }
+
+    # ── Project name ──────────────────────────────────────────────────
+    if [[ -z "$proj_name" ]]; then
+        if [[ -n "$source_url" ]]; then
+            proj_name=$(echo "$source_url" | sed 's|.*/||' | sed 's|-[a-f0-9]*$||' | head -c 40)
+        else
+            # Ask Claude-style: derive from description
+            read -rp "Project name: " proj_name
+        fi
+    fi
+    [[ -z "$proj_name" ]] && { _err "Project name required."; return 1; }
+    # Sanitize name
+    proj_name=$(echo "$proj_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
+
+    # ── Create directory ──────────────────────────────────────────────
+    base_dir="${base_dir:-${CW_WORKSPACE:-$HOME/workspace}}"
+    local proj_path="$base_dir/$proj_name"
+
+    if [[ -d "$proj_path" ]]; then
+        _warn "Directory already exists: $proj_path"
+        read -rp "Use it anyway? [y/N] " c
+        [[ "$c" =~ ^[yY]$ ]] || return 1
+    else
+        mkdir -p "$proj_path"
+        _log "Created ${C}$proj_path${NC}"
+    fi
+
+    # ── Git init ──────────────────────────────────────────────────────
+    if [[ ! -d "$proj_path/.git" ]]; then
+        git -C "$proj_path" init -b main -q
+        _log "Initialized git repo"
+    fi
+
+    # ── Register in CW ────────────────────────────────────────────────
+    python3 -c "
+import json
+f = '$CW_REGISTRY'
+try:
+    with open(f) as fh: reg = json.load(fh)
+except: reg = {}
+reg['$proj_name'] = {
+    'path': '$proj_path', 'account': '$account', 'type': 'fullstack',
+    'registered': '$(date -u +%Y-%m-%dT%H:%M:%SZ)'
+}
+with open(f, 'w') as fh: json.dump(reg, fh, indent=2)
+"
+    _log "Registered project ${C}$proj_name${NC} (account=${Y}$account${NC})"
+
+    # ── Build init prompt ─────────────────────────────────────────────
+    local init_prompt=""
+    if [[ -n "$source_url" ]]; then
+        case "$source" in
+            linear)
+                init_prompt="Fetch this Linear issue/epic using the Linear MCP: $source_url
+Use the content as the project specification." ;;
+            notion)
+                init_prompt="Fetch this Notion page using the Notion MCP: $source_url
+Use the content as the project specification." ;;
+            github)
+                init_prompt="Fetch this GitHub page for context: $source_url
+Use it as reference for the project." ;;
+            *)
+                init_prompt="Reference URL: $source_url" ;;
+        esac
+        init_prompt="$init_prompt
+
+"
+    fi
+
+    init_prompt="${init_prompt}You are starting a brand new project from scratch.
+
+Project: $proj_name
+Working directory: $proj_path
+Description: $description
+
+Your job:
+1. Analyze the description/spec and decide the tech stack, architecture, and structure
+2. Scaffold the project (package.json/Cargo.toml/etc, directory structure, configs)
+3. Build out the core functionality
+4. Create a CLAUDE.md with project context for future sessions
+5. Make an initial git commit when the scaffold is ready
+
+IMPORTANT: When you're done building, ask the user:
+\"Ready to push to GitHub. Which organization?\" and list options using: gh org list
+Then create the repo with: gh repo create <org>/$proj_name --source . --push
+If they want it on their personal account: gh repo create $proj_name --source . --push"
+
+    if $team_flag && [[ -n "$team_prompt" ]]; then
+        init_prompt="$init_prompt
+
+Create an agent team to build this project in parallel:
+$team_prompt"
+    elif $team_flag; then
+        init_prompt="$init_prompt
+
+Create an agent team to build this project in parallel. Analyze the scope and split the work into logical domains (e.g. backend API, frontend UI, tests, infrastructure). Spawn teammates accordingly and coordinate the build."
+    fi
+
+    # ── Create session ────────────────────────────────────────────────
+    local session_dir="$CW_HOME/sessions/$proj_name/task-init"
+    mkdir -p "$session_dir"
+
+    local session_meta="$session_dir/session.json"
+    python3 -c "
+import json
+from datetime import datetime
+meta = {
+    'project': '$proj_name', 'task': 'init', 'type': 'task',
+    'account': '$account',
+    'worktree': '$proj_path',
+    'source': '$source', 'source_url': '$source_url',
+    'status': 'active',
+    'created': datetime.utcnow().isoformat() + 'Z',
+    'last_opened': datetime.utcnow().isoformat() + 'Z',
+    'opens': 1
+}
+with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
+"
+
+    # ── Launch Claude ─────────────────────────────────────────────────
+    cd "$proj_path"
+    _set_tab_title "create: $proj_name"
+
+    export CW_PROJECT="$proj_name" CW_TASK="init" CW_TASK_TYPE="task" CW_ACCOUNT="$account"
+
+    local team_env=""
+    $team_flag && team_env="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1"
+
+    local prompt_file="$session_dir/init_prompt.txt"
+    printf '%s' "$init_prompt" > "$prompt_file"
+
+    _log "Launching Claude..."
+    $team_flag && _log "Agent teams ${G}enabled${NC}"
+
+    env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "$(cat "$prompt_file")"
+
+    unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) CREATE $proj_name account=$account" >> "$CW_SESSIONS_LOG"
+}
+
+# ════════════════════════════════════════════════════════════════════════════
 # HELP
 # ════════════════════════════════════════════════════════════════════════════
 cmd_help() {
@@ -1685,6 +1889,11 @@ cmd_help() {
 ${BOLD}CW — Claude Workspace Manager${NC}
 
 ${BOLD}MAIN COMMANDS${NC}
+  create "<description>" [opts]       Bootstrap new project from scratch
+    --account, -a <account>           Which account to use
+    --name, -n <name>                 Project name (prompted if omitted)
+    --dir, -d <path>                  Base directory (default: ~/workspace)
+    --team ["<prompt>"]               Use agent teams for parallel build
   work <project> <task>               Work on feature/bug (worktree + session)
   work <project> <task> --team        Launch with agent team (parallel work)
   work <project> <url>                Work from Linear/Notion/GitHub URL
@@ -1723,6 +1932,10 @@ ${BOLD}GLOBAL FLAGS${NC}
                                       Or via env: CW_CLAUDE_FLAGS="--dangerously-skip-permissions"
 
 ${BOLD}EXAMPLES${NC}
+  cw create "SaaS de analytics con Stripe"          # New project from description
+  cw create "CLI tool en Rust" --team               # With agent teams
+  cw create https://notion.so/.../spec -a work      # From Notion spec
+
   cw work daycast fix-auth                          # New task
   cw work daycast NEW-789                           # Task by ticket ID
   cw work daycast https://linear.app/.../NEW-789    # From Linear URL
@@ -1779,6 +1992,7 @@ main() {
         open)       cmd_open "$@" ;;
         review)     cmd_review "$@" ;;
         work)       cmd_work "$@" ;;
+        create)     cmd_create "$@" ;;
         spaces)     cmd_spaces "$@" ;;
         launch)     cmd_launch "$@" ;;
         dashboard)  cmd_dashboard "$@" ;;

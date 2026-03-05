@@ -37,10 +37,11 @@ Working with Claude Code across multiple projects means:
 ## The Solution
 
 ```
-cw work my-app PROJ-123        →  worktree + Linear context + right account
-cw review my-app 42            →  isolated PR review with auto-start
-cw work my-app PROJ-123        →  resume exactly where you left off
-cw work my-app PROJ-123 --done →  cleanup worktree, archive session
+cw create "Task management SaaS" --team  →  new project + agent teams build it
+cw work my-app PROJ-123                  →  worktree + Linear context + right account
+cw review my-app 42                      →  isolated PR review with auto-start
+cw work my-app PROJ-123                  →  resume exactly where you left off
+cw work my-app PROJ-123 --done           →  cleanup worktree, archive session
 ```
 
 ## Quick Start
@@ -60,6 +61,18 @@ cw work my-app fix-auth
 ```
 
 ## Core Commands
+
+### Create
+
+```bash
+cw create "Inventory management app with Next.js and Supabase"
+cw create "CLI tool in Rust for monitoring" --account personal
+cw create "E-commerce platform" --team                          # with agent teams
+cw create "API gateway" --team "backend, infra, tests"          # custom team roles
+cw create https://notion.so/team/Project-Spec --account work    # from Notion spec
+```
+
+Bootstraps a new project from a description or URL. Creates the directory, initializes git, registers the project in CW, and launches Claude to build it. When done, Claude asks which GitHub account/org to push to.
 
 ### Work
 
@@ -300,6 +313,7 @@ Bundled in this repo and installed automatically by `install.sh`:
 
 | Command | Description |
 |---------|-------------|
+| `cw create "<description>"` | Bootstrap new project from scratch |
 | `cw work <project> <task\|URL>` | Work on feature/bug |
 | `cw work <project> <task> --team` | Work with agent team |
 | `cw work <project> <task> --done` | Close task, cleanup |
