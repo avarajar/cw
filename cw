@@ -658,13 +658,15 @@ with open('$session_meta', 'w') as f:
 
 IMPORTANT — DO NOT post comments to GitHub yet. Present your findings to me first:
 - Show a summary: what was resolved, what's still pending, any new issues
+- Classify new issues as: critical | major | minor | nit
 - Show your updated verdict: APPROVE | REQUEST CHANGES | NEEDS DISCUSSION
-- Then ASK me: 'Ready to post this review? (yes/no/edit)'
+- Then ASK me: 'Which levels should I post? (e.g. critical+major / all / none / edit)'
 
-Only after I confirm, post as inline review comments on specific lines:
-  \`gh api repos/{owner}/{repo}/pulls/$pr/reviews -f event=<APPROVE|REQUEST_CHANGES|COMMENT> -f body='<summary>' -f comments='[{\"path\":\"<file>\",\"line\":<line>,\"body\":\"<comment>\"}]'\`
+Only after I confirm, post as inline review comments on specific lines.
+IMPORTANT: When posting comments to GitHub, DO NOT include severity labels (critical/major/minor/nit) in the comment text. Write each comment as a natural, helpful review comment — just the issue and suggested fix, no tags or prefixes.
+Use: \`gh api repos/{owner}/{repo}/pulls/$pr/reviews -f event=<APPROVE|REQUEST_CHANGES|COMMENT> -f body='<summary>' -f comments='[{\"path\":\"<file>\",\"line\":<line>,\"body\":\"<comment>\"}]'\`
 
-If I say 'no', do not post. If I say 'edit', let me modify before posting."
+If I say 'none', do not post. If I say 'edit', let me modify before posting."
 
         local prompt_file="$session_dir/recheck_prompt.txt"
         printf '%s' "$recheck_prompt" > "$prompt_file"
@@ -741,14 +743,17 @@ For each finding: File:Line, Severity, Issue, Suggested fix."
 5. Fill in REVIEW_NOTES.md with your findings.
 
 IMPORTANT — DO NOT post comments to GitHub yet. Present your findings to me first:
-- Show a summary table of all findings (file, line, severity, issue)
+- Classify each finding as: critical | major | minor | nit
+- Group findings by severity in the summary table (file, line, severity, issue)
+- Show counts per severity level
 - Show your overall verdict: APPROVE | REQUEST CHANGES | NEEDS DISCUSSION
-- Then ASK me: 'Ready to post these as inline review comments? (yes/no/edit)'
+- Then ASK me: 'Which levels should I post? (e.g. critical+major / all / none / edit)'
 
-Only after I confirm, post the review using inline comments on specific lines:
-  \`gh api repos/{owner}/{repo}/pulls/$pr/reviews -f event=<APPROVE|REQUEST_CHANGES|COMMENT> -f body='<summary>' -f comments='[{\"path\":\"<file>\",\"line\":<line>,\"body\":\"<comment>\"}]'\`
+Only after I confirm, post the review using inline comments on specific lines.
+IMPORTANT: When posting comments to GitHub, DO NOT include severity labels (critical/major/minor/nit) in the comment text. Write each comment as a natural, helpful review comment — just the issue and suggested fix, no tags or prefixes.
+Use: \`gh api repos/{owner}/{repo}/pulls/$pr/reviews -f event=<APPROVE|REQUEST_CHANGES|COMMENT> -f body='<summary>' -f comments='[{\"path\":\"<file>\",\"line\":<line>,\"body\":\"<comment>\"}]'\`
 
-If I say 'no', do not post. If I say 'edit', let me modify the findings before posting."
+If I say 'none', do not post. If I say 'edit', let me modify the findings before posting."
 
         local prompt_file="$session_dir/init_prompt.txt"
         printf '%s' "$review_prompt" > "$prompt_file"
