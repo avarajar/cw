@@ -655,7 +655,16 @@ with open('$session_meta', 'w') as f:
    - Still pending: which ones are not addressed yet
    - New issues: anything new introduced in the latest commits
 6. Update REVIEW_NOTES.md with the follow-up findings.
-7. End with updated verdict: APPROVE | REQUEST CHANGES | NEEDS DISCUSSION."
+
+IMPORTANT — DO NOT post comments to GitHub yet. Present your findings to me first:
+- Show a summary: what was resolved, what's still pending, any new issues
+- Show your updated verdict: APPROVE | REQUEST CHANGES | NEEDS DISCUSSION
+- Then ASK me: 'Ready to post this review? (yes/no/edit)'
+
+Only after I confirm, post as inline review comments on specific lines:
+  \`gh api repos/{owner}/{repo}/pulls/$pr/reviews -f event=<APPROVE|REQUEST_CHANGES|COMMENT> -f body='<summary>' -f comments='[{\"path\":\"<file>\",\"line\":<line>,\"body\":\"<comment>\"}]'\`
+
+If I say 'no', do not post. If I say 'edit', let me modify before posting."
 
         local prompt_file="$session_dir/recheck_prompt.txt"
         printf '%s' "$recheck_prompt" > "$prompt_file"
@@ -724,13 +733,22 @@ $review_skill"
             review_prompt="$review_prompt
 
 Review for: correctness, security, performance, tests, naming, error handling.
-For each finding: File:Line, Severity, Issue, Fix.
-End with: APPROVE | REQUEST CHANGES | NEEDS DISCUSSION."
+For each finding: File:Line, Severity, Issue, Suggested fix."
         fi
 
         review_prompt="$review_prompt
 
-5. Fill in REVIEW_NOTES.md with your findings."
+5. Fill in REVIEW_NOTES.md with your findings.
+
+IMPORTANT — DO NOT post comments to GitHub yet. Present your findings to me first:
+- Show a summary table of all findings (file, line, severity, issue)
+- Show your overall verdict: APPROVE | REQUEST CHANGES | NEEDS DISCUSSION
+- Then ASK me: 'Ready to post these as inline review comments? (yes/no/edit)'
+
+Only after I confirm, post the review using inline comments on specific lines:
+  \`gh api repos/{owner}/{repo}/pulls/$pr/reviews -f event=<APPROVE|REQUEST_CHANGES|COMMENT> -f body='<summary>' -f comments='[{\"path\":\"<file>\",\"line\":<line>,\"body\":\"<comment>\"}]'\`
+
+If I say 'no', do not post. If I say 'edit', let me modify the findings before posting."
 
         local prompt_file="$session_dir/init_prompt.txt"
         printf '%s' "$review_prompt" > "$prompt_file"
