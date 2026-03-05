@@ -1203,6 +1203,10 @@ hook_handler = {"type": "command", "command": hook_cmd, "timeout": 3000}
 matcher_events = ["PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop"]
 no_matcher_events = ["Stop", "SessionStart", "SessionEnd", "TeammateIdle", "TaskCompleted"]
 
+# Disable Co-Authored-By in commits and PRs
+if "attribution" not in settings:
+    settings["attribution"] = {"commit": "", "pr": ""}
+
 if "hooks" not in settings:
     settings["hooks"] = {}
 

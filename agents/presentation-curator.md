@@ -2,7 +2,7 @@
 name: presentation-curator
 description: PROACTIVELY use this agent whenever the user wants to update, modify, or fix the presentation slides, structure, styling, or weights
 tools: Read, Write, Edit, Grep, Glob
-model: sonnet
+model: opus
 color: magenta
 skills:
   - presentation/vibe-to-agentic-framework
