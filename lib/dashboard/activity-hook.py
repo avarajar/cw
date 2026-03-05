@@ -93,6 +93,10 @@ def main():
         summary = data.get("source", "")
     elif event == "SessionEnd":
         summary = data.get("reason", "")
+    elif event == "TeammateIdle":
+        summary = f"teammate idle: {data.get('teammate_name', '')}"
+    elif event == "TaskCompleted":
+        summary = f"task done: {data.get('task_description', '')[:60]}"
 
     entry = {
         "ts": time.time(),

@@ -76,6 +76,15 @@ cw work my-app fix-auth --done                         # close + cleanup
 
 Creates an isolated worktree, tracks the session, fetches context from URLs via MCP, and launches Claude.
 
+### Agent Teams
+
+```bash
+cw work my-app big-feature --team                              # auto-split work
+cw work my-app big-feature --team "backend, frontend, tests"   # specify teammates
+```
+
+Enables Claude Code's experimental [agent teams](https://code.claude.com/docs/en/agent-teams) for parallel work within a single session. Multiple teammates work on different parts of the task simultaneously, coordinating through a shared task list. The arcade dashboard shows each teammate's activity in real-time.
+
 ### Review
 
 ```bash
@@ -292,6 +301,7 @@ Bundled in this repo and installed automatically by `install.sh`:
 | Command | Description |
 |---------|-------------|
 | `cw work <project> <task\|URL>` | Work on feature/bug |
+| `cw work <project> <task> --team` | Work with agent team |
 | `cw work <project> <task> --done` | Close task, cleanup |
 | `cw review <project> <PR\|URL>` | Review PR |
 | `cw review <project> <PR> --done` | Close review |

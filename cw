@@ -731,12 +731,17 @@ End with: APPROVE | REQUEST CHANGES | NEEDS DISCUSSION."
 # WORK — Feature/bugfix with worktree + persistent session
 # ════════════════════════════════════════════════════════════════════════════
 cmd_work() {
-    local name="" task="" done_flag=false list_flag=false
+    local name="" task="" done_flag=false list_flag=false team_flag=false team_prompt=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --task|-t)   task="$2"; shift 2 ;;
             --done)      done_flag=true; shift ;;
             --list)      list_flag=true; shift ;;
+            --team)      team_flag=true; shift
+                         # Capture optional team prompt (rest of args in quotes)
+                         if [[ $# -gt 0 && "$1" != -* ]]; then
+                             team_prompt="$1"; shift
+                         fi ;;
             -*)          shift ;;
             *)           
                 if [[ -z "$name" ]]; then
@@ -916,14 +921,39 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
 
     export CW_PROJECT="$name" CW_TASK="$task" CW_TASK_TYPE="task" CW_ACCOUNT="$account"
 
+    # ── Agent teams ────────────────────────────────────────────────────
+    local team_env=""
+    if $team_flag; then
+        team_env="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1"
+        _log "Agent teams ${G}enabled${NC}"
+    fi
+
     if $is_new && [[ -n "$init_prompt" ]]; then
+        # Append team instructions to init prompt if --team
+        if $team_flag && [[ -n "$team_prompt" ]]; then
+            init_prompt="$init_prompt
+
+After setting up the workspace, create an agent team for this task:
+$team_prompt"
+        elif $team_flag; then
+            init_prompt="$init_prompt
+
+After setting up the workspace, analyze the task scope and create an agent team to work on it in parallel. Split the work into logical domains (e.g. backend, frontend, tests) and spawn teammates accordingly."
+        fi
+
         local prompt_file="$session_dir/init_prompt.txt"
         printf '%s' "$init_prompt" > "$prompt_file"
-        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "$(cat "$prompt_file")"
+        env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "$(cat "$prompt_file")"
     elif ! $is_new; then
-        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --continue
+        env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --continue
     else
-        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS
+        if $team_flag && [[ -n "$team_prompt" ]]; then
+            env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "Create an agent team for this task: $team_prompt"
+        elif $team_flag; then
+            env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS
+        else
+            CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS
+        fi
     fi
 
     unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
@@ -1132,7 +1162,7 @@ hook_handler = {"type": "command", "command": hook_cmd, "timeout": 3000}
 
 # Events that support matcher vs those that don't
 matcher_events = ["PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop"]
-no_matcher_events = ["Stop", "SessionStart", "SessionEnd"]
+no_matcher_events = ["Stop", "SessionStart", "SessionEnd", "TeammateIdle", "TaskCompleted"]
 
 if "hooks" not in settings:
     settings["hooks"] = {}
@@ -1656,6 +1686,7 @@ ${BOLD}CW — Claude Workspace Manager${NC}
 
 ${BOLD}MAIN COMMANDS${NC}
   work <project> <task>               Work on feature/bug (worktree + session)
+  work <project> <task> --team        Launch with agent team (parallel work)
   work <project> <url>                Work from Linear/Notion/GitHub URL
   review <project> <PR>               Review PR (worktree + session)
   review <project> <url>              Review from GitHub PR URL
@@ -1697,6 +1728,8 @@ ${BOLD}EXAMPLES${NC}
   cw work daycast https://linear.app/.../NEW-789    # From Linear URL
   cw work daycast fix-auth                          # Resume (auto --continue)
   cw work daycast fix-auth --done                   # Close and cleanup
+  cw work daycast big-feat --team                   # Launch with agent team (auto-split)
+  cw work daycast big-feat --team "3 teammates: backend, frontend, tests"
 
   cw review triton 123                              # New PR review
   cw review triton https://github.com/.../pull/123  # From GitHub URL

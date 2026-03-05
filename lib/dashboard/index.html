@@ -1051,6 +1051,8 @@ const TOOLS = {
 function toolInfo(tool, event) {
   if (TOOLS[tool]) return TOOLS[tool];
   if (event?.startsWith('Subagent')) return { label: 'A', cls: 'agent' };
+  if (event === 'TeammateIdle') return { label: 'T', cls: 'agent' };
+  if (event === 'TaskCompleted') return { label: '\u2713', cls: 'write' };
   if (event?.startsWith('Session')) return { label: '\u25CF', cls: 'session' };
   if (event === 'Stop') return { label: '\u25A0', cls: 'stop' };
   return { label: '\u00B7', cls: 'stop' };
