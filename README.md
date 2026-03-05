@@ -247,6 +247,52 @@ CW is shared. Personal data stays local.
 
 Each member clones the repo, runs `install.sh`, registers their own projects. Paths don't need to match.
 
+## Integrations
+
+### vibe-kanban — Visual Board
+
+[vibe-kanban](https://github.com/BloopAI/vibe-kanban) is a local kanban board that runs in your browser. CW bundles its MCP config and adds two commands:
+
+```bash
+cw kanban          # launch vibe-kanban and open http://localhost:3535
+cw kanban:sync     # list active CW sessions and open vibe-kanban to link them
+```
+
+The MCP config (`mcps/vibe-kanban.json`) is installed to `~/.cw/mcps/` and lets Claude interact with the board directly via 30+ tools (create issues, link workspaces, manage tasks).
+
+Register the MCP in Claude Code after installing:
+
+```bash
+claude mcp add vibe-kanban -- npx -y vibe-kanban@latest --mcp
+```
+
+### GSD — Get Shit Done
+
+[GSD](https://github.com/gsd-build/get-shit-done) is a meta-prompting workflow for Claude Code. It installs slash commands and context files (`PROJECT.md`, `ROADMAP.md`, `STATE.md`) that guide Claude through Discuss → Plan → Execute → Verify phases.
+
+```bash
+cw gsd:init [path]   # initialize GSD in a worktree (default: current directory)
+cw gsd:sync          # initialize GSD in all active worktrees that don't have it yet
+```
+
+Requires Node.js / npx.
+
+### claude-code-best-practice — Agents & Hooks
+
+[claude-code-best-practice](https://github.com/shanraisshan/claude-code-best-practice) provides ready-made agents and hooks with audio notifications for Claude Code events.
+
+Bundled in this repo and installed automatically by `install.sh`:
+
+| Asset | Location | Purpose |
+|-------|----------|---------|
+| `agents/presentation-curator.md` | `~/.cw/agents/` | Proactive slide/presentation agent |
+| `agents/weather-agent.md` | `~/.cw/agents/` | Dubai weather fetcher via wttr.in |
+| `hooks/scripts/hooks.py` | `~/.cw/hooks/` | Hook handler with audio notifications |
+| `hooks/config/hooks-config.json` | `~/.cw/hooks/` | Hook event configuration |
+| `hooks/sounds/` | `~/.cw/hooks/` | Sound effects for Claude Code events |
+
+---
+
 ## All Commands
 
 | Command | Description |
@@ -262,6 +308,10 @@ Each member clones the repo, runs `install.sh`, registers their own projects. Pa
 | `cw project register\|list\|info` | Manage projects |
 | `cw project setup-mcps <name>` | Configure MCPs |
 | `cw project setup-agents <name>` | Install agents |
+| `cw kanban` | Open vibe-kanban visual board |
+| `cw kanban:sync` | List active sessions and open vibe-kanban |
+| `cw gsd:init [path]` | Initialize GSD workflow in a worktree |
+| `cw gsd:sync` | Initialize GSD in all active worktrees |
 | `cw --skip-permissions <cmd>` | Skip permission prompts |
 | `cw version` | Show version |
 | `cw help` | Full help |
