@@ -1,0 +1,1513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CW STATION</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #07090e;
+  --surface: #0c1018;
+  --surface-2: #111825;
+  --surface-3: #162030;
+  --border: #1c2a40;
+  --border-hi: #2a4060;
+  --border-active: #3a5a80;
+
+  --text: #c8d6e5;
+  --text-dim: #5a7090;
+  --text-muted: #3a5070;
+
+  --cyan: #00d4ff;
+  --cyan-soft: #0090b0;
+  --cyan-bg: rgba(0,212,255,0.06);
+  --green: #00e676;
+  --green-soft: #009050;
+  --green-bg: rgba(0,230,118,0.06);
+  --amber: #ffb300;
+  --amber-soft: #b07800;
+  --amber-bg: rgba(255,179,0,0.06);
+  --magenta: #e040fb;
+  --magenta-soft: #9020a0;
+  --magenta-bg: rgba(224,64,251,0.06);
+  --red: #ff1744;
+  --red-soft: #a01030;
+  --red-bg: rgba(255,23,68,0.06);
+
+  --mono: 'IBM Plex Mono', 'Menlo', 'Consolas', monospace;
+  --sans: 'Space Grotesk', system-ui, sans-serif;
+
+  --radius: 6px;
+  --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+html { font-size: 14px; }
+body {
+  font-family: var(--mono);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Starfield ────────────────────────────────────── */
+#starfield {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  opacity: 0.35;
+}
+
+/* ── CRT (very subtle) ────────────────────────────── */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0px,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── Boot Screen ──────────────────────────────────── */
+#boot {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 16px;
+  transition: opacity 0.3s ease-out;
+}
+#boot.done { opacity: 0; pointer-events: none; }
+#boot-text {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--cyan);
+  white-space: pre;
+  line-height: 1.6;
+  text-shadow: 0 0 12px rgba(0,212,255,0.4);
+}
+#boot-bar {
+  width: 240px;
+  height: 3px;
+  background: var(--surface-2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+#boot-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--cyan);
+  box-shadow: 0 0 8px var(--cyan);
+  transition: width 0.08s linear;
+}
+
+/* ── Layout Shell ─────────────────────────────────── */
+#app {
+  position: relative;
+  z-index: 1;
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 0 20px 40px;
+  display: none;
+}
+
+/* ── Header ───────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 0 14px;
+  border-bottom: 1px solid var(--border);
+}
+.header-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.header-title {
+  font-family: var(--sans);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--cyan);
+  letter-spacing: -0.5px;
+  text-shadow: 0 0 20px rgba(0,212,255,0.25);
+}
+.header-version {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.header-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.header-clock {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.header-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green);
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ── Stats Row ────────────────────────────────────── */
+.stats-row {
+  display: flex;
+  gap: 1px;
+  margin: 14px 0;
+  background: var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.stat-card {
+  flex: 1;
+  background: var(--surface);
+  padding: 14px 16px;
+  position: relative;
+}
+.stat-card::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 2px;
+}
+.stat-card.c-cyan::after { background: var(--cyan); }
+.stat-card.c-amber::after { background: var(--amber); }
+.stat-card.c-magenta::after { background: var(--magenta); }
+.stat-card.c-green::after { background: var(--green); }
+.stat-value {
+  font-family: var(--sans);
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1;
+}
+.stat-card.c-cyan .stat-value { color: var(--cyan); }
+.stat-card.c-amber .stat-value { color: var(--amber); }
+.stat-card.c-magenta .stat-value { color: var(--magenta); }
+.stat-card.c-green .stat-value { color: var(--green); }
+.stat-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 6px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* ── Tab Navigation ───────────────────────────────── */
+.tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--bg);
+  padding-top: 4px;
+}
+.tab {
+  padding: 10px 18px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  border: none;
+  background: none;
+  border-bottom: 2px solid transparent;
+  transition: all var(--transition);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  white-space: nowrap;
+  position: relative;
+}
+.tab:hover {
+  color: var(--text-dim);
+  background: var(--surface);
+}
+.tab.active {
+  color: var(--cyan);
+  border-bottom-color: var(--cyan);
+}
+.tab .tab-count {
+  font-size: 9px;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-weight: 400;
+}
+.tab.active .tab-count {
+  background: rgba(0,212,255,0.12);
+  color: var(--cyan);
+}
+.tab-live-dot {
+  display: inline-block;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  margin-left: 6px;
+  animation: pulse 1.5s ease-in-out infinite;
+  vertical-align: middle;
+}
+
+/* ── Filter Bar ───────────────────────────────────── */
+.filter-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.filter-group {
+  display: flex;
+  gap: 0;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.filter-btn {
+  padding: 6px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: none;
+  cursor: pointer;
+  transition: all var(--transition);
+  white-space: nowrap;
+}
+.filter-btn:hover { background: var(--surface-2); color: var(--text); }
+.filter-btn.active {
+  background: var(--surface-3);
+  color: var(--cyan);
+}
+.filter-btn + .filter-btn { border-left: 1px solid var(--border); }
+
+.filter-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-right: 4px;
+}
+
+/* ── Tab Content ──────────────────────────────────── */
+.tab-content { display: none; }
+.tab-content.active { display: block; animation: fadeIn 0.2s ease-out; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* ── Session Cards ────────────────────────────────── */
+.session-group {
+  margin-bottom: 20px;
+}
+.session-group-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  margin-bottom: 6px;
+}
+.session-group-name {
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.session-group-account {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.session-group-count {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.session-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 6px;
+  transition: all var(--transition);
+  overflow: hidden;
+}
+.session-card:hover {
+  border-color: var(--border-hi);
+}
+.session-card.is-live {
+  border-color: var(--green-soft);
+  box-shadow: 0 0 0 1px rgba(0,230,118,0.08);
+}
+.session-card.expanded {
+  border-color: var(--border-active);
+}
+
+.session-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+.session-head:hover { background: var(--surface-2); }
+
+.session-type-badge {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  flex-shrink: 0;
+}
+.session-type-badge.task {
+  background: var(--amber-bg);
+  color: var(--amber);
+  border: 1px solid rgba(255,179,0,0.2);
+}
+.session-type-badge.review {
+  background: var(--magenta-bg);
+  color: var(--magenta);
+  border: 1px solid rgba(224,64,251,0.2);
+}
+
+.session-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-live-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--green);
+  flex-shrink: 0;
+  padding: 3px 8px;
+  background: var(--green-bg);
+  border-radius: 10px;
+}
+.session-live-indicator .dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.session-meta-inline {
+  display: flex;
+  gap: 14px;
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.session-meta-inline span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.session-chevron {
+  color: var(--text-muted);
+  font-size: 10px;
+  transition: transform var(--transition);
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+}
+.session-card.expanded .session-chevron {
+  transform: rotate(90deg);
+}
+
+/* ── Session Expanded Body ────────────────────────── */
+.session-body {
+  display: none;
+  border-top: 1px solid var(--border);
+  padding: 14px 16px;
+  background: var(--surface);
+}
+.session-card.expanded .session-body { display: block; }
+
+.session-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.session-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.session-detail-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.session-detail-value {
+  font-size: 13px;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.session-live-section {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin-top: 10px;
+}
+.session-live-title {
+  font-size: 10px;
+  color: var(--green);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.session-live-title .dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.session-activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.session-activity-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 4px 0;
+}
+.tool-icon {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  font-weight: 600;
+}
+.tool-icon.bash   { background: var(--amber-bg); color: var(--amber); border: 1px solid rgba(255,179,0,0.15); }
+.tool-icon.read   { background: var(--cyan-bg); color: var(--cyan); border: 1px solid rgba(0,212,255,0.15); }
+.tool-icon.edit   { background: var(--green-bg); color: var(--green); border: 1px solid rgba(0,230,118,0.15); }
+.tool-icon.write  { background: var(--green-bg); color: var(--green); border: 1px solid rgba(0,230,118,0.15); }
+.tool-icon.search { background: var(--cyan-bg); color: var(--cyan-soft); border: 1px solid rgba(0,212,255,0.1); }
+.tool-icon.agent  { background: var(--magenta-bg); color: var(--magenta); border: 1px solid rgba(224,64,251,0.15); }
+.tool-icon.stop   { background: var(--surface-3); color: var(--text-muted); border: 1px solid var(--border); }
+.tool-icon.session { background: var(--cyan-bg); color: var(--cyan); border: 1px solid rgba(0,212,255,0.15); }
+
+.activity-summary {
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-time {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Crew Cards ───────────────────────────────────── */
+.crew-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.crew-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  transition: border-color var(--transition);
+}
+.crew-card:hover { border-color: var(--border-hi); }
+.crew-avatar {
+  width: 48px; height: 48px;
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: 700;
+  flex-shrink: 0;
+  font-family: var(--sans);
+  text-transform: uppercase;
+}
+.crew-avatar.online {
+  background: var(--green-bg);
+  color: var(--green);
+  border: 1px solid rgba(0,230,118,0.2);
+}
+.crew-avatar.offline {
+  background: var(--red-bg);
+  color: var(--red-soft);
+  border: 1px solid rgba(255,23,68,0.15);
+}
+.crew-info { flex: 1; }
+.crew-name {
+  font-family: var(--sans);
+  font-size: 16px;
+  font-weight: 600;
+}
+.crew-status {
+  font-size: 11px;
+  margin-top: 4px;
+}
+.crew-status.online { color: var(--green); }
+.crew-status.offline { color: var(--red-soft); }
+.crew-detail {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 6px;
+}
+
+/* ── Sector Cards ─────────────────────────────────── */
+.sector-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+}
+.sector-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  transition: all var(--transition);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-left: 3px solid var(--border);
+}
+.sector-card:hover { border-color: var(--border-hi); }
+.sector-card[data-acct="monoku"] { border-left-color: var(--cyan); }
+.sector-card[data-acct="meridian"] { border-left-color: var(--magenta); }
+.sector-card[data-acct="work"] { border-left-color: var(--amber); }
+.sector-card[data-acct="personal"] { border-left-color: var(--green); }
+
+.sector-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+.sector-badges {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.badge {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.badge.md  { background: var(--green-bg); color: var(--green); border: 1px solid rgba(0,230,118,0.15); }
+.badge.ag  { background: var(--cyan-bg); color: var(--cyan-soft); border: 1px solid rgba(0,212,255,0.1); }
+.badge.cm  { background: var(--cyan-bg); color: var(--cyan-soft); border: 1px solid rgba(0,212,255,0.1); }
+.badge.mcp { background: var(--amber-bg); color: var(--amber-soft); border: 1px solid rgba(255,179,0,0.1); }
+.badge.git { background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
+.sector-account {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ── Live Feed ────────────────────────────────────── */
+.feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.feed-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  font-size: 12px;
+  animation: feedSlide 0.25s ease-out;
+  border: 1px solid transparent;
+  transition: border-color var(--transition);
+}
+.feed-item:hover { border-color: var(--border); }
+.feed-item.fresh {
+  background: var(--green-bg);
+  border-color: rgba(0,230,118,0.1);
+}
+@keyframes feedSlide {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+.feed-time {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 40px;
+  flex-shrink: 0;
+}
+.feed-project {
+  color: var(--cyan);
+  font-size: 11px;
+  font-weight: 500;
+  min-width: 80px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.feed-task {
+  color: var(--amber);
+  font-size: 11px;
+  min-width: 60px;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.feed-desc {
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.75;
+}
+
+/* ── Log Entries ──────────────────────────────────── */
+.log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.log-item {
+  display: flex;
+  gap: 12px;
+  padding: 8px 12px;
+  font-size: 12px;
+  background: var(--surface);
+  border-radius: 2px;
+  align-items: baseline;
+}
+.log-time {
+  color: var(--text-muted);
+  font-size: 10px;
+  min-width: 44px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.log-action {
+  font-weight: 600;
+  min-width: 56px;
+  font-size: 11px;
+}
+.log-action.WORK   { color: var(--amber); }
+.log-action.REVIEW { color: var(--magenta); }
+.log-action.DONE   { color: var(--green); }
+.log-action.OPEN   { color: var(--cyan); }
+.log-detail { color: var(--text); opacity: 0.75; }
+
+/* ── Empty State ──────────────────────────────────── */
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.8;
+}
+.empty-state code {
+  background: var(--surface-2);
+  color: var(--cyan);
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+/* ── Refresh Flash ────────────────────────────────── */
+.refresh-bar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  z-index: 10000;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.refresh-bar.on {
+  opacity: 1;
+  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+  animation: scanX 0.6s ease-out;
+}
+@keyframes scanX {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%); }
+}
+
+/* ── Scrollbar ────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-hi); }
+
+/* ── Responsive ───────────────────────────────────── */
+@media (max-width: 768px) {
+  .stats-row { flex-wrap: wrap; }
+  .stat-card { min-width: calc(50% - 1px); }
+  .session-meta-inline { display: none; }
+  .tabs { overflow-x: auto; }
+  .filter-bar { gap: 4px; }
+}
+</style>
+</head>
+<body>
+
+<div class="refresh-bar" id="refresh-bar"></div>
+<canvas id="starfield"></canvas>
+
+<!-- ── Boot ── -->
+<div id="boot">
+  <pre id="boot-text"></pre>
+  <div id="boot-bar"><div id="boot-bar-fill"></div></div>
+</div>
+
+<!-- ── App ── -->
+<div id="app">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-brand">
+      <span class="header-title">CW STATION</span>
+      <span class="header-version">v0.1.0</span>
+    </div>
+    <div class="header-right">
+      <div class="header-dot"></div>
+      <span class="header-clock" id="clock">00:00:00</span>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-row" id="stats-row"></div>
+
+  <!-- Tabs -->
+  <div class="tabs" id="tabs">
+    <button class="tab active" data-tab="sessions">Sessions <span class="tab-count" id="tc-sessions">0</span></button>
+    <button class="tab" data-tab="crew">Crew <span class="tab-count" id="tc-crew">0</span></button>
+    <button class="tab" data-tab="sectors">Sectors <span class="tab-count" id="tc-sectors">0</span></button>
+    <button class="tab" data-tab="feed">Live Feed <span class="tab-live-dot" id="feed-dot" style="display:none"></span></button>
+    <button class="tab" data-tab="log">Log</button>
+  </div>
+
+  <!-- Filter Bar -->
+  <div class="filter-bar" id="filter-bar"></div>
+
+  <!-- Sessions -->
+  <div class="tab-content active" id="panel-sessions"></div>
+
+  <!-- Crew -->
+  <div class="tab-content" id="panel-crew"></div>
+
+  <!-- Sectors -->
+  <div class="tab-content" id="panel-sectors"></div>
+
+  <!-- Live Feed -->
+  <div class="tab-content" id="panel-feed"></div>
+
+  <!-- Log -->
+  <div class="tab-content" id="panel-log"></div>
+
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   CW STATION — Engine
+   ═══════════════════════════════════════════════════════════════ */
+
+// ── State ────────────────────────────────────────────────
+let cwData = null;
+let activityData = { events: [], live: [] };
+let lastActivityTs = 0;
+let feedEntries = [];
+let currentTab = 'sessions';
+let filters = { account: 'all', type: 'all' };
+const MAX_FEED = 120;
+
+// ── Starfield ────────────────────────────────────────────
+function initStarfield() {
+  const c = document.getElementById('starfield');
+  const ctx = c.getContext('2d');
+  let w, h, stars = [];
+  function resize() { w = c.width = innerWidth; h = c.height = innerHeight; }
+  function make() {
+    stars = Array.from({ length: 80 }, () => ({
+      x: Math.random() * w, y: Math.random() * h,
+      s: Math.random() * 1.2 + 0.3, sp: Math.random() * 0.15 + 0.02,
+      o: Math.random() * 0.4 + 0.1, t: Math.random() * Math.PI * 2
+    }));
+  }
+  function draw() {
+    ctx.clearRect(0, 0, w, h);
+    stars.forEach(s => {
+      s.t += 0.015;
+      const a = s.o * (0.6 + 0.4 * Math.sin(s.t));
+      ctx.fillStyle = `rgba(180,200,220,${a})`;
+      ctx.fillRect(s.x | 0, s.y | 0, Math.ceil(s.s), Math.ceil(s.s));
+      s.y += s.sp;
+      if (s.y > h) { s.y = 0; s.x = Math.random() * w; }
+    });
+    requestAnimationFrame(draw);
+  }
+  resize(); make(); draw();
+  addEventListener('resize', () => { resize(); make(); });
+}
+
+// ── Boot ─────────────────────────────────────────────────
+const BOOT_LINES = [
+  'CW STATION v0.1.0',
+  'SYSTEMS CHECK.......... OK',
+  'LAUNCHING COMMAND CENTER',
+];
+
+async function boot() {
+  const txt = document.getElementById('boot-text');
+  const bar = document.getElementById('boot-bar-fill');
+  const el = document.getElementById('boot');
+  let progress = 0;
+  for (const line of BOOT_LINES) {
+    for (const ch of line) {
+      txt.textContent += ch;
+      progress += 100 / (BOOT_LINES.join('').length);
+      bar.style.width = Math.min(progress, 100) + '%';
+      await sleep(4);
+    }
+    txt.textContent += '\n';
+    await sleep(30);
+  }
+  bar.style.width = '100%';
+  await sleep(120);
+  el.classList.add('done');
+  document.getElementById('app').style.display = 'block';
+  await sleep(300);
+  el.remove();
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── Clock ────────────────────────────────────────────────
+function tickClock() {
+  const n = new Date();
+  document.getElementById('clock').textContent =
+    [n.getHours(), n.getMinutes(), n.getSeconds()].map(v => String(v).padStart(2,'0')).join(':');
+}
+
+// ── Beep ─────────────────────────────────────────────────
+function beep(freq=660, dur=40, vol=0.025) {
+  try {
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ac.createOscillator();
+    const g = ac.createGain();
+    o.type = 'square'; o.frequency.value = freq; g.gain.value = vol;
+    o.connect(g); g.connect(ac.destination);
+    o.start(); o.stop(ac.currentTime + dur / 1000);
+  } catch(e) {}
+}
+
+// ── Tabs ─────────────────────────────────────────────────
+function initTabs() {
+  document.querySelectorAll('.tab').forEach(t => {
+    t.addEventListener('click', () => {
+      const id = t.dataset.tab;
+      if (id === currentTab) return;
+      currentTab = id;
+      sessionsFingerprint = '';
+      document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
+      document.querySelectorAll('.tab-content').forEach(p => p.classList.toggle('active', p.id === 'panel-' + id));
+      buildFilters();
+      renderCurrentTab();
+    });
+  });
+}
+
+// ── Filters ──────────────────────────────────────────────
+function buildFilters() {
+  const bar = document.getElementById('filter-bar');
+  if (!cwData) { bar.innerHTML = ''; return; }
+
+  // Accounts
+  const accounts = cwData.accounts.map(a => a.name);
+  // Types
+  const showTypeFilter = ['sessions', 'feed'].includes(currentTab);
+
+  let html = '<span class="filter-label">Account</span><div class="filter-group">';
+  html += `<button class="filter-btn ${filters.account === 'all' ? 'active' : ''}" data-filter="account" data-val="all">All</button>`;
+  accounts.forEach(a => {
+    html += `<button class="filter-btn ${filters.account === a ? 'active' : ''}" data-filter="account" data-val="${a}">${a}</button>`;
+  });
+  html += '</div>';
+
+  if (showTypeFilter) {
+    html += '<span class="filter-label" style="margin-left:12px">Type</span><div class="filter-group">';
+    html += `<button class="filter-btn ${filters.type === 'all' ? 'active' : ''}" data-filter="type" data-val="all">All</button>`;
+    html += `<button class="filter-btn ${filters.type === 'task' ? 'active' : ''}" data-filter="type" data-val="task">Tasks</button>`;
+    html += `<button class="filter-btn ${filters.type === 'review' ? 'active' : ''}" data-filter="type" data-val="review">Reviews</button>`;
+    html += '</div>';
+  }
+
+  bar.innerHTML = html;
+  bar.querySelectorAll('.filter-btn').forEach(b => {
+    b.addEventListener('click', () => {
+      filters[b.dataset.filter] = b.dataset.val;
+      buildFilters();
+      renderCurrentTab();
+    });
+  });
+}
+
+// ── Helpers ──────────────────────────────────────────────
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function relTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  const now = Date.now();
+  const diff = now - d.getTime();
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return Math.floor(diff/60000) + 'm ago';
+  if (diff < 86400000) return Math.floor(diff/3600000) + 'h ago';
+  return d.toLocaleDateString();
+}
+function shortDate(iso) { return iso ? iso.slice(0,10) : '—'; }
+
+// ── Tool Icons ───────────────────────────────────────────
+const TOOLS = {
+  Bash:     { label: '$', cls: 'bash' },
+  Read:     { label: 'R', cls: 'read' },
+  Edit:     { label: 'E', cls: 'edit' },
+  Write:    { label: 'W', cls: 'write' },
+  Glob:     { label: '*', cls: 'search' },
+  Grep:     { label: '?', cls: 'search' },
+  Agent:    { label: 'A', cls: 'agent' },
+  WebFetch: { label: 'F', cls: 'search' },
+  WebSearch:{ label: 'S', cls: 'search' },
+};
+function toolInfo(tool, event) {
+  if (TOOLS[tool]) return TOOLS[tool];
+  if (event?.startsWith('Subagent')) return { label: 'A', cls: 'agent' };
+  if (event?.startsWith('Session')) return { label: '\u25CF', cls: 'session' };
+  if (event === 'Stop') return { label: '\u25A0', cls: 'stop' };
+  return { label: '\u00B7', cls: 'stop' };
+}
+
+// ── Render: Stats ────────────────────────────────────────
+function renderStats(stats) {
+  document.getElementById('stats-row').innerHTML = `
+    <div class="stat-card c-cyan">
+      <div class="stat-value">${stats.active_sessions||0}</div>
+      <div class="stat-label">Active</div>
+    </div>
+    <div class="stat-card c-amber">
+      <div class="stat-value">${stats.active_tasks||0}</div>
+      <div class="stat-label">Tasks</div>
+    </div>
+    <div class="stat-card c-magenta">
+      <div class="stat-value">${stats.active_reviews||0}</div>
+      <div class="stat-label">Reviews</div>
+    </div>
+    <div class="stat-card c-green">
+      <div class="stat-value">${stats.total_projects||0}</div>
+      <div class="stat-label">Sectors</div>
+    </div>`;
+}
+
+// ── Render: Sessions ─────────────────────────────────────
+const expandedSessions = new Set();
+
+let sessionsFingerprint = '';
+
+function renderSessions(forceRebuild) {
+  const el = document.getElementById('panel-sessions');
+  const active = cwData.sessions.filter(s => s.status === 'active');
+  const filtered = active.filter(s => {
+    if (filters.account !== 'all' && s.account !== filters.account) return false;
+    if (filters.type !== 'all' && s.type !== filters.type) return false;
+    return true;
+  });
+
+  document.getElementById('tc-sessions').textContent = filtered.length;
+
+  if (!filtered.length) {
+    sessionsFingerprint = '';
+    el.innerHTML = '<div class="empty-state">No active sessions.<br>Start one with <code>cw work &lt;project&gt; &lt;task&gt;</code></div>';
+    return;
+  }
+
+  // Build fingerprint to detect structural changes (new/removed sessions, filter changes)
+  const fp = filters.account + ':' + filters.type + '|' + filtered.map(s => s.project + '/' + (s.task || s.pr || '') + ':' + s.status + ':' + (s.opens||0)).sort().join('|');
+  const structureChanged = fp !== sessionsFingerprint || forceRebuild;
+
+  if (!structureChanged) {
+    // Just update live indicators and activity in-place
+    el.querySelectorAll('.session-card').forEach(card => {
+      const proj = card.dataset.project;
+      const taskKey = card.dataset.task;
+      const liveInfo = activityData.live.find(l => l.project === proj && l.task === taskKey);
+      const isLive = !!liveInfo;
+
+      card.classList.toggle('is-live', isLive);
+
+      // Update live indicator in header
+      let indicator = card.querySelector('.session-live-indicator');
+      if (isLive && !indicator) {
+        const chevron = card.querySelector('.session-chevron');
+        const span = document.createElement('span');
+        span.className = 'session-live-indicator';
+        span.innerHTML = '<span class="dot"></span>LIVE';
+        chevron.parentElement.insertBefore(span, card.querySelector('.session-meta-inline'));
+      } else if (!isLive && indicator) {
+        indicator.remove();
+      }
+
+      // Update session body live section
+      const body = card.querySelector('.session-body');
+      if (body && card.classList.contains('expanded')) {
+        const liveSection = body.querySelector('.session-live-section');
+        const noActivity = body.querySelector('[style*="No live activity"]');
+        if (isLive) {
+          const newLiveHtml = renderSessionLive(liveInfo, proj, taskKey);
+          if (liveSection) {
+            liveSection.outerHTML = newLiveHtml;
+          } else if (noActivity) {
+            noActivity.outerHTML = newLiveHtml;
+          }
+        } else {
+          if (liveSection) {
+            liveSection.outerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:6px 0">No live activity right now</div>';
+          }
+        }
+      }
+    });
+    return;
+  }
+
+  sessionsFingerprint = fp;
+
+  // Group by project
+  const groups = {};
+  filtered.forEach(s => {
+    const key = s.project || 'unknown';
+    if (!groups[key]) groups[key] = { account: s.account, sessions: [] };
+    groups[key].sessions.push(s);
+  });
+
+  // Sort groups, then sessions by last_opened desc
+  let html = '';
+  for (const [proj, g] of Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]))) {
+    g.sessions.sort((a, b) => (b.last_opened || '').localeCompare(a.last_opened || ''));
+    html += `<div class="session-group">
+      <div class="session-group-header">
+        <span class="session-group-name">${esc(proj)}</span>
+        <span class="session-group-account">${esc(g.account)}</span>
+        <span class="session-group-count">${g.sessions.length} session${g.sessions.length > 1 ? 's' : ''}</span>
+      </div>`;
+
+    for (const s of g.sessions) {
+      const isTask = s.type === 'task';
+      const name = isTask ? (s.task || '?') : `PR #${s.pr || '?'}`;
+      const taskKey = isTask ? (s.task || '') : ('pr-' + (s.pr || ''));
+      const liveInfo = activityData.live.find(l => l.project === s.project && l.task === taskKey);
+      const isLive = !!liveInfo;
+      const isExpanded = expandedSessions.has(s.project + '/' + taskKey);
+
+      html += `<div class="session-card ${isLive ? 'is-live' : ''} ${isExpanded ? 'expanded' : ''}" data-project="${esc(s.project)}" data-task="${esc(taskKey)}">
+        <div class="session-head" onclick="toggleSession(this)">
+          <span class="session-type-badge ${s.type}">${s.type}</span>
+          <span class="session-name">${esc(name)}</span>
+          ${isLive ? `<span class="session-live-indicator"><span class="dot"></span>LIVE</span>` : ''}
+          <span class="session-meta-inline">
+            <span>${s.opens || 0}x</span>
+            <span>${relTime(s.last_opened)}</span>
+          </span>
+          <span class="session-chevron">\u25B8</span>
+        </div>
+        <div class="session-body">
+          <div class="session-detail-grid">
+            <div class="session-detail-item"><div class="session-detail-label">Created</div><div class="session-detail-value">${shortDate(s.created)}</div></div>
+            <div class="session-detail-item"><div class="session-detail-label">Last Opened</div><div class="session-detail-value">${relTime(s.last_opened)}</div></div>
+            <div class="session-detail-item"><div class="session-detail-label">Opens</div><div class="session-detail-value">${s.opens || 0}</div></div>
+            <div class="session-detail-item"><div class="session-detail-label">Account</div><div class="session-detail-value">${esc(s.account || '')}</div></div>
+            ${s.source ? `<div class="session-detail-item"><div class="session-detail-label">Source</div><div class="session-detail-value">${esc(s.source)}</div></div>` : ''}
+            ${s.source_url ? `<div class="session-detail-item"><div class="session-detail-label">URL</div><div class="session-detail-value" style="font-size:11px">${esc(s.source_url)}</div></div>` : ''}
+          </div>
+          ${isLive ? renderSessionLive(liveInfo, s.project, taskKey) : '<div style="font-size:12px;color:var(--text-muted);padding:6px 0">No live activity right now</div>'}
+        </div>
+      </div>`;
+    }
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
+
+function renderSessionLive(liveInfo, project, taskKey) {
+  // Get recent events for this session
+  const recent = activityData.events
+    .filter(e => e.project === project && e.task === taskKey)
+    .slice(-8)
+    .reverse();
+
+  let items = '';
+  for (const e of recent) {
+    const ti = toolInfo(e.tool, e.event);
+    const ts = new Date(e.ts * 1000);
+    const t = ts.toTimeString().slice(0, 8);
+    items += `<div class="session-activity-entry">
+      <span class="tool-icon ${ti.cls}">${ti.label}</span>
+      <span class="activity-summary">${e.tool ? esc(e.tool) + ' ' : ''}${esc(e.summary || e.event || '')}</span>
+      <span class="activity-time">${t}</span>
+    </div>`;
+  }
+
+  return `<div class="session-live-section">
+    <div class="session-live-title"><span class="dot"></span> Live Activity</div>
+    ${liveInfo.tool ? `<div style="font-size:12px;margin-bottom:8px;color:var(--text)">Currently: <strong style="color:var(--amber)">${esc(liveInfo.tool)}</strong> <span style="color:var(--text-dim)">${esc(liveInfo.summary || '')}</span></div>` : ''}
+    <div class="session-activity-list">${items || '<div style="color:var(--text-muted);font-size:11px">Waiting for events...</div>'}</div>
+  </div>`;
+}
+
+function toggleSession(head) {
+  const card = head.parentElement;
+  const key = card.dataset.project + '/' + card.dataset.task;
+  card.classList.toggle('expanded');
+  if (card.classList.contains('expanded')) {
+    expandedSessions.add(key);
+  } else {
+    expandedSessions.delete(key);
+  }
+}
+
+// ── Render: Crew ─────────────────────────────────────────
+function renderCrew() {
+  const el = document.getElementById('panel-crew');
+  const accounts = cwData.accounts;
+  document.getElementById('tc-crew').textContent = accounts.length;
+
+  if (!accounts.length) {
+    el.innerHTML = '<div class="empty-state">No accounts configured.<br>Run <code>cw account add &lt;name&gt;</code></div>';
+    return;
+  }
+
+  // Count projects per account
+  const projCount = {};
+  cwData.projects.forEach(p => { projCount[p.account] = (projCount[p.account] || 0) + 1; });
+  const sessCount = {};
+  cwData.sessions.filter(s => s.status === 'active').forEach(s => { sessCount[s.account] = (sessCount[s.account] || 0) + 1; });
+
+  el.innerHTML = '<div class="crew-grid">' + accounts.map(a => {
+    const status = a.authenticated ? 'online' : 'offline';
+    return `<div class="crew-card">
+      <div class="crew-avatar ${status}">${a.name.charAt(0)}</div>
+      <div>
+        <div class="crew-name">${esc(a.name)}</div>
+        <div class="crew-status ${status}">${a.authenticated ? 'Authenticated' : 'Not authenticated'}</div>
+        <div class="crew-detail">${projCount[a.name] || 0} projects \u00B7 ${sessCount[a.name] || 0} active sessions</div>
+      </div>
+    </div>`;
+  }).join('') + '</div>';
+}
+
+// ── Render: Sectors ──────────────────────────────────────
+function renderSectors() {
+  const el = document.getElementById('panel-sectors');
+  let projects = cwData.projects;
+  if (filters.account !== 'all') projects = projects.filter(p => p.account === filters.account);
+  document.getElementById('tc-sectors').textContent = projects.length;
+
+  if (!projects.length) {
+    el.innerHTML = '<div class="empty-state">No sectors mapped.<br>Register with <code>cw project add &lt;name&gt;</code></div>';
+    return;
+  }
+
+  projects.sort((a, b) => a.name.localeCompare(b.name));
+
+  el.innerHTML = '<div class="sector-grid">' + projects.map(p => {
+    let badges = '';
+    if (p.has_claude_md) badges += '<span class="badge md">MD</span>';
+    if (p.agents > 0) badges += `<span class="badge ag">${p.agents} AG</span>`;
+    if (p.commands > 0) badges += `<span class="badge cm">${p.commands} CM</span>`;
+    if (p.has_mcp) badges += '<span class="badge mcp">MCP</span>';
+    if (p.git) badges += '<span class="badge git">GIT</span>';
+
+    return `<div class="sector-card" data-acct="${esc(p.account)}">
+      <div class="sector-name">${esc(p.name)}</div>
+      <div class="sector-account">${esc(p.account)}</div>
+      <div class="sector-badges">${badges}</div>
+    </div>`;
+  }).join('') + '</div>';
+}
+
+// ── Render: Live Feed ────────────────────────────────────
+function renderFeed(newEvents) {
+  const el = document.getElementById('panel-feed');
+
+  if (newEvents && newEvents.length) {
+    // Apply filters
+    const filtered = newEvents.filter(e => {
+      if (filters.account !== 'all' && e.account !== filters.account) return false;
+      if (filters.type !== 'all' && e.type !== filters.type) return false;
+      return true;
+    });
+    feedEntries = [...filtered.reverse(), ...feedEntries].slice(0, MAX_FEED);
+    document.getElementById('feed-dot').style.display = '';
+  }
+
+  if (!feedEntries.length) {
+    el.innerHTML = `<div class="empty-state">No live signals detected.<br>Run <code>cw arcade --setup</code> to install activity hooks,<br>then open a CW session to see live events here.</div>`;
+    return;
+  }
+
+  el.innerHTML = '<div class="feed-list">' + feedEntries.map((e, i) => {
+    const ti = toolInfo(e.tool, e.event);
+    const ts = new Date(e.ts * 1000);
+    const t = ts.toTimeString().slice(0, 5);
+    return `<div class="feed-item ${i < (newEvents?.length||0) ? 'fresh' : ''}">
+      <span class="feed-time">${t}</span>
+      <span class="tool-icon ${ti.cls}" style="width:20px;height:20px;font-size:10px">${ti.label}</span>
+      <span class="feed-project">${esc(e.project || '')}</span>
+      <span class="feed-task">${esc(e.task || '')}</span>
+      <span class="feed-desc">${e.tool ? esc(e.tool) + ' ' : ''}${esc(e.summary || e.event || '')}</span>
+    </div>`;
+  }).join('') + '</div>';
+
+  // Remove fresh class after animation
+  setTimeout(() => el.querySelectorAll('.fresh').forEach(e => e.classList.remove('fresh')), 800);
+}
+
+// ── Render: Log ──────────────────────────────────────────
+function renderLog() {
+  const el = document.getElementById('panel-log');
+  const log = cwData.recent_log || [];
+
+  if (!log.length) {
+    el.innerHTML = '<div class="empty-state">No transmissions recorded yet.</div>';
+    return;
+  }
+
+  const entries = log.slice().reverse().map(line => {
+    const parts = line.split(' ');
+    const time = (parts[0] || '').slice(11, 16) || parts[0]?.slice(0, 10) || '';
+    const action = parts[1] || '';
+    const rest = parts.slice(2).join(' ');
+    return { time, action, rest };
+  });
+
+  el.innerHTML = '<div class="log-list">' + entries.map(e =>
+    `<div class="log-item">
+      <span class="log-time">${esc(e.time)}</span>
+      <span class="log-action ${e.action}">${esc(e.action)}</span>
+      <span class="log-detail">${esc(e.rest)}</span>
+    </div>`
+  ).join('') + '</div>';
+}
+
+// ── Render Current Tab ───────────────────────────────────
+function renderCurrentTab() {
+  switch (currentTab) {
+    case 'sessions': renderSessions(); break;
+    case 'crew': renderCrew(); break;
+    case 'sectors': renderSectors(); break;
+    case 'feed': renderFeed(); break;
+    case 'log': renderLog(); break;
+  }
+}
+
+// ── Data Fetching ────────────────────────────────────────
+async function fetchData() {
+  try {
+    const r = await fetch('/api/data');
+    if (!r.ok) return;
+    cwData = await r.json();
+    renderStats(cwData.stats);
+    buildFilters();
+    renderCurrentTab();
+    flashRefresh();
+  } catch (e) {}
+}
+
+async function fetchActivity() {
+  try {
+    const r = await fetch(`/api/activity?after=${lastActivityTs}&limit=60`);
+    if (!r.ok) return;
+    const data = await r.json();
+    activityData = data;
+    if (data.events.length) {
+      lastActivityTs = data.events[data.events.length - 1].ts;
+      if (currentTab === 'feed') renderFeed(data.events);
+      if (currentTab === 'sessions') renderSessions();
+    }
+  } catch (e) {}
+}
+
+// ── SSE: Real-time activity stream ──────────────────────
+function initSSE() {
+  const es = new EventSource('/api/stream');
+  es.onmessage = (msg) => {
+    try {
+      const entry = JSON.parse(msg.data);
+
+      // Add to activityData.events (keep last 200)
+      activityData.events.push(entry);
+      if (activityData.events.length > 200) activityData.events.shift();
+
+      // Update lastActivityTs
+      if (entry.ts > lastActivityTs) lastActivityTs = entry.ts;
+
+      // Update live sessions (30s window)
+      const now = Date.now() / 1000;
+      const key = (entry.project || '') + '/' + (entry.task || '');
+      const liveEntry = {
+        project: entry.project || '',
+        task: entry.task || '',
+        type: entry.type || '',
+        account: entry.account || '',
+        session: entry.session || '',
+        event: entry.event || '',
+        tool: entry.tool || '',
+        summary: entry.summary || '',
+        ts: entry.ts,
+        age: Math.round((now - entry.ts) * 10) / 10,
+      };
+      const idx = activityData.live.findIndex(l => (l.project + '/' + l.task) === key);
+      if (idx >= 0) activityData.live[idx] = liveEntry;
+      else activityData.live.push(liveEntry);
+
+      // Expire old live entries
+      activityData.live = activityData.live.filter(l => (now - l.ts) < 30);
+
+      // Add to feed
+      feedEntries.unshift(entry);
+      if (feedEntries.length > MAX_FEED) feedEntries.pop();
+
+      // Update UI
+      if (currentTab === 'sessions') renderSessions();
+      if (currentTab === 'feed') renderFeed();
+      beep(660, 25, 0.015);
+    } catch (e) {}
+  };
+  es.onerror = () => {
+    // Auto-reconnects after a few seconds (built into EventSource)
+  };
+  return es;
+}
+
+function flashRefresh() {
+  const el = document.getElementById('refresh-bar');
+  el.classList.add('on');
+  setTimeout(() => el.classList.remove('on'), 600);
+}
+
+// ── Safety: force show app if boot hangs ─────────────────
+setTimeout(() => {
+  const b = document.getElementById('boot');
+  if (b) { b.classList.add('done'); setTimeout(() => b.remove(), 400); }
+  document.getElementById('app').style.display = 'block';
+}, 2000);
+
+// ── Init ─────────────────────────────────────────────────
+async function init() {
+  try {
+    initStarfield();
+  } catch(e) { console.error('starfield:', e); }
+
+  tickClock();
+  setInterval(tickClock, 1000);
+  initTabs();
+
+  try {
+    await boot();
+    beep(880, 60); setTimeout(() => beep(1320, 80), 80);
+  } catch(e) {
+    console.error('boot:', e);
+    const b = document.getElementById('boot');
+    if (b) b.remove();
+    document.getElementById('app').style.display = 'block';
+  }
+
+  try {
+    await fetchData();
+    await fetchActivity();
+    if (feedEntries.length === 0 && activityData.events.length) {
+      feedEntries = activityData.events.slice().reverse().slice(0, MAX_FEED);
+    }
+    renderCurrentTab();
+  } catch(e) { console.error('data:', e); }
+
+  setInterval(fetchData, 5000);
+  initSSE();
+}
+
+init().catch(e => {
+  console.error('init failed:', e);
+  const b = document.getElementById('boot');
+  if (b) b.remove();
+  document.getElementById('app').style.display = 'block';
+});
+</script>
+</body>
+</html>

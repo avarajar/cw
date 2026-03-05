@@ -157,6 +157,16 @@ cmd_account() {
             [[ -d "$dir" ]] && { _warn "Account '$name' already exists."; return 1; }
             mkdir -p "$dir"
             echo "{\"name\":\"$name\",\"created\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > "$dir/meta.json"
+
+            # Auto-install arcade hooks if setup was done
+            if [[ -f "$CW_HOME/.arcade-hook" ]]; then
+                local hook_script; hook_script=$(cat "$CW_HOME/.arcade-hook")
+                if [[ -f "$hook_script" ]]; then
+                    _arcade_install_hooks_for "$dir/settings.json" "$hook_script"
+                    _log "  Activity hooks auto-installed."
+                fi
+            fi
+
             _log "Account ${C}$name${NC} created. Authenticate:"
             echo -e "\n  ${BOLD}CLAUDE_CONFIG_DIR=$dir claude /login${NC}\n"
             ;;
@@ -635,6 +645,7 @@ with open('$session_meta', 'w') as f:
 
         local prompt_file="$session_dir/recheck_prompt.txt"
         printf '%s' "$recheck_prompt" > "$prompt_file"
+        CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account" \
         CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --continue "$(cat "$prompt_file")"
     else
         # Build review prompt: project skill > global skill > default
@@ -709,6 +720,7 @@ End with: APPROVE | REQUEST CHANGES | NEEDS DISCUSSION."
 
         local prompt_file="$session_dir/init_prompt.txt"
         printf '%s' "$review_prompt" > "$prompt_file"
+        CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account" \
         CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "$(cat "$prompt_file")"
     fi
 
@@ -902,6 +914,8 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
     cd "$open_dir"
     _set_tab_title "$task - $name"
 
+    export CW_PROJECT="$name" CW_TASK="$task" CW_TASK_TYPE="task" CW_ACCOUNT="$account"
+
     if $is_new && [[ -n "$init_prompt" ]]; then
         local prompt_file="$session_dir/init_prompt.txt"
         printf '%s' "$init_prompt" > "$prompt_file"
@@ -912,6 +926,7 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
         CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS
     fi
 
+    unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) WORK $name task=$task account=$account" >> "$CW_SESSIONS_LOG"
 }
 
@@ -1070,6 +1085,104 @@ cmd_status() {
         fi
     fi
     echo ""
+}
+
+cmd_arcade() {
+    local setup_flag=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --setup) setup_flag=true; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    local dashboard_dir="$SCRIPT_DIR/lib/dashboard"
+    if [[ ! -f "$dashboard_dir/server.py" ]]; then
+        dashboard_dir="$CW_HOME/lib/dashboard"
+    fi
+    if [[ ! -f "$dashboard_dir/server.py" ]]; then
+        _err "Dashboard not found. Run: cw init"
+        return 1
+    fi
+
+    if $setup_flag; then
+        _arcade_setup_hooks "$dashboard_dir"
+        return
+    fi
+
+    python3 "$dashboard_dir/server.py"
+}
+
+_arcade_install_hooks_for() {
+    local settings="$1" hook_script="$2"
+    python3 - "$settings" "$hook_script" << 'PYEOF'
+import json, sys, os
+
+settings_path = sys.argv[1]
+hook_script = sys.argv[2]
+
+try:
+    with open(settings_path) as f:
+        settings = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    settings = {}
+
+hook_cmd = f"python3 {hook_script}"
+hook_handler = {"type": "command", "command": hook_cmd, "timeout": 3000}
+
+# Events that support matcher vs those that don't
+matcher_events = ["PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop"]
+no_matcher_events = ["Stop", "SessionStart", "SessionEnd"]
+
+if "hooks" not in settings:
+    settings["hooks"] = {}
+
+for event in matcher_events + no_matcher_events:
+    entry = {"hooks": [hook_handler]}
+    if event in matcher_events:
+        entry["matcher"] = ""
+
+    if event not in settings["hooks"]:
+        settings["hooks"][event] = []
+    existing = settings["hooks"][event]
+    already = any(
+        hook_cmd in h.get("command", "")
+        or any(hook_cmd in sub.get("command", "") for sub in h.get("hooks", []) if isinstance(sub, dict))
+        for h in existing if isinstance(h, dict)
+    )
+    if not already:
+        settings["hooks"][event].append(entry)
+
+os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+with open(settings_path, "w") as f:
+    json.dump(settings, f, indent=2)
+PYEOF
+}
+
+_arcade_setup_hooks() {
+    local dashboard_dir="$1"
+    local hook_script="$dashboard_dir/activity-hook.py"
+
+    if [[ ! -f "$hook_script" ]]; then
+        _err "activity-hook.py not found at $dashboard_dir"
+        return 1
+    fi
+
+    _log "Setting up live activity hooks..."
+
+    for acct_dir in "$CW_ACCOUNTS_DIR"/*/; do
+        [[ -d "$acct_dir" ]] || continue
+        local acct; acct=$(basename "$acct_dir")
+        _arcade_install_hooks_for "$acct_dir/settings.json" "$hook_script"
+        _log "  ${C}$acct${NC} — hooks installed"
+    done
+
+    # Save marker so new accounts auto-install hooks
+    echo "$hook_script" > "$CW_HOME/.arcade-hook"
+
+    _log "${G}Done!${NC} Activity hooks are now active for all accounts."
+    _log "New accounts will auto-install hooks."
+    _log "Run ${C}cw arcade${NC} to see live activity."
 }
 
 cmd_dashboard() {
@@ -1592,6 +1705,7 @@ ${BOLD}EXAMPLES${NC}
   cw spaces                                         # All active spaces
   cw open daycast                                   # Quick open (no worktree)
   cw dashboard                                      # Full overview
+  cw arcade                                         # Retro visual dashboard
 
 ${BOLD}INTEGRATIONS${NC}
   cw gsd:init [path]                Initialize GSD workflow in a worktree
@@ -1635,6 +1749,7 @@ main() {
         spaces)     cmd_spaces "$@" ;;
         launch)     cmd_launch "$@" ;;
         dashboard)  cmd_dashboard "$@" ;;
+        arcade)     cmd_arcade "$@" ;;
         status)     cmd_status "$@" ;;
         gsd|gsd:init|gsd:sync) cmd_gsd "${cmd#gsd:}" "$@" ;;
         help|-h|--help) cmd_help ;;

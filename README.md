@@ -95,6 +95,17 @@ cw spaces               # list all active tasks and reviews
 cw dashboard            # full workspace overview
 ```
 
+### Arcade (Live Dashboard)
+
+```bash
+cw arcade --setup       # install activity hooks (once)
+cw arcade               # launch live dashboard in browser
+```
+
+Real-time visual dashboard that shows all your Claude Code sessions, tool usage, and agent activity across accounts. Uses Server-Sent Events to stream activity as it happens — no polling.
+
+The `--setup` command installs Claude Code hooks in all your accounts. New accounts created with `cw account add` auto-inherit the hooks.
+
 ## Multi-Account Routing
 
 Each project maps to a Claude account. CW handles the rest.
@@ -287,6 +298,8 @@ Bundled in this repo and installed automatically by `install.sh`:
 | `cw open <project>` | Quick open (no worktree) |
 | `cw spaces` | Active spaces |
 | `cw dashboard` | Full overview |
+| `cw arcade` | Live activity dashboard |
+| `cw arcade --setup` | Install activity hooks |
 | `cw account add\|list\|remove` | Manage accounts |
 | `cw project register\|list\|info` | Manage projects |
 | `cw project setup-mcps <name>` | Configure MCPs |
