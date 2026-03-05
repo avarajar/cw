@@ -564,7 +564,7 @@ cmd_review() {
         # Save session metadata
         python3 -c "
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 meta = {
     'project': '$name',
     'pr': '$pr',
@@ -573,8 +573,8 @@ meta = {
     'worktree': '$wt_dir',
     'notes': '$notes_file',
     'status': 'active',
-    'created': datetime.utcnow().isoformat() + 'Z',
-    'last_opened': datetime.utcnow().isoformat() + 'Z',
+    'created': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'last_opened': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'opens': 1
 }
 with open('$session_meta', 'w') as f:
@@ -617,9 +617,9 @@ with open('$session_meta', 'w') as f:
         _log "Resuming review: ${C}$name${NC} PR #${Y}$pr${NC}"
         python3 -c "
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 with open('$session_meta') as f: meta = json.load(f)
-meta['last_opened'] = datetime.utcnow().isoformat() + 'Z'
+meta['last_opened'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 meta['opens'] = meta.get('opens', 0) + 1
 with open('$session_meta', 'w') as f:
     json.dump(meta, f, indent=2)
@@ -830,23 +830,26 @@ cmd_work() {
 1. Run: git fetch origin
 2. Create a worktree: git worktree add .tasks/$task <branch_from_linear>
    - If branch doesn't exist remotely, create it from main: git worktree add .tasks/$task -b <branch_name> origin/main
-3. Read the TASK_NOTES.md symlink in .tasks/$task/ and fill in the Context section with the issue details (title, description, acceptance criteria, priority).
-4. Then start working from the .tasks/$task/ directory.
+3. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
+4. Fill in the TASK_NOTES.md Context section with the issue details (title, description, acceptance criteria, priority).
+5. Then start working from the .tasks/$task/ directory.
 
 Source URL: $task_url"
         elif [[ "$task_source" == "notion" ]]; then
             init_prompt="Fetch this Notion page using the Notion MCP: $task_url
 Then:
 1. Create a worktree: git worktree add .tasks/$task -b task/$task origin/main (or main)
-2. Read the TASK_NOTES.md symlink in .tasks/$task/ and fill in the Context section with the page content.
-3. Then start working from the .tasks/$task/ directory."
+2. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
+3. Fill in the TASK_NOTES.md Context section with the page content.
+4. Then start working from the .tasks/$task/ directory."
         elif [[ "$task_source" == "github" ]]; then
             init_prompt="Fetch this GitHub issue/PR using the GitHub MCP: $task_url
 Get the branch name if it is a PR. Then:
 1. Run: git fetch origin
 2. Create a worktree: git worktree add .tasks/$task <branch> (use PR branch or create task/$task from main)
-3. Read the TASK_NOTES.md symlink in .tasks/$task/ and fill in the Context section.
-4. Then start working from the .tasks/$task/ directory."
+3. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
+4. Fill in the TASK_NOTES.md Context section.
+5. Then start working from the .tasks/$task/ directory."
         else
             # No URL — just a branch/task name
             init_prompt="Set up the workspace:
@@ -854,8 +857,9 @@ Get the branch name if it is a PR. Then:
 2. Try to create worktree from existing branch: git worktree add .tasks/$task $task
    - If that fails, try: git worktree add .tasks/$task origin/$task
    - If that also fails, create new branch: git worktree add .tasks/$task -b $task origin/main
-3. If there is a TASK_NOTES.md in .tasks/$task/, read it for context.
-4. Then start working from the .tasks/$task/ directory."
+3. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
+4. If there is a TASK_NOTES.md in .tasks/$task/, read it for context.
+5. Then start working from the .tasks/$task/ directory."
         fi
 
         # Create notes file in session dir
@@ -883,9 +887,8 @@ Get the branch name if it is a PR. Then:
             echo "<!-- Findings, context, references -->"
         } > "$notes_file"
 
-        # Pre-create .tasks dir and symlink notes
-        mkdir -p "$path/.tasks/$task"
-        # Exclude .tasks from git
+        # Exclude .tasks from git (but DON'T pre-create the task dir — worktree needs it empty)
+        mkdir -p "$path/.tasks"
         local proj_git_dir
         proj_git_dir=$(cd "$path" && git rev-parse --git-dir 2>/dev/null) || true
         if [[ -n "$proj_git_dir" ]]; then
@@ -894,20 +897,19 @@ Get the branch name if it is a PR. Then:
             grep -q ".tasks" "$proj_exclude" 2>/dev/null || echo ".tasks" >> "$proj_exclude"
             grep -q "TASK_NOTES.md" "$proj_exclude" 2>/dev/null || echo "TASK_NOTES.md" >> "$proj_exclude"
         fi
-        ln -sf "$notes_file" "$path/.tasks/$task/TASK_NOTES.md" 2>/dev/null || true
 
         # Save session
         python3 -c "
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 meta = {
     'project': '$name', 'task': '$task', 'type': 'task',
     'account': '$account',
     'worktree': '$wt_dir', 'notes': '$notes_file',
     'source': '$task_source', 'source_url': '$task_url',
     'status': 'active',
-    'created': datetime.utcnow().isoformat() + 'Z',
-    'last_opened': datetime.utcnow().isoformat() + 'Z',
+    'created': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'last_opened': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'opens': 1
 }
 with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
@@ -917,9 +919,9 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
         _log "Resuming task: ${C}$name${NC} task=${Y}$task${NC}"
         python3 -c "
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 with open('$session_meta') as f: meta = json.load(f)
-meta['last_opened'] = datetime.utcnow().isoformat() + 'Z'
+meta['last_opened'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 meta['opens'] = meta.get('opens', 0) + 1
 with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
 "
@@ -1069,10 +1071,10 @@ _space_done() {
     if [[ -f "$session_dir/session.json" ]]; then
         python3 -c "
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 with open('$session_dir/session.json') as f: meta = json.load(f)
 meta['status'] = 'done'
-meta['closed'] = datetime.utcnow().isoformat() + 'Z'
+meta['closed'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
 "
     fi
@@ -1859,15 +1861,15 @@ Create an agent team to build this project in parallel. Analyze the scope and sp
     local session_meta="$session_dir/session.json"
     python3 -c "
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 meta = {
     'project': '$proj_name', 'task': 'init', 'type': 'task',
     'account': '$account',
     'worktree': '$proj_path',
     'source': '$source', 'source_url': '$source_url',
     'status': 'active',
-    'created': datetime.utcnow().isoformat() + 'Z',
-    'last_opened': datetime.utcnow().isoformat() + 'Z',
+    'created': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'last_opened': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'opens': 1
 }
 with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
