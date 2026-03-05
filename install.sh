@@ -88,6 +88,27 @@ install_files() {
     # Copy templates
     cp "$source_dir/templates/CLAUDE.template.md" "$CW_HOME/templates/CLAUDE.template.md"
 
+    # Copy agents
+    if [[ -d "$source_dir/agents" ]]; then
+        mkdir -p "$CW_HOME/agents"
+        cp "$source_dir"/agents/*.md "$CW_HOME/agents/" 2>/dev/null || true
+        ok "Agents installed"
+    fi
+
+    # Copy hooks
+    if [[ -d "$source_dir/hooks" ]]; then
+        mkdir -p "$CW_HOME/hooks"
+        cp -r "$source_dir/hooks/." "$CW_HOME/hooks/"
+        ok "Hooks installed"
+    fi
+
+    # Copy MCP configs
+    if [[ -d "$source_dir/mcps" ]]; then
+        mkdir -p "$CW_HOME/mcps"
+        cp "$source_dir"/mcps/*.json "$CW_HOME/mcps/" 2>/dev/null || true
+        ok "MCP configs installed"
+    fi
+
     # Initialize projects.json if not exists
     [[ -f "$CW_HOME/projects.json" ]] || echo '{}' > "$CW_HOME/projects.json"
 
