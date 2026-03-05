@@ -83,6 +83,12 @@ install_files() {
     # Copy lib
     if [[ -d "$source_dir/lib" ]]; then
         cp "$source_dir"/lib/*.sh "$CW_HOME/lib/" 2>/dev/null || true
+        # Copy dashboard
+        if [[ -d "$source_dir/lib/dashboard" ]]; then
+            mkdir -p "$CW_HOME/lib/dashboard"
+            cp "$source_dir"/lib/dashboard/{server.py,index.html,activity-hook.py,start.sh} "$CW_HOME/lib/dashboard/" 2>/dev/null || true
+            ok "Dashboard installed"
+        fi
     fi
 
     # Copy templates
