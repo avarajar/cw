@@ -1495,10 +1495,23 @@ _kanban_open() {
         _err "npx not found. Install Node.js first."
         return 1
     fi
-    npx vibe-kanban &
-    _log "vibe-kanban started. Opening browser..."
-    sleep 2
-    open http://localhost:3535 2>/dev/null || xdg-open http://localhost:3535 2>/dev/null || true
+    local tmplog
+    tmplog=$(mktemp /tmp/vibe-kanban-XXXX.log)
+    npx vibe-kanban >"$tmplog" 2>&1 &
+    local pid=$!
+    _log "Waiting for vibe-kanban to start..."
+    local port="" waited=0
+    while [[ -z "$port" && $waited -lt 10 ]]; do
+        sleep 1
+        (( waited++ )) || true
+        port=$(grep -oE 'Main server on :[0-9]+' "$tmplog" 2>/dev/null | grep -oE '[0-9]+$' | head -1)
+    done
+    if [[ -z "$port" ]]; then
+        _warn "Could not detect vibe-kanban port. Check $tmplog"
+        return 1
+    fi
+    _log "vibe-kanban running on port ${Y}$port${NC}. Opening browser..."
+    open "http://localhost:$port" 2>/dev/null || xdg-open "http://localhost:$port" 2>/dev/null || true
 }
 
 _kanban_sync() {
