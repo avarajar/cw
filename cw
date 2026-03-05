@@ -1478,92 +1478,6 @@ Verify with `/mcp` inside Claude Code.
 MD
 }
 
-# ════════════════════════════════════════════════════════════════════════════
-# KANBAN — vibe-kanban integration
-# ════════════════════════════════════════════════════════════════════════════
-cmd_kanban() {
-    local subcmd="${1:-open}"; shift || true
-    case "$subcmd" in
-        sync) _kanban_sync ;;
-        *)    _kanban_open ;;
-    esac
-}
-
-_kanban_open() {
-    if ! command -v npx &>/dev/null; then
-        _err "npx not found. Install Node.js first."
-        return 1
-    fi
-    # Check if already running via port file
-    local portfile="/tmp/vibe-kanban/vibe-kanban.port"
-    local port=""
-    if [[ -f "$portfile" ]]; then
-        port=$(python3 -c "import json; print(json.load(open('$portfile'))['main_port'])" 2>/dev/null)
-    fi
-    if [[ -n "$port" ]]; then
-        _log "vibe-kanban already running on port ${Y}$port${NC}. Opening browser..."
-        open "http://localhost:$port" 2>/dev/null || xdg-open "http://localhost:$port" 2>/dev/null || true
-        return 0
-    fi
-    _log "Launching vibe-kanban..."
-    local tmplog
-    tmplog=$(mktemp)
-    npx vibe-kanban >"$tmplog" 2>&1 &
-    _log "Waiting for vibe-kanban to start..."
-    local waited=0
-    while [[ -z "$port" && $waited -lt 15 ]]; do
-        sleep 1
-        (( waited++ )) || true
-        port=$(grep -oE 'Main server on :[0-9]+' "$tmplog" 2>/dev/null | grep -oE '[0-9]+$' | head -1)
-    done
-    if [[ -z "$port" ]]; then
-        _warn "Could not detect vibe-kanban port. Check $tmplog"
-        return 1
-    fi
-    _log "vibe-kanban running on port ${Y}$port${NC}. Opening browser..."
-    open "http://localhost:$port" 2>/dev/null || xdg-open "http://localhost:$port" 2>/dev/null || true
-}
-
-_kanban_sync() {
-    _log "Syncing active CW sessions to vibe-kanban..."
-
-    local sessions_dir="$CW_HOME/sessions"
-    if [[ ! -d "$sessions_dir" ]]; then
-        _warn "No sessions directory found."
-        return 0
-    fi
-
-    local sessions=""
-    for meta in "$sessions_dir"/*/*/session.json; do
-        [[ -f "$meta" ]] || continue
-        local line
-        line=$(python3 -c "
-import json
-d = json.load(open('$meta'))
-if d.get('status') == 'active':
-    task = d.get('task') or d.get('pr', '?')
-    print(f\"{d.get('project','?')}|{task}|{d.get('worktree','')}|{d.get('type','task')}\")
-" 2>/dev/null)
-        [[ -n "$line" ]] && sessions+="$line"$'\n'
-    done
-
-    if [[ -z "$sessions" ]]; then
-        _warn "No active sessions to sync."
-        return 0
-    fi
-
-    echo ""
-    echo -e "${BOLD}Sessions to sync with vibe-kanban:${NC}"
-    echo "$sessions" | while IFS='|' read -r project task worktree type; do
-        [[ -z "$project" ]] && continue
-        local label="${type:-task}"
-        echo -e "  ${C}$project${NC} / ${Y}$task${NC}  ${DIM}[$label] $worktree${NC}"
-    done
-    echo ""
-    _log "Opening vibe-kanban — link these workspaces manually for now."
-    _log "Full automatic MCP sync coming in a future release."
-    _kanban_open
-}
 
 # ════════════════════════════════════════════════════════════════════════════
 # GSD — Get Shit Done workflow integration
@@ -1680,8 +1594,6 @@ ${BOLD}EXAMPLES${NC}
   cw dashboard                                      # Full overview
 
 ${BOLD}INTEGRATIONS${NC}
-  cw kanban                         Open vibe-kanban visual board in browser
-  cw kanban:sync                    List active sessions and open vibe-kanban to link them
   cw gsd:init [path]                Initialize GSD workflow in a worktree
   cw gsd:sync                       Initialize GSD in all active worktrees
 
@@ -1724,7 +1636,6 @@ main() {
         launch)     cmd_launch "$@" ;;
         dashboard)  cmd_dashboard "$@" ;;
         status)     cmd_status "$@" ;;
-        kanban|kanban:sync) cmd_kanban "${cmd#kanban:}" "$@" ;;
         gsd|gsd:init|gsd:sync) cmd_gsd "${cmd#gsd:}" "$@" ;;
         help|-h|--help) cmd_help ;;
         version|-v|--version) echo "cw $CW_VERSION" ;;
