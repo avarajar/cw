@@ -1490,18 +1490,28 @@ cmd_kanban() {
 }
 
 _kanban_open() {
-    _log "Launching vibe-kanban..."
     if ! command -v npx &>/dev/null; then
         _err "npx not found. Install Node.js first."
         return 1
     fi
+    # Check if already running via port file
+    local portfile="/tmp/vibe-kanban/vibe-kanban.port"
+    local port=""
+    if [[ -f "$portfile" ]]; then
+        port=$(python3 -c "import json; print(json.load(open('$portfile'))['main_port'])" 2>/dev/null)
+    fi
+    if [[ -n "$port" ]]; then
+        _log "vibe-kanban already running on port ${Y}$port${NC}. Opening browser..."
+        open "http://localhost:$port" 2>/dev/null || xdg-open "http://localhost:$port" 2>/dev/null || true
+        return 0
+    fi
+    _log "Launching vibe-kanban..."
     local tmplog
-    tmplog=$(mktemp /tmp/vibe-kanban-XXXX.log)
+    tmplog=$(mktemp)
     npx vibe-kanban >"$tmplog" 2>&1 &
-    local pid=$!
     _log "Waiting for vibe-kanban to start..."
-    local port="" waited=0
-    while [[ -z "$port" && $waited -lt 10 ]]; do
+    local waited=0
+    while [[ -z "$port" && $waited -lt 15 ]]; do
         sleep 1
         (( waited++ )) || true
         port=$(grep -oE 'Main server on :[0-9]+' "$tmplog" 2>/dev/null | grep -oE '[0-9]+$' | head -1)
