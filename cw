@@ -1504,19 +1504,25 @@ _kanban_open() {
 _kanban_sync() {
     _log "Syncing active CW sessions to vibe-kanban..."
 
-    if [[ ! -f "$CW_ACTIVE" ]]; then
-        _warn "No active sessions found."
+    local sessions_dir="$CW_HOME/sessions"
+    if [[ ! -d "$sessions_dir" ]]; then
+        _warn "No sessions directory found."
         return 0
     fi
 
-    local sessions
-    sessions=$(python3 -c "
+    local sessions=""
+    for meta in "$sessions_dir"/*/*/session.json; do
+        [[ -f "$meta" ]] || continue
+        local line
+        line=$(python3 -c "
 import json
-with open('$CW_ACTIVE') as f:
-    active = json.load(f)
-for key, val in active.items():
-    print(f\"{val.get('project','?')}|{val.get('task', val.get('pr','?'))}|{val.get('worktree','')}\")
+d = json.load(open('$meta'))
+if d.get('status') == 'active':
+    task = d.get('task') or d.get('pr', '?')
+    print(f\"{d.get('project','?')}|{task}|{d.get('worktree','')}|{d.get('type','task')}\")
 " 2>/dev/null)
+        [[ -n "$line" ]] && sessions+="$line"$'\n'
+    done
 
     if [[ -z "$sessions" ]]; then
         _warn "No active sessions to sync."
@@ -1525,8 +1531,10 @@ for key, val in active.items():
 
     echo ""
     echo -e "${BOLD}Sessions to sync with vibe-kanban:${NC}"
-    echo "$sessions" | while IFS='|' read -r project task worktree; do
-        echo -e "  ${C}$project${NC} / ${Y}$task${NC}  ${DIM}$worktree${NC}"
+    echo "$sessions" | while IFS='|' read -r project task worktree type; do
+        [[ -z "$project" ]] && continue
+        local label="${type:-task}"
+        echo -e "  ${C}$project${NC} / ${Y}$task${NC}  ${DIM}[$label] $worktree${NC}"
     done
     echo ""
     _log "Opening vibe-kanban — link these workspaces manually for now."
