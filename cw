@@ -134,7 +134,21 @@ YAML
     _generate_commands
     _generate_mcp_docs
 
-    # Copy lib
+    # Copy dashboard lib from repo to ~/.cw/lib/dashboard
+    local repo_dashboard=""
+    # Find dashboard files: first check repo root (git clone), then SCRIPT_DIR
+    for candidate in "$(cd "$SCRIPT_DIR" && git rev-parse --show-toplevel 2>/dev/null)/lib/dashboard" "$SCRIPT_DIR/../lib/dashboard" "$SCRIPT_DIR/lib/dashboard"; do
+        if [[ -f "$candidate/server.py" ]]; then
+            repo_dashboard="$candidate"
+            break
+        fi
+    done
+    if [[ -n "$repo_dashboard" ]]; then
+        mkdir -p "$CW_HOME/lib/dashboard"
+        cp "$repo_dashboard"/{server.py,index.html,activity-hook.py,start.sh} "$CW_HOME/lib/dashboard/" 2>/dev/null
+        chmod +x "$CW_HOME/lib/dashboard/start.sh" 2>/dev/null
+        _log "Dashboard installed to ${C}$CW_HOME/lib/dashboard${NC}"
+    fi
 
     _log "${G}✓${NC} Initialized at ${C}$CW_HOME${NC}"
     echo ""
