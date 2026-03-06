@@ -984,7 +984,9 @@ After setting up the workspace, analyze the task scope and create an agent team 
         printf '%s' "$init_prompt" > "$prompt_file"
         env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "$(cat "$prompt_file")"
     elif ! $is_new; then
-        env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --continue
+        # Try to continue last conversation; if none found, start fresh
+        env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --continue \
+            || env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS
     else
         if $team_flag && [[ -n "$team_prompt" ]]; then
             env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "Create an agent team for this task: $team_prompt"
