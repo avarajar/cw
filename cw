@@ -1803,6 +1803,13 @@ with open(f, 'w') as fh: json.dump(reg, fh, indent=2)
 "
     _log "Registered project ${C}$proj_name${NC} (account=${Y}$account${NC})"
 
+    # ── Setup .claude dir & CLAUDE.md template ───────────────────────
+    mkdir -p "$proj_path/.claude"
+    if [[ ! -f "$proj_path/CLAUDE.md" ]]; then
+        local tpl="$CW_HOME/templates/CLAUDE.fullstack.md"
+        [[ -f "$tpl" ]] && cp "$tpl" "$proj_path/CLAUDE.md"
+    fi
+
     # ── Build init prompt ─────────────────────────────────────────────
     local init_prompt=""
     if [[ -n "$source_url" ]]; then
