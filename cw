@@ -63,6 +63,19 @@ _set_tab_title() {
 }
 _dim()  { echo -e "${DIM}$*${NC}"; }
 
+_default_account() {
+    if [[ -f "$CW_CONFIG" ]]; then
+        python3 -c "
+import re
+with open('$CW_CONFIG') as f: text = f.read()
+m = re.search(r'^default_account:\s*(\S+)', text, re.M)
+print(m.group(1) if m else 'monoku')
+" 2>/dev/null || echo "monoku"
+    else
+        echo "monoku"
+    fi
+}
+
 _ensure_dirs() {
     mkdir -p "$CW_HOME"/{accounts,templates,agents,commands,mcps,hooks,lib,bin}
 }
@@ -110,7 +123,7 @@ cmd_init() {
 
         cat > "$CW_CONFIG" << YAML
 # CW v3 Configuration
-default_account: work
+default_account: monoku
 default_mode: code
 notifications: true
 max_concurrent: 8
@@ -209,19 +222,21 @@ cmd_project() {
     local sub="${1:-list}"; shift || true
     case "$sub" in
         register|reg)   _project_register "$@" ;;
+        remove|rm)      _project_remove "$@" ;;
         list|ls)        _project_list ;;
         scaffold)       _project_scaffold "$@" ;;
         setup-mcps)     _project_setup_mcps "$@" ;;
         setup-agents)   _project_setup_agents "$@" ;;
         info)           _project_info "$@" ;;
-        *) _err "Subcommands: register | list | scaffold | setup-mcps | setup-agents | info" ;;
+        *) _err "Subcommands: register | remove | list | scaffold | setup-mcps | setup-agents | info" ;;
     esac
 }
 
 _project_register() {
     local path="${1:?Usage: cw project register <path> [--account X] [--type X]}"; shift
     path=$(realpath "$path" 2>/dev/null || echo "$path")
-    local account="work" ptype="fullstack"
+    local account; account=$(_default_account)
+    local ptype="fullstack"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --account|-a) account="$2"; shift 2 ;;
@@ -252,6 +267,22 @@ with open(f, 'w') as fh: json.dump(reg, fh, indent=2)
     _log "Project ${C}$name${NC} registered (account=${Y}$account${NC}, type=$ptype)"
     echo -e "  → ${C}cw project setup-mcps $name${NC}     Configure integrations"
     echo -e "  → ${C}cw project setup-agents $name${NC}   Install agents"
+}
+
+_project_remove() {
+    local name="${1:?Usage: cw project remove <name>}"
+    local pj; pj=$(_get_project "$name") || { _err "'$name' not registered."; return 1; }
+    echo -e "  Remove project ${C}$name${NC} from registry? (files won't be deleted)"
+    read -rp "  [y/N] " c
+    [[ "$c" =~ ^[yY]$ ]] || { echo "  Cancelled."; return; }
+    python3 -c "
+import json
+f = '$CW_REGISTRY'
+with open(f) as fh: reg = json.load(fh)
+reg.pop('$name', None)
+with open(f, 'w') as fh: json.dump(reg, fh, indent=2)
+"
+    _log "Project ${C}$name${NC} removed from registry."
 }
 
 _project_list() {
@@ -285,7 +316,7 @@ _project_scaffold() {
 _project_setup_mcps() {
     local name="${1:?Usage: cw project setup-mcps <name>}"
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
-    local account; account=$(_get_field "$pj" account "work")
+    local account; account=$(_get_field "$pj" account "$(_default_account)")
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
 
     # Check which MCPs are already installed
@@ -439,7 +470,7 @@ cmd_open() {
     local path; path=$(_get_field "$pj" path "")
     [[ -d "$path" ]] || { _err "Path does not exist: $path"; return 1; }
 
-    account="${account:-$(_get_field "$pj" account "work")}"
+    account="${account:-$(_get_field "$pj" account "$(_default_account)")}"
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
     _log "Opening ${C}$name${NC}  account=${M}$account${NC}"
 
@@ -457,7 +488,7 @@ cmd_open() {
 # LAUNCH — Quick Claude with account
 # ════════════════════════════════════════════════════════════════════════════
 cmd_launch() {
-    local account="${1:-work}"; shift || true
+    local account="${1:-$(_default_account)}"; shift || true
     local dir="$CW_ACCOUNTS_DIR/$account"
     [[ -d "$dir" ]] || { _err "Account '$account' does not exist."; return 1; }
     _log "Launching Claude (${C}$account${NC})..."
@@ -496,7 +527,7 @@ cmd_review() {
 
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
-    local account; account=$(_get_field "$pj" account "work")
+    local account; account=$(_get_field "$pj" account "$(_default_account)")
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
 
     [[ -z "$pr" ]] && { _err "Missing PR. Usage: cw review $name 123"; return 1; }
@@ -791,7 +822,7 @@ cmd_work() {
 
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
-    local account; account=$(_get_field "$pj" account "work")
+    local account; account=$(_get_field "$pj" account "$(_default_account)")
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
 
     local session_dir="$CW_HOME/sessions/$name/task-$task"
@@ -1936,6 +1967,7 @@ ${BOLD}SETUP${NC}
   project register <path> [opts]      Register project
     --account, -a <account>
     --type, -t <type>                 fullstack | api | knowledge | infra | agents
+  project remove <name>               Unregister project (keeps files)
   project list                        List projects
   project setup-mcps <name>           Configure GitHub/Linear/Notion/Slack
   project setup-agents <name>         Install agents and commands
