@@ -69,10 +69,10 @@ _default_account() {
 import re
 with open('$CW_CONFIG') as f: text = f.read()
 m = re.search(r'^default_account:\s*(\S+)', text, re.M)
-print(m.group(1) if m else 'monoku')
-" 2>/dev/null || echo "monoku"
+print(m.group(1) if m else 'default')
+" 2>/dev/null || echo "default"
     else
-        echo "monoku"
+        echo "default"
     fi
 }
 
