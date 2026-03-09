@@ -63,6 +63,19 @@ _set_tab_title() {
 }
 _dim()  { echo -e "${DIM}$*${NC}"; }
 
+_default_account() {
+    if [[ -f "$CW_CONFIG" ]]; then
+        python3 -c "
+import re
+with open('$CW_CONFIG') as f: text = f.read()
+m = re.search(r'^default_account:\s*(\S+)', text, re.M)
+print(m.group(1) if m else 'default')
+" 2>/dev/null || echo "default"
+    else
+        echo "default"
+    fi
+}
+
 _ensure_dirs() {
     mkdir -p "$CW_HOME"/{accounts,templates,agents,commands,mcps,hooks,lib,bin}
 }
@@ -110,7 +123,7 @@ cmd_init() {
 
         cat > "$CW_CONFIG" << YAML
 # CW v3 Configuration
-default_account: work
+default_account: monoku
 default_mode: code
 notifications: true
 max_concurrent: 8
@@ -209,19 +222,21 @@ cmd_project() {
     local sub="${1:-list}"; shift || true
     case "$sub" in
         register|reg)   _project_register "$@" ;;
+        remove|rm)      _project_remove "$@" ;;
         list|ls)        _project_list ;;
         scaffold)       _project_scaffold "$@" ;;
         setup-mcps)     _project_setup_mcps "$@" ;;
         setup-agents)   _project_setup_agents "$@" ;;
         info)           _project_info "$@" ;;
-        *) _err "Subcommands: register | list | scaffold | setup-mcps | setup-agents | info" ;;
+        *) _err "Subcommands: register | remove | list | scaffold | setup-mcps | setup-agents | info" ;;
     esac
 }
 
 _project_register() {
     local path="${1:?Usage: cw project register <path> [--account X] [--type X]}"; shift
     path=$(realpath "$path" 2>/dev/null || echo "$path")
-    local account="work" ptype="fullstack"
+    local account; account=$(_default_account)
+    local ptype="fullstack"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --account|-a) account="$2"; shift 2 ;;
@@ -252,6 +267,22 @@ with open(f, 'w') as fh: json.dump(reg, fh, indent=2)
     _log "Project ${C}$name${NC} registered (account=${Y}$account${NC}, type=$ptype)"
     echo -e "  → ${C}cw project setup-mcps $name${NC}     Configure integrations"
     echo -e "  → ${C}cw project setup-agents $name${NC}   Install agents"
+}
+
+_project_remove() {
+    local name="${1:?Usage: cw project remove <name>}"
+    local pj; pj=$(_get_project "$name") || { _err "'$name' not registered."; return 1; }
+    echo -e "  Remove project ${C}$name${NC} from registry? (files won't be deleted)"
+    read -rp "  [y/N] " c
+    [[ "$c" =~ ^[yY]$ ]] || { echo "  Cancelled."; return; }
+    python3 -c "
+import json
+f = '$CW_REGISTRY'
+with open(f) as fh: reg = json.load(fh)
+reg.pop('$name', None)
+with open(f, 'w') as fh: json.dump(reg, fh, indent=2)
+"
+    _log "Project ${C}$name${NC} removed from registry."
 }
 
 _project_list() {
@@ -285,7 +316,7 @@ _project_scaffold() {
 _project_setup_mcps() {
     local name="${1:?Usage: cw project setup-mcps <name>}"
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
-    local account; account=$(_get_field "$pj" account "work")
+    local account; account=$(_get_field "$pj" account "$(_default_account)")
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
 
     # Check which MCPs are already installed
@@ -439,7 +470,7 @@ cmd_open() {
     local path; path=$(_get_field "$pj" path "")
     [[ -d "$path" ]] || { _err "Path does not exist: $path"; return 1; }
 
-    account="${account:-$(_get_field "$pj" account "work")}"
+    account="${account:-$(_get_field "$pj" account "$(_default_account)")}"
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
     _log "Opening ${C}$name${NC}  account=${M}$account${NC}"
 
@@ -457,7 +488,7 @@ cmd_open() {
 # LAUNCH — Quick Claude with account
 # ════════════════════════════════════════════════════════════════════════════
 cmd_launch() {
-    local account="${1:-work}"; shift || true
+    local account="${1:-$(_default_account)}"; shift || true
     local dir="$CW_ACCOUNTS_DIR/$account"
     [[ -d "$dir" ]] || { _err "Account '$account' does not exist."; return 1; }
     _log "Launching Claude (${C}$account${NC})..."
@@ -465,7 +496,7 @@ cmd_launch() {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# REVIEW — PR review with worktree + persistent session
+# REVIEW — PR review with persistent session (no worktree)
 # ════════════════════════════════════════════════════════════════════════════
 cmd_review() {
     local name="" pr="" done_flag=false cont_flag=false list_flag=false
@@ -496,7 +527,7 @@ cmd_review() {
 
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
-    local account; account=$(_get_field "$pj" account "work")
+    local account; account=$(_get_field "$pj" account "$(_default_account)")
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
 
     [[ -z "$pr" ]] && { _err "Missing PR. Usage: cw review $name 123"; return 1; }
@@ -515,13 +546,23 @@ cmd_review() {
     local sessions_dir="$CW_HOME/sessions/$name"
     local session_dir="$sessions_dir/review-pr-$pr"
     local session_meta="$session_dir/session.json"
-    local wt_dir="$path/.reviews/pr-$pr"
     local notes_file="$session_dir/REVIEW_NOTES.md"
 
-    # ── Done: clean up review ────────────────────────────────────────────
+    # ── Done: close review session ───────────────────────────────────────
     if $done_flag; then
-        _space_done "$name" "$pr" "review" "$path" "$wt_dir" "$session_dir"
-        (cd "$path" && git branch -D "pr-$pr" 2>/dev/null) || true
+        _log "Closing review: ${C}$name${NC} PR #${Y}$pr${NC}"
+        if [[ -f "$session_dir/session.json" ]]; then
+            python3 -c "
+import json
+from datetime import datetime, timezone
+with open('$session_dir/session.json') as f: meta = json.load(f)
+meta['status'] = 'done'
+meta['closed'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
+"
+        fi
+        _log "${G}Review PR #$pr closed${NC}"
+        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) DONE $name review=pr-$pr" >> "$CW_SESSIONS_LOG"
         return
     fi
 
@@ -534,33 +575,6 @@ cmd_review() {
     if $is_new; then
         _log "New review: ${C}$name${NC} PR #${Y}$pr${NC}"
 
-        # Fetch PR branch from remote
-        (
-            cd "$path"
-            git fetch origin 2>/dev/null || true
-
-            # Try to find the PR branch
-            local pr_branch=""
-            pr_branch=$(git ls-remote --heads origin 2>/dev/null | grep -i "pr\|pull" | head -1 | awk '{print $2}' | sed 's|refs/heads/||') || true
-
-            # Fetch PR ref directly (works with GitHub)
-            git fetch origin "pull/$pr/head:pr-$pr" 2>/dev/null || {
-                _log "${Y}Could not fetch PR #$pr directly.${NC}"
-                _log "Creating worktree from HEAD. You can checkout manually."
-            }
-        )
-
-        # Create worktree
-        mkdir -p "$(dirname "$wt_dir")"
-        if (cd "$path" && git worktree add "$wt_dir" "pr-$pr" 2>/dev/null); then
-            _log "Worktree created: ${C}$wt_dir${NC}"
-        elif (cd "$path" && git worktree add "$wt_dir" HEAD 2>/dev/null); then
-            _log "Worktree created from HEAD (checkout branch manually)"
-        else
-            _err "Could not create worktree. Check git status."
-            return 1
-        fi
-
         # Save session metadata
         python3 -c "
 import json
@@ -570,7 +584,6 @@ meta = {
     'pr': '$pr',
     'type': 'review',
     'account': '$account',
-    'worktree': '$wt_dir',
     'notes': '$notes_file',
     'status': 'active',
     'created': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -601,17 +614,6 @@ with open('$session_meta', 'w') as f:
             echo "<!-- Additional comments -->"
         } > "$notes_file"
 
-        # Symlink notes into worktree (so Claude can read it)
-        ln -sf "$notes_file" "$wt_dir/REVIEW_NOTES.md" 2>/dev/null || true
-        # Exclude from git (per-worktree, not committed)
-        local wt_git_dir
-        wt_git_dir=$(cd "$wt_dir" && git rev-parse --git-dir 2>/dev/null) || true
-        if [[ -n "$wt_git_dir" ]]; then
-            local exclude_file="$wt_git_dir/info/exclude"
-            mkdir -p "$(dirname "$exclude_file")" 2>/dev/null || true
-            grep -q "REVIEW_NOTES.md" "$exclude_file" 2>/dev/null || echo "REVIEW_NOTES.md" >> "$exclude_file"
-        fi
-
     else
         # Existing review - update metadata
         _log "Resuming review: ${C}$name${NC} PR #${Y}$pr${NC}"
@@ -627,34 +629,33 @@ with open('$session_meta', 'w') as f:
     fi
 
     # ── Run Claude ────────────────────────────────────────────────────
-    cd "$wt_dir"
+    cd "$path"
     _set_tab_title "PR#$pr - $name"
     if ! $is_new; then
         # Re-review: check if previously requested changes were addressed
-        # Detect if gh CLI is available for PR fetching
         local pr_fetch_instructions=""
         if command -v gh &>/dev/null; then
-            pr_fetch_instructions="Fetch the latest review comments and requested changes:
+            pr_fetch_instructions="Fetch the latest state of the PR:
    \`gh pr view $pr --json reviews,comments\`
+   \`gh pr diff $pr\`
    \`gh api repos/{owner}/{repo}/pulls/$pr/reviews\`
    \`gh api repos/{owner}/{repo}/pulls/$pr/comments\`"
         else
-            pr_fetch_instructions="Fetch the latest review comments and requested changes using the GitHub MCP tools (get_pull_request_reviews, get_pull_request_comments, get_pull_request). If no GitHub MCP is available, check REVIEW_NOTES.md for your previous findings and review the new commits manually."
+            pr_fetch_instructions="Fetch the latest review comments and requested changes using the GitHub MCP tools (get_pull_request_reviews, get_pull_request_comments, get_pull_request). If no GitHub MCP is available, check REVIEW_NOTES.md for your previous findings."
         fi
 
         local recheck_prompt="This is a follow-up review of PR #$pr for project $name.
 
-1. Read REVIEW_NOTES.md to recall your previous findings.
+1. Read $notes_file to recall your previous findings.
 2. $pr_fetch_instructions
-3. Pull latest changes: \`git pull origin\` (or \`git fetch origin && git rebase\`)
-4. For each previously requested change, verify if it was addressed in the new commits:
-   - Run \`git log --oneline\` to see new commits since last review
+3. For each previously requested change, verify if it was addressed in the latest diff:
+   - Compare the current diff against your previous findings
    - Check the relevant files for each requested change
-5. Report:
+4. Report:
    - Resolved: which requested changes were fixed
    - Still pending: which ones are not addressed yet
    - New issues: anything new introduced in the latest commits
-6. Update REVIEW_NOTES.md with the follow-up findings.
+5. Update $notes_file with the follow-up findings.
 
 IMPORTANT — DO NOT post comments to GitHub yet. Present your findings to me first:
 - Show a summary: what was resolved, what's still pending, any new issues
@@ -719,12 +720,10 @@ If I say 'none', do not post. If I say 'edit', let me modify before posting."
 
         local review_prompt="Review PR #$pr for project $name.
 
-Read REVIEW_NOTES.md first for context.
+Read $notes_file first for context.
 
 1. $pr_detail_instructions
-2. Run \`git log --oneline main..HEAD\` to see the PR commits.
-3. Run \`git diff main...HEAD\` to see all changes.
-4. Review every changed file thoroughly."
+2. Review every changed file thoroughly."
 
         if [[ -n "$review_skill" ]]; then
             review_prompt="$review_prompt
@@ -740,7 +739,7 @@ For each finding: File:Line, Severity, Issue, Suggested fix."
 
         review_prompt="$review_prompt
 
-5. Fill in REVIEW_NOTES.md with your findings.
+3. Fill in $notes_file with your findings.
 
 IMPORTANT — DO NOT post comments to GitHub yet. Present your findings to me first:
 - Classify each finding as: critical | major | minor | nit
@@ -823,7 +822,7 @@ cmd_work() {
 
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
-    local account; account=$(_get_field "$pj" account "work")
+    local account; account=$(_get_field "$pj" account "$(_default_account)")
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
 
     local session_dir="$CW_HOME/sessions/$name/task-$task"
@@ -851,38 +850,40 @@ cmd_work() {
         if [[ "$task_source" == "linear" ]]; then
             init_prompt="Fetch Linear issue $task using the Linear MCP (get_issue tool). Get the git branch name from the issue. Then:
 1. Run: git fetch origin
-2. Create a worktree: git worktree add .tasks/$task <branch_from_linear>
-   - If branch doesn't exist remotely, create it from main: git worktree add .tasks/$task -b <branch_name> origin/main
-3. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
-4. Fill in the TASK_NOTES.md Context section with the issue details (title, description, acceptance criteria, priority).
-5. Then start working from the .tasks/$task/ directory.
+2. If the branch already exists locally, delete it: git branch -D <branch_name> (ignore errors)
+3. Create a worktree from fresh main: git worktree add .tasks/$task -b <branch_name> origin/main
+4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
+5. Fill in the TASK_NOTES.md Context section with the issue details (title, description, acceptance criteria, priority).
+6. Then start working from the .tasks/$task/ directory.
 
 Source URL: $task_url"
         elif [[ "$task_source" == "notion" ]]; then
             init_prompt="Fetch this Notion page using the Notion MCP: $task_url
 Then:
-1. Create a worktree: git worktree add .tasks/$task -b task/$task origin/main (or main)
-2. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
-3. Fill in the TASK_NOTES.md Context section with the page content.
-4. Then start working from the .tasks/$task/ directory."
+1. Run: git fetch origin
+2. If branch task/$task exists locally, delete it: git branch -D task/$task (ignore errors)
+3. Create a worktree from fresh main: git worktree add .tasks/$task -b task/$task origin/main
+4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
+5. Fill in the TASK_NOTES.md Context section with the page content.
+6. Then start working from the .tasks/$task/ directory."
         elif [[ "$task_source" == "github" ]]; then
             init_prompt="Fetch this GitHub issue/PR using the GitHub MCP: $task_url
 Get the branch name if it is a PR. Then:
 1. Run: git fetch origin
-2. Create a worktree: git worktree add .tasks/$task <branch> (use PR branch or create task/$task from main)
-3. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
-4. Fill in the TASK_NOTES.md Context section.
-5. Then start working from the .tasks/$task/ directory."
+2. If the branch already exists locally, delete it: git branch -D <branch_name> (ignore errors)
+3. Create a worktree from fresh main: git worktree add .tasks/$task -b <branch_name_or_task/$task> origin/main
+4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
+5. Fill in the TASK_NOTES.md Context section.
+6. Then start working from the .tasks/$task/ directory."
         else
             # No URL — just a branch/task name
             init_prompt="Set up the workspace:
 1. Run: git fetch origin
-2. Try to create worktree from existing branch: git worktree add .tasks/$task $task
-   - If that fails, try: git worktree add .tasks/$task origin/$task
-   - If that also fails, create new branch: git worktree add .tasks/$task -b $task origin/main
-3. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
-4. If there is a TASK_NOTES.md in .tasks/$task/, read it for context.
-5. Then start working from the .tasks/$task/ directory."
+2. If branch $task exists locally, delete it: git branch -D $task (ignore errors)
+3. Create a worktree from fresh main: git worktree add .tasks/$task -b $task origin/main
+4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
+5. If there is a TASK_NOTES.md in .tasks/$task/, read it for context.
+6. Then start working from the .tasks/$task/ directory."
         fi
 
         # Create notes file in session dir
@@ -1448,7 +1449,7 @@ exit(1)
     # ── Quick reference ──────────────────────────────────────────────────
     echo -e "\n${BOLD}Quick${NC}\n"
     echo -e "  ${C}cw work <proy> <task>${NC}             Work on feature/bug (worktree + session)"
-    echo -e "  ${C}cw review <proy> <PR>${NC}             Review PR (worktree + session)"
+    echo -e "  ${C}cw review <proy> <PR>${NC}             Review PR (persistent session)"
     echo -e "  ${C}cw open <proy>${NC}                    Open project quick (no worktree)"
     echo -e "  ${C}cw spaces${NC}                         Show active spaces"
     echo ""
@@ -1855,6 +1856,13 @@ with open(f, 'w') as fh: json.dump(reg, fh, indent=2)
 "
     _log "Registered project ${C}$proj_name${NC} (account=${Y}$account${NC})"
 
+    # ── Setup .claude dir & CLAUDE.md template ───────────────────────
+    mkdir -p "$proj_path/.claude"
+    if [[ ! -f "$proj_path/CLAUDE.md" ]]; then
+        local tpl="$CW_HOME/templates/CLAUDE.fullstack.md"
+        [[ -f "$tpl" ]] && cp "$tpl" "$proj_path/CLAUDE.md"
+    fi
+
     # ── Build init prompt ─────────────────────────────────────────────
     local init_prompt=""
     if [[ -n "$source_url" ]]; then
@@ -1964,7 +1972,7 @@ ${BOLD}MAIN COMMANDS${NC}
   work <project> <task>               Work on feature/bug (worktree + session)
   work <project> <task> --team        Launch with agent team (parallel work)
   work <project> <url>                Work from Linear/Notion/GitHub URL
-  review <project> <PR>               Review PR (worktree + session)
+  review <project> <PR>               Review PR (persistent session)
   review <project> <url>              Review from GitHub PR URL
   open <project>                      Open project quick (no worktree)
   spaces                              Show active spaces
@@ -1981,6 +1989,7 @@ ${BOLD}SETUP${NC}
   project register <path> [opts]      Register project
     --account, -a <account>
     --type, -t <type>                 fullstack | api | knowledge | infra | agents
+  project remove <name>               Unregister project (keeps files)
   project list                        List projects
   project setup-mcps <name>           Configure GitHub/Linear/Notion/Slack
   project setup-agents <name>         Install agents and commands

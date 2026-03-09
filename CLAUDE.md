@@ -1,0 +1,77 @@
+# CW — Claude Workspace Manager
+
+Multi-project orchestrator for Claude Code. Single Bash script (`cw`, ~2000 lines) that manages accounts, projects, worktrees, sessions, and integrations.
+
+## Project Structure
+
+```
+cw                          # Main executable (Bash)
+cw-shell-integration.sh     # Shell aliases, completions, shortcuts
+install.sh                  # Installation script
+agents/                     # Bundled agent definitions (.md with frontmatter)
+templates/                  # CLAUDE.template.md for new projects
+docs/                       # architecture.md, commands.md, getting-started.md, claude-md.md
+hooks/                      # Claude Code hooks (Python handler + audio + config)
+lib/                        # iterm2.sh, dashboard/ (SSE server + web UI)
+mcps/                       # MCP integration configs
+```
+
+Runtime data lives in `~/.cw/` (accounts, sessions, projects.json, config.yaml).
+
+## Architecture (3 Concerns)
+
+1. **Account Routing** — maps projects to Claude accounts via `CLAUDE_CONFIG_DIR`
+2. **Workspace Isolation** — git worktrees (`.tasks/`, `.reviews/`) for parallel work
+3. **Session Persistence** — metadata + notes files survive conversation loss
+
+## Code Conventions
+
+- **Language**: Pure Bash (4+), no external build tools
+- **Public commands**: `cmd_<name>()` functions (init, account, project, work, review, create, spaces, open, help, etc.)
+- **Internal helpers**: `_<name>()` functions (prefixed with underscore)
+- **Output helpers**: `_log()`, `_warn()`, `_err()`, `_dim()` — colored output with `$C`, `$BOLD`, `$NC`, etc.
+- **Error handling**: `set -uo pipefail`, guard with `${var:?Usage: ...}` for required args
+- **JSON handling**: `python3 -c` inline for reading/writing JSON (no jq dependency)
+- **Config**: YAML parsed with simple grep/sed patterns, not a full parser
+
+## Key Commands
+
+| Command | Function | Description |
+|---------|----------|-------------|
+| `cw create` | `cmd_create` | Bootstrap project from description or URL |
+| `cw work <project> <task>` | `cmd_work` | Start task in worktree with session |
+| `cw review <project> <PR>` | `cmd_review` | Review PR in isolated session |
+| `cw open <project>` | `cmd_open` | Quick open (no worktree) |
+| `cw account add/list/remove` | `cmd_account` | Manage Claude accounts |
+| `cw project register/remove/list` | `cmd_project` | Manage project registry |
+| `cw spaces` | `cmd_spaces` | Show active tasks and reviews |
+| `cw dashboard` | `cmd_dashboard` | Full workspace overview |
+
+## Working on This Project
+
+```bash
+# Test changes directly — it's a single script
+chmod +x cw && ./cw help
+
+# Install locally to test full flow
+./install.sh
+```
+
+- No tests, no CI — test manually
+- Changes to `cw` are the main work; everything else is supporting config/docs
+- The script dispatches commands at the bottom via a case statement in the main `_main()` function
+- When adding a new command: create `cmd_<name>()`, add case in `_main()`, add to `cmd_help()`
+
+## Environment Variables
+
+- `CW_HOME` — Config directory (default: `~/.cw`)
+- `CLAUDE_CONFIG_DIR` — Set per-account for routing
+- `CW_CLAUDE_FLAGS` — Extra flags for claude invocations
+- `CW_PROJECT`, `CW_TASK`, `CW_TASK_TYPE`, `CW_ACCOUNT` — Exported session context
+
+## Do NOT
+
+- Add external dependencies (no jq, no node, keep it pure bash + python3)
+- Break the single-file architecture of the `cw` script
+- Modify session/config files outside of `~/.cw/`
+- Commit `.tasks/`, `.reviews/`, or `*_NOTES.md` (excluded via `.git/info/exclude`)
