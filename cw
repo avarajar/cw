@@ -1186,11 +1186,15 @@ cmd_arcade() {
 
 _arcade_install_hooks_for() {
     local settings="$1" hook_script="$2"
-    python3 - "$settings" "$hook_script" << 'PYEOF'
+    # Also install CW hooks (review-autoclose, etc.)
+    local cw_hooks_dir
+    cw_hooks_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/hooks/scripts"
+    python3 - "$settings" "$hook_script" "$cw_hooks_dir" << 'PYEOF'
 import json, sys, os
 
 settings_path = sys.argv[1]
 hook_script = sys.argv[2]
+cw_hooks_dir = sys.argv[3]
 
 try:
     with open(settings_path) as f:
@@ -1227,6 +1231,24 @@ for event in matcher_events + no_matcher_events:
     )
     if not already:
         settings["hooks"][event].append(entry)
+
+# ── CW hooks: review-autoclose (PostToolUse on Bash) ──
+autoclose_script = os.path.join(cw_hooks_dir, "review-autoclose.py")
+if os.path.isfile(autoclose_script):
+    autoclose_cmd = f"python3 {autoclose_script}"
+    autoclose_handler = {"type": "command", "command": autoclose_cmd, "timeout": 5000}
+    autoclose_entry = {"matcher": "Bash", "hooks": [autoclose_handler]}
+
+    if "PostToolUse" not in settings["hooks"]:
+        settings["hooks"]["PostToolUse"] = []
+    existing_post = settings["hooks"]["PostToolUse"]
+    already_installed = any(
+        autoclose_cmd in h.get("command", "")
+        or any(autoclose_cmd in sub.get("command", "") for sub in h.get("hooks", []) if isinstance(sub, dict))
+        for h in existing_post if isinstance(h, dict)
+    )
+    if not already_installed:
+        settings["hooks"]["PostToolUse"].append(autoclose_entry)
 
 os.makedirs(os.path.dirname(settings_path), exist_ok=True)
 with open(settings_path, "w") as f:
