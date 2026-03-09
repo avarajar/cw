@@ -667,12 +667,7 @@ Only after I confirm, post as inline review comments on specific lines.
 IMPORTANT: When posting comments to GitHub, DO NOT include severity labels (critical/major/minor/nit) in the comment text. Write each comment as a natural, helpful review comment — just the issue and suggested fix, no tags or prefixes.
 Use: \`gh api repos/{owner}/{repo}/pulls/$pr/reviews -f event=<APPROVE|REQUEST_CHANGES|COMMENT> -f body='<summary>' -f comments='[{\"path\":\"<file>\",\"line\":<line>,\"body\":\"<comment>\"}]'\`
 
-If I say 'none', do not post. If I say 'edit', let me modify before posting.
-
-AUTO-CLOSE: If you post an APPROVE review, immediately close this review session by running:
-\`python3 -c \"import json; from datetime import datetime, timezone; meta=json.load(open('$session_meta')); meta['status']='done'; meta['closed']=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'); json.dump(meta, open('$session_meta','w'), indent=2)\"\`
-\`echo \"\$(date -u +%Y-%m-%dT%H:%M:%SZ) DONE $name review=pr-$pr\" >> $CW_SESSIONS_LOG\`
-Then say 'Review approved and session closed.' and stop — do not continue the conversation."
+If I say 'none', do not post. If I say 'edit', let me modify before posting."
 
         local prompt_file="$session_dir/recheck_prompt.txt"
         printf '%s' "$recheck_prompt" > "$prompt_file"
@@ -757,12 +752,7 @@ Only after I confirm, post the review using inline comments on specific lines.
 IMPORTANT: When posting comments to GitHub, DO NOT include severity labels (critical/major/minor/nit) in the comment text. Write each comment as a natural, helpful review comment — just the issue and suggested fix, no tags or prefixes.
 Use: \`gh api repos/{owner}/{repo}/pulls/$pr/reviews -f event=<APPROVE|REQUEST_CHANGES|COMMENT> -f body='<summary>' -f comments='[{\"path\":\"<file>\",\"line\":<line>,\"body\":\"<comment>\"}]'\`
 
-If I say 'none', do not post. If I say 'edit', let me modify the findings before posting.
-
-AUTO-CLOSE: If you post an APPROVE review, immediately close this review session by running:
-\`python3 -c \"import json; from datetime import datetime, timezone; meta=json.load(open('$session_meta')); meta['status']='done'; meta['closed']=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'); json.dump(meta, open('$session_meta','w'), indent=2)\"\`
-\`echo \"\$(date -u +%Y-%m-%dT%H:%M:%SZ) DONE $name review=pr-$pr\" >> $CW_SESSIONS_LOG\`
-Then say 'Review approved and session closed.' and stop — do not continue the conversation."
+If I say 'none', do not post. If I say 'edit', let me modify the findings before posting."
 
         local prompt_file="$session_dir/init_prompt.txt"
         printf '%s' "$review_prompt" > "$prompt_file"
@@ -1197,11 +1187,15 @@ cmd_arcade() {
 
 _arcade_install_hooks_for() {
     local settings="$1" hook_script="$2"
-    python3 - "$settings" "$hook_script" << 'PYEOF'
+    # Also install CW hooks (review-autoclose, etc.)
+    local cw_hooks_dir
+    cw_hooks_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/hooks/scripts"
+    python3 - "$settings" "$hook_script" "$cw_hooks_dir" << 'PYEOF'
 import json, sys, os
 
 settings_path = sys.argv[1]
 hook_script = sys.argv[2]
+cw_hooks_dir = sys.argv[3]
 
 try:
     with open(settings_path) as f:
@@ -1238,6 +1232,24 @@ for event in matcher_events + no_matcher_events:
     )
     if not already:
         settings["hooks"][event].append(entry)
+
+# ── CW hooks: review-autoclose (PostToolUse on Bash) ──
+autoclose_script = os.path.join(cw_hooks_dir, "review-autoclose.py")
+if os.path.isfile(autoclose_script):
+    autoclose_cmd = f"python3 {autoclose_script}"
+    autoclose_handler = {"type": "command", "command": autoclose_cmd, "timeout": 5000}
+    autoclose_entry = {"matcher": "Bash", "hooks": [autoclose_handler]}
+
+    if "PostToolUse" not in settings["hooks"]:
+        settings["hooks"]["PostToolUse"] = []
+    existing_post = settings["hooks"]["PostToolUse"]
+    already_installed = any(
+        autoclose_cmd in h.get("command", "")
+        or any(autoclose_cmd in sub.get("command", "") for sub in h.get("hooks", []) if isinstance(sub, dict))
+        for h in existing_post if isinstance(h, dict)
+    )
+    if not already_installed:
+        settings["hooks"]["PostToolUse"].append(autoclose_entry)
 
 os.makedirs(os.path.dirname(settings_path), exist_ok=True)
 with open(settings_path, "w") as f:
