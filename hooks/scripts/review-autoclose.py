@@ -75,15 +75,15 @@ def main():
         sys.exit(0)
 
     # Check that the command succeeded
+    # tool_response has: stdout, stderr, interrupted — no exit_code field
     tool_response = hook_data.get("tool_response", {})
-    _debug(f"TOOL_RESPONSE KEYS: {list(tool_response.keys()) if isinstance(tool_response, dict) else type(tool_response)}")
-    _debug(f"TOOL_RESPONSE: {json.dumps(tool_response, default=str)[:1000]}")
+    stderr = tool_response.get("stderr", "")
+    stdout = tool_response.get("stdout", "")
+    interrupted = tool_response.get("interrupted", False)
+    _debug(f"TOOL_RESPONSE: interrupted={interrupted}, stderr={stderr[:200]!r}, stdout_len={len(stdout)}")
 
-    exit_code = tool_response.get("exit_code", tool_response.get("exitCode", 1))
-    _debug(f"EXIT_CODE: {exit_code!r} (type={type(exit_code).__name__})")
-
-    if exit_code != 0:
-        _debug(f"EXIT: command failed (exit_code={exit_code})")
+    if interrupted or (not stdout and stderr):
+        _debug(f"EXIT: command failed (interrupted={interrupted}, stderr={stderr[:200]!r})")
         sys.exit(0)
 
     # ── Close the review session (same as cw review --done) ──────────
