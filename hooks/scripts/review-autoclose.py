@@ -116,11 +116,15 @@ def main():
     except Exception as e:
         _debug(f"ERROR logging: {e}")
 
-    # Stop the Claude conversation
-    output = {"continue": False, "stopReason": f"Review session closed — PR approved ({project} {task})"}
-    _debug(f"OUTPUT: {json.dumps(output)}")
-    print(json.dumps(output))
-    sys.exit(0)
+    # Stop the Claude conversation — exit code 2 sends stderr as feedback to Claude
+    _debug("STOPPING CLAUDE via exit code 2")
+    print(
+        f"STOP. The review session for {project} PR #{task.replace('pr-', '')} has been automatically closed after APPROVE. "
+        "The session metadata and logs have been updated. "
+        "Do NOT continue working. Say a brief goodbye and stop.",
+        file=sys.stderr
+    )
+    sys.exit(2)
 
 
 if __name__ == "__main__":
