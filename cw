@@ -667,7 +667,11 @@ Only after I confirm, post as inline review comments on specific lines.
 IMPORTANT: When posting comments to GitHub, DO NOT include severity labels (critical/major/minor/nit) in the comment text. Write each comment as a natural, helpful review comment — just the issue and suggested fix, no tags or prefixes.
 Use: \`gh api repos/{owner}/{repo}/pulls/$pr/reviews -f event=<APPROVE|REQUEST_CHANGES|COMMENT> -f body='<summary>' -f comments='[{\"path\":\"<file>\",\"line\":<line>,\"body\":\"<comment>\"}]'\`
 
-If I say 'none', do not post. If I say 'edit', let me modify before posting."
+If I say 'none', do not post. If I say 'edit', let me modify before posting.
+
+AUTO-CLOSE: If you post an APPROVE review, immediately close this review session by running:
+\`python3 -c \"import json; from datetime import datetime, timezone; meta=json.load(open('$session_meta')); meta['status']='done'; meta['closed']=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'); json.dump(meta, open('$session_meta','w'), indent=2)\"\`
+Then say 'Review approved and session closed.' and stop — do not continue the conversation."
 
         local prompt_file="$session_dir/recheck_prompt.txt"
         printf '%s' "$recheck_prompt" > "$prompt_file"
@@ -752,7 +756,11 @@ Only after I confirm, post the review using inline comments on specific lines.
 IMPORTANT: When posting comments to GitHub, DO NOT include severity labels (critical/major/minor/nit) in the comment text. Write each comment as a natural, helpful review comment — just the issue and suggested fix, no tags or prefixes.
 Use: \`gh api repos/{owner}/{repo}/pulls/$pr/reviews -f event=<APPROVE|REQUEST_CHANGES|COMMENT> -f body='<summary>' -f comments='[{\"path\":\"<file>\",\"line\":<line>,\"body\":\"<comment>\"}]'\`
 
-If I say 'none', do not post. If I say 'edit', let me modify the findings before posting."
+If I say 'none', do not post. If I say 'edit', let me modify the findings before posting.
+
+AUTO-CLOSE: If you post an APPROVE review, immediately close this review session by running:
+\`python3 -c \"import json; from datetime import datetime, timezone; meta=json.load(open('$session_meta')); meta['status']='done'; meta['closed']=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'); json.dump(meta, open('$session_meta','w'), indent=2)\"\`
+Then say 'Review approved and session closed.' and stop — do not continue the conversation."
 
         local prompt_file="$session_dir/init_prompt.txt"
         printf '%s' "$review_prompt" > "$prompt_file"
