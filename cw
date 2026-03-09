@@ -671,6 +671,7 @@ If I say 'none', do not post. If I say 'edit', let me modify before posting.
 
 AUTO-CLOSE: If you post an APPROVE review, immediately close this review session by running:
 \`python3 -c \"import json; from datetime import datetime, timezone; meta=json.load(open('$session_meta')); meta['status']='done'; meta['closed']=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'); json.dump(meta, open('$session_meta','w'), indent=2)\"\`
+\`echo \"\$(date -u +%Y-%m-%dT%H:%M:%SZ) DONE $name review=pr-$pr\" >> $CW_SESSIONS_LOG\`
 Then say 'Review approved and session closed.' and stop — do not continue the conversation."
 
         local prompt_file="$session_dir/recheck_prompt.txt"
@@ -760,6 +761,7 @@ If I say 'none', do not post. If I say 'edit', let me modify the findings before
 
 AUTO-CLOSE: If you post an APPROVE review, immediately close this review session by running:
 \`python3 -c \"import json; from datetime import datetime, timezone; meta=json.load(open('$session_meta')); meta['status']='done'; meta['closed']=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'); json.dump(meta, open('$session_meta','w'), indent=2)\"\`
+\`echo \"\$(date -u +%Y-%m-%dT%H:%M:%SZ) DONE $name review=pr-$pr\" >> $CW_SESSIONS_LOG\`
 Then say 'Review approved and session closed.' and stop — do not continue the conversation."
 
         local prompt_file="$session_dir/init_prompt.txt"
