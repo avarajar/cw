@@ -2,8 +2,8 @@
 """
 CW Review Auto-Close Hook (PostToolUse on Bash)
 ================================================
-Detects when Claude posts an APPROVE review via `gh api` and automatically
-closes the review session — equivalent to `cw review <project> <pr> --done`.
+Detects when Claude posts an APPROVE review via `gh api` or `gh pr review`
+and automatically closes the review session + stops the conversation.
 
 Reads CW_PROJECT, CW_TASK, CW_TASK_TYPE from environment (set by cmd_review).
 """
@@ -13,7 +13,6 @@ import json
 import os
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 
 
 def main():
@@ -36,27 +35,27 @@ def main():
     except (json.JSONDecodeError, Exception):
         sys.exit(0)
 
-    # Check this is a Bash PostToolUse
-    if hook_data.get("hook_event_name") != "PostToolUse":
-        sys.exit(0)
-    if hook_data.get("tool_name") != "Bash":
-        sys.exit(0)
-
     # Check the command contained an APPROVE review
     tool_input = hook_data.get("tool_input", {})
     command = tool_input.get("command", "")
 
-    # Match patterns like: event=APPROVE, event='APPROVE', -f event=APPROVE
-    if not re.search(r'event[=\s]+["\']?APPROVE["\']?', command, re.IGNORECASE):
-        sys.exit(0)
+    is_approve = False
 
-    # Also verify it's a gh api call to pulls/reviews
-    if "gh api" not in command or "reviews" not in command:
+    # Pattern 1: gh api ... event=APPROVE (inline review via API)
+    if "gh api" in command and "reviews" in command:
+        if re.search(r'event[=\s]+["\']?APPROVE["\']?', command, re.IGNORECASE):
+            is_approve = True
+
+    # Pattern 2: gh pr review --approve
+    if "gh pr review" in command and "--approve" in command:
+        is_approve = True
+
+    if not is_approve:
         sys.exit(0)
 
     # Check that the command succeeded
-    tool_result = hook_data.get("tool_result", {})
-    if tool_result.get("exitCode", 1) != 0:
+    tool_response = hook_data.get("tool_response", {})
+    if tool_response.get("exit_code", 1) != 0:
         sys.exit(0)
 
     # ── Close the review session (same as cw review --done) ──────────
@@ -85,7 +84,11 @@ def main():
     except Exception as e:
         print(f"review-autoclose: error logging: {e}", file=sys.stderr)
 
-    print(f"review-autoclose: session closed for {project} {task}", file=sys.stderr)
+    # Stop the Claude conversation
+    print(json.dumps({
+        "continue": False,
+        "stopReason": f"Review session closed — PR approved ({project} {task})"
+    }))
     sys.exit(0)
 
 
