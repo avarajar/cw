@@ -848,12 +848,12 @@ cmd_work() {
         # Build initial prompt for Claude based on source
         local init_prompt=""
         if [[ "$task_source" == "linear" ]]; then
-            init_prompt="Fetch Linear issue $task using the Linear MCP (get_issue tool). Get the git branch name from the issue. Then:
+            init_prompt="Fetch Linear issue $task using the Linear MCP (get_issue tool). Get the git branch name from the issue. Also fetch the issue comments (list_comments tool) to check for discussion, decisions, or additional context. Then:
 1. Run: git fetch origin
 2. If the branch already exists locally, delete it: git branch -D <branch_name> (ignore errors)
 3. Create a worktree from fresh main: git worktree add .tasks/$task -b <branch_name> origin/main
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
-5. Fill in the TASK_NOTES.md Context section with the issue details (title, description, acceptance criteria, priority).
+5. Fill in the TASK_NOTES.md Context section with the issue details (title, description, acceptance criteria, priority). If there are comments, include a summary of relevant decisions or clarifications.
 6. Then start working from the .tasks/$task/ directory.
 
 Source URL: $task_url"
