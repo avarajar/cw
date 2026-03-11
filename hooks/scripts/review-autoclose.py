@@ -77,7 +77,11 @@ def main():
     stdout = tool_response.get("stdout", "")
     interrupted = tool_response.get("interrupted", False)
 
-    if interrupted or (not stdout and stderr):
+    # gh pr review outputs its success message to stderr (e.g. "✓ Approved pull request #334")
+    # so we can't treat stderr-only output as failure. Instead, only bail if interrupted
+    # or if stderr looks like an actual error (no success indicator and no stdout).
+    has_error = stderr and "error" in stderr.lower() and not stdout
+    if interrupted or has_error:
         sys.exit(0)
 
     # ── Close the review session (same as cw review --done) ──────────
