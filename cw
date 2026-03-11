@@ -572,6 +572,17 @@ with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
     local is_new=true
     [[ -f "$session_meta" ]] && is_new=false
 
+    # If session exists but is done, reset it for a fresh start
+    if ! $is_new; then
+        local session_status
+        session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
+        if [[ "$session_status" == "done" ]]; then
+            _log "Previous review for PR #${Y}$pr${NC} was closed — starting fresh"
+            rm -f "$session_meta"
+            is_new=true
+        fi
+    fi
+
     if $is_new; then
         _log "New review: ${C}$name${NC} PR #${Y}$pr${NC}"
 
@@ -841,6 +852,17 @@ cmd_work() {
 
     local is_new=true
     [[ -f "$session_meta" ]] && is_new=false
+
+    # If session exists but is done, reset it for a fresh start
+    if ! $is_new; then
+        local session_status
+        session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
+        if [[ "$session_status" == "done" ]]; then
+            _log "Previous session for ${Y}$task${NC} was closed — starting fresh"
+            rm -f "$session_meta"
+            is_new=true
+        fi
+    fi
 
     if $is_new; then
         _log "New task: ${C}$name${NC} task=${Y}$task${NC}"

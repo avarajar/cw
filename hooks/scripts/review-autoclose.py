@@ -17,6 +17,18 @@ import re
 from datetime import datetime, timezone
 
 
+def _debug(msg):
+    """Write debug info to a log file for troubleshooting."""
+    try:
+        cw_home = os.environ.get("CW_HOME", os.path.expanduser("~/.cw"))
+        log_path = os.path.join(cw_home, "review-autoclose.log")
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with open(log_path, "a") as f:
+            f.write(f"{now} {msg}\n")
+    except Exception:
+        pass
+
+
 def main():
     # Only act on review sessions
     task_type = os.environ.get("CW_TASK_TYPE", "")
@@ -26,6 +38,7 @@ def main():
     project = os.environ.get("CW_PROJECT", "")
     task = os.environ.get("CW_TASK", "")  # e.g. "pr-123"
     if not project or not task:
+        _debug(f"SKIP: missing env — project={project!r} task={task!r}")
         sys.exit(0)
 
     # Read hook data from stdin
@@ -34,7 +47,8 @@ def main():
         if not stdin_content:
             sys.exit(0)
         hook_data = json.loads(stdin_content)
-    except (json.JSONDecodeError, Exception):
+    except (json.JSONDecodeError, Exception) as e:
+        _debug(f"SKIP: stdin parse error — {e}")
         sys.exit(0)
 
     # Check the command submitted a review
@@ -44,8 +58,9 @@ def main():
     is_review = False
     review_event = ""
 
-    # Pattern 1: gh api ... /reviews ... event=<EVENT>
+    # Pattern 1: gh api ... /reviews ... event=<EVENT> (with -f or -F flags)
     if "gh api" in command and "reviews" in command:
+        # Match: -f event=APPROVE, -F event=APPROVE, event=APPROVE
         m = re.search(
             r'event[=\s]+["\']?(APPROVE|REQUEST_CHANGES|COMMENT)["\']?',
             command,
@@ -54,6 +69,16 @@ def main():
         if m:
             is_review = True
             review_event = m.group(1).upper()
+        else:
+            # Also match JSON body: "event": "APPROVE" or "event":"APPROVE"
+            m = re.search(
+                r'"event"\s*:\s*"(APPROVE|REQUEST_CHANGES|COMMENT)"',
+                command,
+                re.IGNORECASE,
+            )
+            if m:
+                is_review = True
+                review_event = m.group(1).upper()
 
     # Pattern 2: gh pr review --approve / --request-changes / --comment
     if "gh pr review" in command:
@@ -68,11 +93,19 @@ def main():
             review_event = "COMMENT"
 
     if not is_review:
+        _debug(f"SKIP: not a review command — {command[:200]}")
         sys.exit(0)
+
+    _debug(f"DETECTED: {review_event} for {project} {task}")
 
     # Check that the command succeeded
     # tool_response has: stdout, stderr, interrupted — no exit_code field
     tool_response = hook_data.get("tool_response", {})
+
+    # Guard: tool_response might be a string in some cases
+    if isinstance(tool_response, str):
+        tool_response = {"stdout": tool_response, "stderr": "", "interrupted": False}
+
     stderr = tool_response.get("stderr", "")
     stdout = tool_response.get("stdout", "")
     interrupted = tool_response.get("interrupted", False)
@@ -82,6 +115,7 @@ def main():
     # or if stderr looks like an actual error (no success indicator and no stdout).
     has_error = stderr and "error" in stderr.lower() and not stdout
     if interrupted or has_error:
+        _debug(f"SKIP: command failed — interrupted={interrupted} has_error={has_error} stderr={stderr[:200]}")
         sys.exit(0)
 
     # ── Close the review session (same as cw review --done) ──────────
@@ -100,8 +134,11 @@ def main():
             meta["closed"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             with open(session_meta, "w") as f:
                 json.dump(meta, f, indent=2)
-        except Exception:
-            pass
+            _debug(f"CLOSED: session updated — {session_meta}")
+        except Exception as e:
+            _debug(f"ERROR: failed to update session — {e}")
+    else:
+        _debug(f"WARN: session.json not found at {session_meta}")
 
     # Log to sessions.log
     try:
