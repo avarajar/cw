@@ -1189,7 +1189,7 @@ _arcade_install_hooks_for() {
     local settings="$1" hook_script="$2"
     # Also install CW hooks (review-autoclose, etc.)
     local cw_hooks_dir
-    cw_hooks_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/hooks/scripts"
+    cw_hooks_dir="${CW_HOME:-$HOME/.cw}/hooks/scripts"
     python3 - "$settings" "$hook_script" "$cw_hooks_dir" << 'PYEOF'
 import json, sys, os
 

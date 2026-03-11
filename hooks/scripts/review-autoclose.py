@@ -2,8 +2,10 @@
 """
 CW Review Auto-Close Hook (PostToolUse on Bash)
 ================================================
-Detects when Claude posts an APPROVE review via `gh api` or `gh pr review`
+Detects when Claude posts a review via `gh api` or `gh pr review`
 and automatically closes the review session + tells Claude to stop.
+
+Triggers on any review event: APPROVE, REQUEST_CHANGES, or COMMENT.
 
 Reads CW_PROJECT, CW_TASK, CW_TASK_TYPE from environment (set by cmd_review).
 """
@@ -35,22 +37,37 @@ def main():
     except (json.JSONDecodeError, Exception):
         sys.exit(0)
 
-    # Check the command contained an APPROVE review
+    # Check the command submitted a review
     tool_input = hook_data.get("tool_input", {})
     command = tool_input.get("command", "")
 
-    is_approve = False
+    is_review = False
+    review_event = ""
 
-    # Pattern 1: gh api ... event=APPROVE (inline review via API)
+    # Pattern 1: gh api ... /reviews ... event=<EVENT>
     if "gh api" in command and "reviews" in command:
-        if re.search(r'event[=\s]+["\']?APPROVE["\']?', command, re.IGNORECASE):
-            is_approve = True
+        m = re.search(
+            r'event[=\s]+["\']?(APPROVE|REQUEST_CHANGES|COMMENT)["\']?',
+            command,
+            re.IGNORECASE,
+        )
+        if m:
+            is_review = True
+            review_event = m.group(1).upper()
 
-    # Pattern 2: gh pr review --approve
-    if "gh pr review" in command and "--approve" in command:
-        is_approve = True
+    # Pattern 2: gh pr review --approve / --request-changes / --comment
+    if "gh pr review" in command:
+        if "--approve" in command:
+            is_review = True
+            review_event = "APPROVE"
+        elif "--request-changes" in command:
+            is_review = True
+            review_event = "REQUEST_CHANGES"
+        elif "--comment" in command:
+            is_review = True
+            review_event = "COMMENT"
 
-    if not is_approve:
+    if not is_review:
         sys.exit(0)
 
     # Check that the command succeeded
@@ -75,6 +92,7 @@ def main():
             with open(session_meta) as f:
                 meta = json.load(f)
             meta["status"] = "done"
+            meta["review_event"] = review_event
             meta["closed"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             with open(session_meta, "w") as f:
                 json.dump(meta, f, indent=2)
@@ -90,11 +108,13 @@ def main():
         pass
 
     # Tell Claude to stop — exit code 2 sends stderr as feedback
+    event_label = review_event.replace("_", " ").title()
     print(
-        f"STOP. The review session for {project} PR #{task.replace('pr-', '')} has been automatically closed after APPROVE. "
+        f"STOP. The review session for {project} PR #{task.replace('pr-', '')} "
+        f"has been automatically closed after {event_label}. "
         "The session metadata and logs have been updated. "
         "Do NOT continue working. Say a brief goodbye and stop.",
-        file=sys.stderr
+        file=sys.stderr,
     )
     sys.exit(2)
 
