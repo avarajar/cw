@@ -29,6 +29,10 @@ cw work my-app https://linear.app/team/issue/PROJ-123/fix-auth-flow
 
 CW launches Claude with the correct account, fetches the ticket from Linear, creates a worktree, and starts working — all automatically.
 
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="CW Demo" width="800" />
+</p>
+
 ---
 
 ## Quick Start
@@ -192,7 +196,7 @@ cw work my-app https://linear.app/.../PROJ-123
   → Claude fetches issue via MCP, creates worktree, fills TASK_NOTES.md
 ```
 
-Works with **Linear**, **GitHub**, and **Notion** URLs.
+Works with **Linear**, **GitHub**, and **Notion** URLs — as long as the corresponding MCP connectors are installed in your Claude account (see [MCP Integrations](#mcp-integrations)).
 
 ### Review Skills
 
@@ -254,11 +258,13 @@ CW_CLAUDE_FLAGS="--dangerously-skip-permissions" cw work my-app fix-auth
 
 ### MCP Integrations
 
+> **Note:** URL integrations (Linear, GitHub, Notion) require the corresponding [MCP connectors](https://docs.anthropic.com/en/docs/claude-code/mcp-servers) to be installed in your Claude account. CW doesn't ship with these connectors — it leverages MCPs that are already available in Claude Code's ecosystem. You can install them interactively with the command below, or configure them manually in your Claude account settings.
+
 ```bash
 cw project setup-mcps my-app    # interactive setup for GitHub, Linear, Notion, Slack
 ```
 
-Installs MCPs directly on the project's account. Shows status of already-installed MCPs.
+This installs MCPs directly on the project's account and shows the status of already-installed ones. Once configured, passing a Linear, GitHub, or Notion URL to `cw work` or `cw create` will automatically fetch context from that service.
 
 ## Shell Aliases
 

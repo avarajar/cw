@@ -1,0 +1,189 @@
+#!/bin/bash
+# Mock CW script for demo GIF recording
+# Simulates realistic output without launching Claude
+
+C='\033[0;36m'
+G='\033[0;32m'
+Y='\033[0;33m'
+DIM='\033[2m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+case "$1" in
+  help)
+    echo ""
+    echo -e "${BOLD}CW${NC} — Claude Workspace Manager"
+    echo ""
+    echo -e "  ${C}cw create${NC} <description|URL>       Bootstrap new project"
+    echo -e "  ${C}cw work${NC} <project> <task|URL>      Work on feature/bug in worktree"
+    echo -e "  ${C}cw review${NC} <project> <PR|URL>      Review PR in isolated worktree"
+    echo -e "  ${C}cw open${NC} <project>                 Quick open (no worktree)"
+    echo -e "  ${C}cw spaces${NC}                         Active tasks and reviews"
+    echo -e "  ${C}cw dashboard${NC}                      Full workspace overview"
+    echo -e "  ${C}cw arcade${NC}                         Live activity dashboard"
+    echo ""
+    echo -e "  ${C}cw account${NC} add|list|remove        Manage accounts"
+    echo -e "  ${C}cw project${NC} register|list|info     Manage projects"
+    echo -e "  ${C}cw project setup-mcps${NC} <name>      Configure MCPs"
+    echo ""
+    echo -e "  ${DIM}Aliases: cww (work), cwpr (review), cwsp (spaces), cwo (fuzzy open)${NC}"
+    echo ""
+    ;;
+
+  init)
+    echo ""
+    echo -e "${DIM}  Creating ~/.cw/ directory structure...${NC}"
+    sleep 0.3
+    echo -e "${DIM}  accounts/  sessions/  config.yaml  projects.json${NC}"
+    sleep 0.2
+    echo ""
+    echo -e "${G}✓${NC} CW initialized."
+    echo ""
+    ;;
+
+  account)
+    if [[ "$2" == "add" ]]; then
+      name="$3"
+      echo ""
+      echo -e "${DIM}  Creating account profile ~/.cw/accounts/${name}/...${NC}"
+      sleep 0.3
+      echo -e "${G}✓${NC} Account ${BOLD}${name}${NC} created."
+      echo -e "${DIM}  Run ${NC}${C}cw launch ${name}${NC}${DIM} to authenticate with /login${NC}"
+      echo ""
+    else
+      echo ""
+      echo -e "${BOLD}Accounts${NC}"
+      echo ""
+      echo -e "  ${G}●${NC}  work       ${DIM}~/.cw/accounts/work${NC}"
+      echo -e "  ${G}●${NC}  personal   ${DIM}~/.cw/accounts/personal${NC}"
+      echo ""
+    fi
+    ;;
+
+  project)
+    if [[ "$2" == "register" ]]; then
+      path="$3"
+      # Extract project name from path
+      name=$(basename "$path")
+      # Find --account value
+      account=""
+      shift 3
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --account) account="$2"; shift 2 ;;
+          *) shift ;;
+        esac
+      done
+      echo ""
+      echo -e "${DIM}  Registering project...${NC}"
+      sleep 0.3
+      echo -e "${G}✓${NC} Project ${BOLD}${name}${NC} registered."
+      echo -e "  ${DIM}Path:    ${path}${NC}"
+      echo -e "  ${DIM}Account: ${account:-default}${NC}"
+      echo ""
+    elif [[ "$2" == "list" ]]; then
+      echo ""
+      echo -e "${BOLD}Projects${NC}"
+      echo ""
+      echo -e "  ${C}noteflow${NC}        ~/code/noteflow          ${DIM}account: work${NC}"
+      echo -e "  ${C}api-gateway${NC}     ~/code/api-gateway       ${DIM}account: work${NC}"
+      echo -e "  ${C}dotfiles${NC}        ~/code/dotfiles          ${DIM}account: personal${NC}"
+      echo ""
+    fi
+    ;;
+
+  work)
+    project="$2"
+    task="$3"
+    echo ""
+    echo -e "${C}▸${NC} Project:  ${BOLD}${project}${NC} ${DIM}(account: work)${NC}"
+    echo -e "${C}▸${NC} Task:     ${BOLD}${task}${NC}"
+
+    if [[ "$task" == *"linear.app"* ]]; then
+      echo -e "${C}▸${NC} Source:   Linear issue ${BOLD}AUTH-247${NC}"
+      echo -e "${C}▸${NC} Branch:   ${BOLD}feat/auth-247-fix-oauth-flow${NC}"
+    else
+      echo -e "${C}▸${NC} Branch:   ${BOLD}feat/${task}${NC}"
+    fi
+
+    echo ""
+    echo -e "${DIM}  Creating worktree .tasks/${task}...${NC}"
+    sleep 0.5
+    echo -e "${DIM}  Session created ~/.cw/sessions/${project}/task-${task}/${NC}"
+    sleep 0.3
+    echo -e "${DIM}  TASK_NOTES.md → symlinked${NC}"
+    sleep 0.3
+    echo ""
+    echo -e "${G}✓${NC} Ready. Launching Claude Code..."
+    echo ""
+    ;;
+
+  review)
+    project="$2"
+    pr="$3"
+
+    if [[ "$4" == "--done" ]]; then
+      echo ""
+      echo -e "${DIM}  Closing review session...${NC}"
+      sleep 0.3
+      echo -e "${DIM}  Removing worktree .reviews/pr-${pr}/${NC}"
+      sleep 0.3
+      echo -e "${G}✓${NC} Review pr-${pr} closed."
+      echo ""
+      return 0 2>/dev/null || exit 0
+    fi
+
+    echo ""
+    echo -e "${C}▸${NC} Project:  ${BOLD}${project}${NC} ${DIM}(account: work)${NC}"
+    echo -e "${C}▸${NC} PR:       ${BOLD}#${pr}${NC} — ${BOLD}Add rate limiting to auth endpoints${NC}"
+    echo -e "${C}▸${NC} Branch:   ${BOLD}feat/rate-limit-auth${NC}"
+    echo ""
+    echo -e "${DIM}  Creating worktree .reviews/pr-${pr}...${NC}"
+    sleep 0.5
+    echo -e "${DIM}  Review skill: .claude/skills/code-review/SKILL.md${NC}"
+    sleep 0.3
+    echo ""
+    echo -e "${G}✓${NC} Ready. Launching Claude Code with review skill..."
+    echo ""
+    ;;
+
+  spaces)
+    echo ""
+    echo -e "${BOLD}Active Spaces${NC}"
+    echo ""
+    echo -e "  ${BOLD}noteflow${NC} ${DIM}(work)${NC}"
+    echo -e "    ${G}▸${NC} task   ${C}add-search${NC}             ${DIM}opened 2x  •  created 2h ago${NC}"
+    echo -e "    ${G}▸${NC} task   ${C}AUTH-247${NC}               ${DIM}opened 1x  •  created 5m ago${NC}"
+    echo -e "    ${Y}▸${NC} review ${C}pr-42${NC}                 ${DIM}opened 1x  •  created 1m ago${NC}"
+    echo ""
+    echo -e "  ${BOLD}api-gateway${NC} ${DIM}(work)${NC}"
+    echo -e "    ${G}▸${NC} task   ${C}fix-cors${NC}               ${DIM}opened 3x  •  created 1d ago${NC}"
+    echo ""
+    echo -e "${DIM}  4 active spaces across 2 projects${NC}"
+    echo ""
+    ;;
+
+  create)
+    shift
+    desc="$*"
+    echo ""
+    echo -e "${C}▸${NC} Creating project from: ${BOLD}${desc}${NC}"
+    echo -e "${C}▸${NC} Account: ${BOLD}personal${NC}"
+    echo ""
+    echo -e "${DIM}  Creating directory ~/code/habit-tracker...${NC}"
+    sleep 0.5
+    echo -e "${DIM}  Initializing git repository...${NC}"
+    sleep 0.3
+    echo -e "${DIM}  Registering project in CW...${NC}"
+    sleep 0.3
+    echo -e "${DIM}  Generating CLAUDE.md from template...${NC}"
+    sleep 0.3
+    echo ""
+    echo -e "${G}✓${NC} Project ${BOLD}habit-tracker${NC} created. Launching Claude Code..."
+    echo ""
+    ;;
+
+  *)
+    echo "cw: unknown command '$1'"
+    ;;
+esac
