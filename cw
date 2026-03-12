@@ -875,8 +875,9 @@ cmd_work() {
 2. If the branch already exists locally, delete it: git branch -D <branch_name> (ignore errors)
 3. Create a worktree from fresh main: git worktree add .tasks/$task -b <branch_name> origin/main
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
-5. Fill in the TASK_NOTES.md Context section with the issue details (title, description, acceptance criteria, priority). If there are comments, include a summary of relevant decisions or clarifications.
-6. Then start working from the .tasks/$task/ directory.
+5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
+6. Fill in the TASK_NOTES.md Context section with the issue details (title, description, acceptance criteria, priority). If there are comments, include a summary of relevant decisions or clarifications.
+7. Then start working from the .tasks/$task/ directory.
 
 Source URL: $task_url"
         elif [[ "$task_source" == "notion" ]]; then
@@ -886,8 +887,9 @@ Then:
 2. If branch task/$task exists locally, delete it: git branch -D task/$task (ignore errors)
 3. Create a worktree from fresh main: git worktree add .tasks/$task -b task/$task origin/main
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
-5. Fill in the TASK_NOTES.md Context section with the page content.
-6. Then start working from the .tasks/$task/ directory."
+5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
+6. Fill in the TASK_NOTES.md Context section with the page content.
+7. Then start working from the .tasks/$task/ directory."
         elif [[ "$task_source" == "github" ]]; then
             init_prompt="Fetch this GitHub issue/PR using the GitHub MCP: $task_url
 Get the branch name if it is a PR. Then:
@@ -895,8 +897,9 @@ Get the branch name if it is a PR. Then:
 2. If the branch already exists locally, delete it: git branch -D <branch_name> (ignore errors)
 3. Create a worktree from fresh main: git worktree add .tasks/$task -b <branch_name_or_task/$task> origin/main
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
-5. Fill in the TASK_NOTES.md Context section.
-6. Then start working from the .tasks/$task/ directory."
+5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
+6. Fill in the TASK_NOTES.md Context section.
+7. Then start working from the .tasks/$task/ directory."
         else
             # No URL — just a branch/task name
             init_prompt="Set up the workspace:
@@ -904,8 +907,9 @@ Get the branch name if it is a PR. Then:
 2. If branch $task exists locally, delete it: git branch -D $task (ignore errors)
 3. Create a worktree from fresh main: git worktree add .tasks/$task -b $task origin/main
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
-5. If there is a TASK_NOTES.md in .tasks/$task/, read it for context.
-6. Then start working from the .tasks/$task/ directory."
+5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
+6. If there is a TASK_NOTES.md in .tasks/$task/, read it for context.
+7. Then start working from the .tasks/$task/ directory."
         fi
 
         # Create notes file in session dir
