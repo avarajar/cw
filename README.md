@@ -6,9 +6,15 @@
     Multi-project orchestrator for <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a>
   </p>
   <p align="center">
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>
+    <a href="#requirements"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg" alt="Platform" /></a>
+    <a href="#requirements"><img src="https://img.shields.io/badge/bash-4%2B-green.svg" alt="Bash" /></a>
+  </p>
+  <p align="center">
     <a href="#quick-start">Quick Start</a> &middot;
+    <a href="#core-commands">Commands</a> &middot;
     <a href="#how-it-works">How It Works</a> &middot;
-    <a href="docs/commands.md">Commands</a> &middot;
+    <a href="docs/commands.md">Full Reference</a> &middot;
     <a href="docs/architecture.md">Architecture</a>
   </p>
 </p>
@@ -24,25 +30,6 @@ cw work my-app https://linear.app/team/issue/PROJ-123/fix-auth-flow
 CW launches Claude with the correct account, fetches the ticket from Linear, creates a worktree, and starts working — all automatically.
 
 ---
-
-## The Problem
-
-Working with Claude Code across multiple projects means:
-
-- Juggling `CLAUDE_CONFIG_DIR` for every project
-- Losing context when conversations expire
-- Branch conflicts when reviewing PRs while coding
-- Copy-pasting ticket descriptions into Claude manually
-
-## The Solution
-
-```
-cw create "Task management SaaS" --team  →  new project + agent teams build it
-cw work my-app PROJ-123                  →  worktree + Linear context + right account
-cw review my-app 42                      →  isolated PR review with auto-start
-cw work my-app PROJ-123                  →  resume exactly where you left off
-cw work my-app PROJ-123 --done           →  cleanup worktree, archive session
-```
 
 ## Quick Start
 
@@ -60,9 +47,23 @@ cw project register ~/code/my-app --account work
 cw work my-app fix-auth
 ```
 
+## Why CW?
+
+Working with Claude Code across multiple projects means juggling `CLAUDE_CONFIG_DIR` for every project, losing context when conversations expire, dealing with branch conflicts when reviewing PRs while coding, and copy-pasting ticket descriptions manually.
+
+CW solves all of that:
+
+```
+cw create "Task management SaaS" --team  →  new project + agent teams build it
+cw work my-app PROJ-123                  →  worktree + Linear context + right account
+cw review my-app 42                      →  isolated PR review with auto-start
+cw work my-app PROJ-123                  →  resume exactly where you left off
+cw work my-app PROJ-123 --done           →  cleanup worktree, archive session
+```
+
 ## Core Commands
 
-### Create
+### Create — Bootstrap a Project
 
 ```bash
 cw create "Inventory management app with Next.js and Supabase"
@@ -72,9 +73,9 @@ cw create "API gateway" --team "backend, infra, tests"          # custom team ro
 cw create https://notion.so/team/Project-Spec --account work    # from Notion spec
 ```
 
-Bootstraps a new project from a description or URL. Creates the directory, initializes git, registers the project in CW, and launches Claude to build it. When done, Claude asks which GitHub account/org to push to.
+Creates the directory, initializes git, registers the project, and launches Claude to build it. When done, Claude asks which GitHub account/org to push to.
 
-### Work
+### Work — Tasks in Isolated Worktrees
 
 ```bash
 cw work my-app fix-auth                                # branch name
@@ -87,18 +88,20 @@ cw work my-app fix-auth                                # resume
 cw work my-app fix-auth --done                         # close + cleanup
 ```
 
-Creates an isolated worktree, tracks the session, fetches context from URLs via MCP, and launches Claude.
+Creates an isolated worktree, tracks the session, fetches context from URLs via MCP, and launches Claude. Resuming picks up exactly where you left off.
 
-### Agent Teams
+### Agent Teams — Parallel Work (Experimental)
 
 ```bash
 cw work my-app big-feature --team                              # auto-split work
 cw work my-app big-feature --team "backend, frontend, tests"   # specify teammates
 ```
 
-Enables Claude Code's experimental [agent teams](https://code.claude.com/docs/en/agent-teams) for parallel work within a single session. Multiple teammates work on different parts of the task simultaneously, coordinating through a shared task list. The arcade dashboard shows each teammate's activity in real-time.
+Leverages Claude Code's [agent teams](https://code.claude.com/docs/en/agent-teams) for parallel work. Multiple teammates tackle different parts of the task simultaneously, coordinating through a shared task list. The arcade dashboard shows each teammate's activity in real-time.
 
-### Review
+> `cw create` also supports `--team` for bootstrapping new projects with agent teams.
+
+### Review — PR Reviews
 
 ```bash
 cw review my-app 123                                   # by PR number
@@ -107,7 +110,7 @@ cw review my-app 123                                   # re-review (checks resol
 cw review my-app 123 --done                            # close
 ```
 
-First review runs your project's review skill automatically. Follow-up reviews check if requested changes were addressed.
+First review runs your project's review skill automatically. Follow-up reviews check if requested changes were addressed. Sessions auto-close when Claude submits the review.
 
 ### Quick Access
 
@@ -117,20 +120,9 @@ cw spaces               # list all active tasks and reviews
 cw dashboard            # full workspace overview
 ```
 
-### Arcade (Live Dashboard)
-
-```bash
-cw arcade --setup       # install activity hooks (once)
-cw arcade               # launch live dashboard in browser
-```
-
-Real-time visual dashboard that shows all your Claude Code sessions, tool usage, and agent activity across accounts. Uses Server-Sent Events to stream activity as it happens — no polling.
-
-The `--setup` command installs Claude Code hooks in all your accounts. New accounts created with `cw account add` auto-inherit the hooks.
-
 ## Multi-Account Routing
 
-Each project maps to a Claude account. CW handles the rest.
+Each project maps to a Claude account. CW handles the routing automatically.
 
 ```bash
 cw account add work
@@ -142,6 +134,21 @@ cw project register ~/code/side-project --account personal
 cw work company-app feat-x      # → work account
 cw work side-project feat-y     # → personal account
 ```
+
+## Arcade — Live Dashboard
+
+```bash
+cw arcade --setup       # install activity hooks (once)
+cw arcade               # launch live dashboard in browser
+```
+
+Real-time visual dashboard showing all Claude Code sessions, tool usage, and agent activity across accounts. Uses Server-Sent Events to stream activity as it happens — no polling.
+
+The `--setup` command installs Claude Code hooks in all your accounts. New accounts created with `cw account add` auto-inherit the hooks.
+
+<!-- If you have a screenshot of the arcade dashboard, add it here:
+![Arcade Dashboard](docs/assets/arcade-screenshot.png)
+-->
 
 ## How It Works
 
@@ -174,7 +181,7 @@ Context survives conversation loss. Notes and metadata live in `~/.cw/sessions/`
     └── REVIEW_NOTES.md
 ```
 
-When you resume, Claude uses `--continue`. If the conversation is lost, the notes file preserves context.
+When you resume, Claude uses `--continue`. If the conversation is lost, the notes file preserves context so you can pick up where you left off.
 
 ### URL → Context
 
@@ -215,7 +222,7 @@ cd cw
 ./install.sh
 ```
 
-The installer adds shell integration to `.zshrc` / `.bashrc` with tab completion and aliases.
+The installer copies CW to `~/.cw/bin/`, installs hooks, agents, and templates, and adds shell integration to `.zshrc` / `.bashrc` with tab completion and aliases.
 
 ## Configuration
 
@@ -268,23 +275,11 @@ After installation, these aliases are available:
 | `cwo` | Fuzzy project opener (requires `fzf`) |
 | `cc` | `cw launch` |
 
-## Team Setup
-
-CW is shared. Personal data stays local.
-
-| Shared (this repo) | Personal (`~/.cw/`) |
-|---------------------|---------------------|
-| `cw`, `install.sh` | `accounts/` |
-| `cw-shell-integration.sh` | `projects.json` |
-| `templates/`, `docs/` | `sessions/` |
-
-Each member clones the repo, runs `install.sh`, registers their own projects. Paths don't need to match.
-
 ## Integrations
 
 ### GSD — Get Shit Done
 
-[GSD](https://github.com/gsd-build/get-shit-done) is a meta-prompting workflow for Claude Code. It installs slash commands and context files (`PROJECT.md`, `ROADMAP.md`, `STATE.md`) that guide Claude through Discuss → Plan → Execute → Verify phases.
+[GSD](https://github.com/gsd-build/get-shit-done) is a meta-prompting workflow for Claude Code. It installs slash commands and context files (`PROJECT.md`, `ROADMAP.md`, `STATE.md`) that guide Claude through structured Discuss → Plan → Execute → Verify phases.
 
 ```bash
 cw gsd:init [path]   # initialize GSD in a worktree (default: current directory)
@@ -307,33 +302,71 @@ Bundled in this repo and installed automatically by `install.sh`:
 | `hooks/config/hooks-config.json` | `~/.cw/hooks/` | Hook event configuration |
 | `hooks/sounds/` | `~/.cw/hooks/` | Sound effects for Claude Code events |
 
----
+## Multi-User Setup
+
+CW is designed to be shared across a team. The repo contains the tool itself; personal data stays local.
+
+| Shared (this repo) | Personal (`~/.cw/`) |
+|---------------------|---------------------|
+| `cw`, `install.sh` | `accounts/` |
+| `cw-shell-integration.sh` | `projects.json` |
+| `templates/`, `docs/` | `sessions/` |
+
+Each team member clones the repo, runs `install.sh`, and registers their own projects. Paths don't need to match across machines.
+
+## FAQ
+
+**What happens if my Claude conversation expires?**
+Session notes (`TASK_NOTES.md` / `REVIEW_NOTES.md`) persist in `~/.cw/sessions/` and are symlinked into the worktree. When you resume with `cw work`, Claude reads the notes to restore context.
+
+**Can I use multiple accounts on the same project?**
+Each project is mapped to one account. To switch, re-register the project with a different `--account` flag.
+
+**Do I need Linear/GitHub/Notion to use CW?**
+No. You can use plain branch names (`cw work my-app fix-auth`). URL integration is optional and requires the corresponding MCP to be set up via `cw project setup-mcps`.
+
+**How do I remove a task worktree?**
+`cw work my-app task-name --done` closes the session and cleans up the worktree.
 
 ## All Commands
 
 | Command | Description |
 |---------|-------------|
+| `cw init` | Initialize CW directory structure |
 | `cw create "<description>"` | Bootstrap new project from scratch |
-| `cw work <project> <task\|URL>` | Work on feature/bug |
-| `cw work <project> <task> --team` | Work with agent team |
-| `cw work <project> <task> --done` | Close task, cleanup |
-| `cw review <project> <PR\|URL>` | Review PR |
+| `cw work <project> <task\|URL>` | Work on feature/bug in isolated worktree |
+| `cw work <project> <task> --team` | Work with agent teams |
+| `cw work <project> <task> --done` | Close task, cleanup worktree |
+| `cw review <project> <PR\|URL>` | Review PR in isolated worktree |
 | `cw review <project> <PR> --done` | Close review |
 | `cw open <project>` | Quick open (no worktree) |
-| `cw spaces` | Active spaces |
-| `cw dashboard` | Full overview |
+| `cw spaces` | List active tasks and reviews |
+| `cw dashboard` | Full workspace overview |
 | `cw arcade` | Live activity dashboard |
 | `cw arcade --setup` | Install activity hooks |
 | `cw account add\|list\|remove` | Manage accounts |
 | `cw project register\|list\|info` | Manage projects |
-| `cw project setup-mcps <name>` | Configure MCPs |
-| `cw project setup-agents <name>` | Install agents |
-| `cw gsd:init [path]` | Initialize GSD workflow in a worktree |
+| `cw project setup-mcps <name>` | Configure MCPs for a project |
+| `cw project setup-agents <name>` | Install agents for a project |
+| `cw launch <account>` | Launch Claude with specific account |
+| `cw status` | Quick status overview |
+| `cw gsd:init [path]` | Initialize GSD workflow |
 | `cw gsd:sync` | Initialize GSD in all active worktrees |
 | `cw --skip-permissions <cmd>` | Skip permission prompts |
 | `cw version` | Show version |
 | `cw help` | Full help |
 
+## Contributing
+
+Issues and PRs welcome. CW is a single Bash script — changes are straightforward to test:
+
+```bash
+chmod +x cw && ./cw help    # test locally
+./install.sh                 # install to test full flow
+```
+
+See [architecture.md](docs/architecture.md) for how the codebase is structured.
+
 ## License
 
-MIT
+[MIT](LICENSE)
