@@ -119,5 +119,7 @@ if [[ -n "${ZSH_VERSION:-}" ]]; then
                 esac ;;
         esac
     }
-    compdef _cw_comp_zsh cw
+    if (( $+functions[compdef] )); then
+        compdef _cw_comp_zsh cw
+    fi
 fi
