@@ -165,11 +165,15 @@ YAML
 
     _log "${G}✓${NC} Initialized at ${C}$CW_HOME${NC}"
     echo ""
-    echo -e "  ${C}cw account add work${NC}              — Create work account"
-    echo -e "  ${C}cw account add personal${NC}           — Create personal account"
-    echo -e "  ${C}cw project register <path>${NC}        — Register project"
-    echo -e "  ${C}cw open <project> -m code${NC}        — Open workspace"
-    echo -e "  ${C}cw dashboard${NC}                      — Overview"
+    echo -e "  ${BOLD}Next steps:${NC}"
+    echo -e "  ${Y}1.${NC} ${C}cw account add work${NC}              — Create account"
+    echo -e "  ${Y}2.${NC} ${C}CLAUDE_CONFIG_DIR=~/.cw/accounts/work claude /login${NC}"
+    echo -e "                                        — Authenticate"
+    echo -e "  ${Y}3.${NC} ${C}cw project register --account work${NC}"
+    echo -e "                                        — Register project (from project dir)"
+    echo -e "  ${Y}4.${NC} ${C}cw open <project>${NC}                — Open workspace"
+    echo ""
+    echo -e "  ${DIM}Or use ${C}cw launch work${NC}${DIM} to chat with Claude without a project${NC}"
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -194,8 +198,18 @@ cmd_account() {
                 fi
             fi
 
-            _log "Account ${C}$name${NC} created. Authenticate:"
-            echo -e "\n  ${BOLD}CLAUDE_CONFIG_DIR=$dir claude /login${NC}\n"
+            _log "Account ${C}$name${NC} created."
+            echo ""
+            echo -e "  ${BOLD}Next steps:${NC}"
+            echo -e "  ${Y}1.${NC} Authenticate this account:"
+            echo -e "     ${BOLD}CLAUDE_CONFIG_DIR=$dir claude /login${NC}"
+            echo ""
+            echo -e "  ${Y}2.${NC} Register a project:"
+            echo -e "     ${C}cw project register <path> --account $name${NC}"
+            echo -e "     ${DIM}(or cd into a repo and run: cw project register --account $name)${NC}"
+            echo ""
+            echo -e "  ${DIM}Tip: Use ${C}cw launch $name${NC}${DIM} to open Claude with this account without registering a project${NC}"
+            echo ""
             ;;
         list|ls)
             echo -e "\n${BOLD}Accounts${NC}"
@@ -233,18 +247,35 @@ cmd_project() {
 }
 
 _project_register() {
-    local path="${1:?Usage: cw project register <path> [--account X] [--type X]}"; shift
-    path=$(realpath "$path" 2>/dev/null || echo "$path")
+    local path="" alias_name=""
     local account; account=$(_default_account)
     local ptype="fullstack"
+
+    # Parse all args — path is the first positional (optional, defaults to cwd)
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --account|-a) account="$2"; shift 2 ;;
             --type|-t)    ptype="$2"; shift 2 ;;
-            *) shift ;;
+            --alias)      alias_name="$2"; shift 2 ;;
+            -*)           shift ;;
+            *)
+                if [[ -z "$path" ]]; then
+                    path="$1"
+                fi
+                shift ;;
         esac
     done
-    local name; name=$(basename "$path")
+
+    # Default to current directory if no path given
+    if [[ -z "$path" ]]; then
+        path="$(pwd)"
+        _log "Using current directory: ${C}$path${NC}"
+    fi
+
+    path=$(realpath "$path" 2>/dev/null || echo "$path")
+    [[ -d "$path" ]] || { _err "Directory does not exist: $path"; return 1; }
+
+    local name="${alias_name:-$(basename "$path")}"
 
     python3 -c "
 import json
@@ -778,19 +809,20 @@ If I say 'none', do not post. If I say 'edit', let me modify the findings before
 # WORK — Feature/bugfix with worktree + persistent session
 # ════════════════════════════════════════════════════════════════════════════
 cmd_work() {
-    local name="" task="" done_flag=false list_flag=false team_flag=false team_prompt=""
+    local name="" task="" done_flag=false list_flag=false team_flag=false team_prompt="" base_branch=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --task|-t)   task="$2"; shift 2 ;;
             --done)      done_flag=true; shift ;;
             --list)      list_flag=true; shift ;;
+            --base|-b)   base_branch="$2"; shift 2 ;;
             --team)      team_flag=true; shift
                          # Capture optional team prompt (rest of args in quotes)
                          if [[ $# -gt 0 && "$1" != -* ]]; then
                              team_prompt="$1"; shift
                          fi ;;
             -*)          shift ;;
-            *)           
+            *)
                 if [[ -z "$name" ]]; then
                     name="$1"
                 elif [[ -z "$task" ]]; then
@@ -841,6 +873,15 @@ cmd_work() {
     local wt_dir="$path/.tasks/$task"
     local notes_file="$session_dir/TASK_NOTES.md"
 
+    # Resolve base branch: --base flag > detect default branch from remote
+    if [[ -z "$base_branch" ]]; then
+        base_branch=$(cd "$path" && git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/||') || true
+        [[ -z "$base_branch" ]] && base_branch="origin/main"
+    else
+        # Ensure it has origin/ prefix if user passed just a branch name
+        [[ "$base_branch" != origin/* ]] && base_branch="origin/$base_branch"
+    fi
+
     # ── Done ────────────────────────────────────────────────────────────
     if $done_flag; then
         _space_done "$name" "$task" "task" "$path" "$wt_dir" "$session_dir"
@@ -873,7 +914,7 @@ cmd_work() {
             init_prompt="Fetch Linear issue $task using the Linear MCP (get_issue tool). Get the git branch name from the issue. Also fetch the issue comments (list_comments tool) to check for discussion, decisions, or additional context. Then:
 1. Run: git fetch origin
 2. If the branch already exists locally, delete it: git branch -D <branch_name> (ignore errors)
-3. Create a worktree from fresh main: git worktree add .tasks/$task -b <branch_name> origin/main
+3. Create a worktree from $base_branch: git worktree add .tasks/$task -b <branch_name> $base_branch
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
 6. Fill in the TASK_NOTES.md Context section with the issue details (title, description, acceptance criteria, priority). If there are comments, include a summary of relevant decisions or clarifications.
@@ -885,7 +926,7 @@ Source URL: $task_url"
 Then:
 1. Run: git fetch origin
 2. If branch task/$task exists locally, delete it: git branch -D task/$task (ignore errors)
-3. Create a worktree from fresh main: git worktree add .tasks/$task -b task/$task origin/main
+3. Create a worktree from $base_branch: git worktree add .tasks/$task -b task/$task $base_branch
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
 6. Fill in the TASK_NOTES.md Context section with the page content.
@@ -895,7 +936,7 @@ Then:
 Get the branch name if it is a PR. Then:
 1. Run: git fetch origin
 2. If the branch already exists locally, delete it: git branch -D <branch_name> (ignore errors)
-3. Create a worktree from fresh main: git worktree add .tasks/$task -b <branch_name_or_task/$task> origin/main
+3. Create a worktree from $base_branch: git worktree add .tasks/$task -b <branch_name_or_task/$task> $base_branch
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
 6. Fill in the TASK_NOTES.md Context section.
@@ -905,7 +946,7 @@ Get the branch name if it is a PR. Then:
             init_prompt="Set up the workspace:
 1. Run: git fetch origin
 2. If branch $task exists locally, delete it: git branch -D $task (ignore errors)
-3. Create a worktree from fresh main: git worktree add .tasks/$task -b $task origin/main
+3. Create a worktree from $base_branch: git worktree add .tasks/$task -b $task $base_branch
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
 6. If there is a TASK_NOTES.md in .tasks/$task/, read it for context.
@@ -1333,8 +1374,32 @@ cmd_dashboard() {
     echo -e "\n${BOLD}Workspace${NC}  ${DIM}$ws${NC}\n"
 
     if [[ ! -d "$ws" ]]; then
-        echo -e "  ${Y}Not found: $ws${NC}\n"
-        return
+        echo -e "  ${Y}Workspace directory not found: $ws${NC}"
+        echo ""
+        if [[ -z "${CW_WORKSPACE:-}" ]]; then
+            echo -e "  ${BOLD}Set your workspace folder:${NC}"
+            read -rp "  Path to your projects folder (e.g. ~/Documents): " ws_input
+            if [[ -n "$ws_input" ]]; then
+                # Expand ~ manually
+                ws_input="${ws_input/#\~/$HOME}"
+                if [[ -d "$ws_input" ]]; then
+                    ws="$ws_input"
+                    echo ""
+                    echo -e "  ${G}✓${NC} Using: ${C}$ws${NC}"
+                    echo -e "  ${DIM}To make this permanent, add to your shell rc:${NC}"
+                    echo -e "  ${C}echo 'export CW_WORKSPACE=\"$ws\"' >> ~/.zshrc && source ~/.zshrc${NC}"
+                    echo ""
+                else
+                    _err "Directory does not exist: $ws_input"
+                    return
+                fi
+            else
+                return
+            fi
+        else
+            echo -e "  ${DIM}Check your CW_WORKSPACE env variable.${NC}\n"
+            return
+        fi
     fi
 
     # Show organized groups first (monoku/, meridian/, personal/)
@@ -1996,11 +2061,13 @@ ${BOLD}MAIN COMMANDS${NC}
     --dir, -d <path>                  Base directory (default: ~/workspace)
     --team ["<prompt>"]               Use agent teams for parallel build
   work <project> <task>               Work on feature/bug (worktree + session)
+    --base, -b <branch>              Base branch for worktree (default: auto-detect)
   work <project> <task> --team        Launch with agent team (parallel work)
   work <project> <url>                Work from Linear/Notion/GitHub URL
   review <project> <PR>               Review PR (persistent session)
   review <project> <url>              Review from GitHub PR URL
   open <project>                      Open project quick (no worktree)
+  launch [account]                    Open Claude with account (no project needed)
   spaces                              Show active spaces
 
 ${BOLD}MANAGE${NC}
@@ -2012,9 +2079,10 @@ ${BOLD}SETUP${NC}
   account add <name>                  Create account profile
   account list                        List accounts
   account remove <name>               Remove account
-  project register <path> [opts]      Register project
+  project register [path] [opts]       Register project (path defaults to cwd)
     --account, -a <account>
     --type, -t <type>                 fullstack | api | knowledge | infra | agents
+    --alias <name>                    Custom name (default: folder name)
   project remove <name>               Unregister project (keeps files)
   project list                        List projects
   project setup-mcps <name>           Configure GitHub/Linear/Notion/Slack

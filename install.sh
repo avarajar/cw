@@ -130,7 +130,19 @@ setup_shell() {
     local shell_line='[[ -f "$HOME/.cw/cw-shell-integration.sh" ]] && source "$HOME/.cw/cw-shell-integration.sh"'
     local added=false
 
-    for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+    # Detect the user's actual shell
+    local user_shell
+    user_shell=$(basename "${SHELL:-/bin/zsh}")
+
+    # Prioritize the active shell's rc file
+    local rc_files=()
+    if [[ "$user_shell" == "zsh" ]]; then
+        rc_files=("$HOME/.zshrc" "$HOME/.bashrc")
+    else
+        rc_files=("$HOME/.bashrc" "$HOME/.zshrc")
+    fi
+
+    for rc in "${rc_files[@]}"; do
         if [[ -f "$rc" ]]; then
             if ! grep -q "cw-shell-integration" "$rc" 2>/dev/null; then
                 echo "" >> "$rc"
@@ -145,9 +157,21 @@ setup_shell() {
         fi
     done
 
+    # If no rc file exists for the active shell, create it
     if ! $added; then
-        warn "Could not detect shell rc file. Add manually:"
-        echo "  $shell_line"
+        local target_rc="$HOME/.${user_shell}rc"
+        echo "" >> "$target_rc"
+        echo "# CW — Claude Workspace Manager" >> "$target_rc"
+        echo "$shell_line" >> "$target_rc"
+        ok "Created and added to $target_rc"
+        added=true
+    fi
+
+    # Verify PATH will work after sourcing
+    if ! echo "$PATH" | tr ':' '\n' | grep -q "$CW_HOME/bin"; then
+        echo ""
+        warn "PATH does not include ${C}$CW_HOME/bin${NC} yet."
+        echo -e "  Run: ${C}source ~/.${user_shell}rc${NC}  or restart your terminal."
     fi
 }
 
