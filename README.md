@@ -92,7 +92,7 @@ cw work my-app fix-auth                                # resume
 cw work my-app fix-auth --done                         # close + cleanup
 ```
 
-Creates an isolated worktree, tracks the session, fetches context from URLs via MCP, and launches Claude. Resuming picks up exactly where you left off.
+Creates an isolated worktree, tracks the session, fetches context from URLs via MCP, and launches Claude. `.env` files from the project root are automatically symlinked into worktrees. Resuming picks up exactly where you left off.
 
 ### Agent Teams — Parallel Work (Experimental)
 
@@ -115,6 +115,17 @@ cw review my-app 123 --done                            # close
 ```
 
 First review runs your project's review skill automatically. Follow-up reviews check if requested changes were addressed. Sessions auto-close when Claude submits the review.
+
+### Clean — Remove Stale Spaces
+
+```bash
+cw clean                # detect and remove stale worktrees/sessions
+cw clean --dry-run      # preview what would be removed
+cw clean --days 14      # set custom inactivity threshold
+cw clean --force        # skip confirmation prompt
+```
+
+Finds worktrees and sessions that have been inactive beyond a threshold and cleans them up. `.env` files are automatically symlinked into worktrees on task creation, so environment variables are always available.
 
 ### Quick Access
 
@@ -193,10 +204,10 @@ When you resume, Claude uses `--continue`. If the conversation is lost, the note
 cw work my-app https://linear.app/.../PROJ-123
   → Parse URL, detect Linear, extract PROJ-123
   → Launch Claude with init prompt
-  → Claude fetches issue via MCP, creates worktree, fills TASK_NOTES.md
+  → Claude fetches issue + comments via MCP, creates worktree, fills TASK_NOTES.md
 ```
 
-Works with **Linear**, **GitHub**, and **Notion** URLs — as long as the corresponding MCP connectors are installed in your Claude account (see [MCP Integrations](#mcp-integrations)).
+Works with **Linear**, **GitHub**, and **Notion** URLs — as long as the corresponding MCP connectors are installed in your Claude account (see [MCP Integrations](#mcp-integrations)). Linear issues include comments for additional context.
 
 ### Review Skills
 
@@ -356,6 +367,9 @@ No. You can use plain branch names (`cw work my-app fix-auth`). URL integration 
 | `cw project setup-agents <name>` | Install agents for a project |
 | `cw launch <account>` | Launch Claude with specific account |
 | `cw status` | Quick status overview |
+| `cw clean` | Remove stale worktrees and sessions |
+| `cw clean --dry-run` | Preview stale spaces without removing |
+| `cw clean --days <n>` | Set inactivity threshold (days) |
 | `cw gsd:init [path]` | Initialize GSD workflow |
 | `cw gsd:sync` | Initialize GSD in all active worktrees |
 | `cw --skip-permissions <cmd>` | Skip permission prompts |
