@@ -840,6 +840,9 @@ cmd_work() {
     [[ -z "$name" ]] && { _err "Usage: cw work <project> <task>"; return 1; }
     [[ -z "$task" ]] && { _err "Missing task. Usage: cw work $name fix-auth"; return 1; }
 
+    # Nudge about stale worktrees (non-blocking)
+    ! $done_flag && _check_stale_worktrees
+
     # ── Parse URLs → extract task ID + source ───────────────────────────
     local task_url="" task_source="" task_slug="" task_branch=""
     if [[ "$task" == http* ]]; then
@@ -1174,6 +1177,115 @@ with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
 
     _log "${G}$type $id closed${NC}"
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) DONE $name $type=$id" >> "$CW_SESSIONS_LOG"
+}
+
+# ── Stale worktree detection ─────────────────────────────────────────────
+_stale_days_threshold() { echo "${CW_STALE_DAYS:-7}"; }
+
+# Returns stale sessions as lines: project|id|type|worktree|session_dir|days_old
+_find_stale_spaces() {
+    local threshold; threshold=$(_stale_days_threshold)
+    local sessions_dir="$CW_HOME/sessions"
+    [[ -d "$sessions_dir" ]] || return
+
+    local now; now=$(date +%s)
+
+    for proj_dir in "$sessions_dir"/*/; do
+        [[ -d "$proj_dir" ]] || continue
+        local proj; proj=$(basename "$proj_dir")
+
+        for space_dir in "$proj_dir"/*/; do
+            [[ -d "$space_dir" ]] || continue
+            local meta="$space_dir/session.json"
+            [[ -f "$meta" ]] || continue
+
+            python3 -c "
+import json, sys
+from datetime import datetime, timezone
+with open('$meta') as f: m = json.load(f)
+if m.get('status') != 'active': sys.exit(0)
+last = m.get('last_opened', m.get('created', ''))
+if not last: sys.exit(0)
+ts = datetime.fromisoformat(last.replace('Z', '+00:00'))
+age = ($now - int(ts.timestamp())) // 86400
+if age >= $threshold:
+    sid = m.get('task') or m.get('pr', '?')
+    stype = m.get('type', '?')
+    wt = m.get('worktree', '')
+    print(f'$proj|{sid}|{stype}|{wt}|$space_dir|{age}')
+" 2>/dev/null || true
+        done
+    done
+}
+
+# Warn about stale worktrees (called from cmd_work)
+_check_stale_worktrees() {
+    local stale; stale=$(_find_stale_spaces)
+    [[ -z "$stale" ]] && return
+
+    local count; count=$(echo "$stale" | wc -l | tr -d ' ')
+    local threshold; threshold=$(_stale_days_threshold)
+    _warn "${Y}$count${NC} stale space(s) older than ${Y}${threshold}d${NC} — run ${C}cw clean${NC} to review"
+}
+
+# ── Clean command ────────────────────────────────────────────────────────
+cmd_clean() {
+    local dry_run=false force=false days=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run|-n) dry_run=true; shift ;;
+            --force|-f)   force=true; shift ;;
+            --days|-d)    days="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    [[ -n "$days" ]] && export CW_STALE_DAYS="$days"
+
+    local threshold; threshold=$(_stale_days_threshold)
+    _log "Looking for spaces inactive >${Y}${threshold}d${NC}..."
+
+    local stale; stale=$(_find_stale_spaces)
+    if [[ -z "$stale" ]]; then
+        _log "${G}No stale spaces found${NC}"
+        return
+    fi
+
+    echo ""
+    local count=0
+    while IFS='|' read -r proj sid stype wt sdir age; do
+        local label="$stype: $sid"
+        local wt_exists="yes"
+        [[ -d "$wt" ]] || wt_exists="no"
+        echo -e "  ${C}$proj${NC}  ${Y}$label${NC}  ${DIM}(${age}d old, worktree=${wt_exists})${NC}"
+        count=$((count + 1))
+    done <<< "$stale"
+    echo ""
+
+    if $dry_run; then
+        _log "Dry run: ${Y}$count${NC} space(s) would be cleaned"
+        return
+    fi
+
+    if ! $force; then
+        echo -n -e "${G}[cw]${NC} Close all ${Y}$count${NC} stale space(s)? [y/N] "
+        local reply; read -r reply
+        [[ "$reply" =~ ^[Yy] ]] || { _log "Aborted"; return; }
+    fi
+
+    local closed=0
+    while IFS='|' read -r proj sid stype wt sdir age; do
+        local path=""
+        local pj; pj=$(_get_project "$proj" 2>/dev/null) && path=$(_get_field "$pj" path "")
+        if [[ -z "$path" ]]; then
+            _warn "Project ${C}$proj${NC} not found in registry, skipping $stype $sid"
+            continue
+        fi
+        _space_done "$proj" "$sid" "$stype" "$path" "$wt" "$sdir"
+        closed=$((closed + 1))
+    done <<< "$stale"
+
+    _log "${G}Cleaned $closed${NC} stale space(s)"
 }
 
 # ── Shared: list by type ─────────────────────────────────────────────────
@@ -2069,6 +2181,10 @@ ${BOLD}MAIN COMMANDS${NC}
   open <project>                      Open project quick (no worktree)
   launch [account]                    Open Claude with account (no project needed)
   spaces                              Show active spaces
+  clean                               Remove stale worktrees/sessions
+    --days, -d <N>                    Stale threshold (default: 7)
+    --dry-run, -n                     Show what would be cleaned
+    --force, -f                       Skip confirmation prompt
 
 ${BOLD}MANAGE${NC}
   --done                              Close a work/review space
@@ -2164,6 +2280,7 @@ main() {
         work)       cmd_work "$@" ;;
         create)     cmd_create "$@" ;;
         spaces)     cmd_spaces "$@" ;;
+        clean)      cmd_clean "$@" ;;
         launch)     cmd_launch "$@" ;;
         dashboard)  cmd_dashboard "$@" ;;
         arcade)     cmd_arcade "$@" ;;
