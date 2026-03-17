@@ -9,13 +9,15 @@ Work on a feature or bug with an isolated worktree and persistent session.
 **Arguments:**
 - `project` — registered project name
 - `task` — branch name, ticket ID, or URL (Linear, Notion, GitHub)
+- `--workflow, -w <type>` — apply workflow template (`feature`, `bugfix`, `refactor`, `security-audit`, `docs`)
 - `--done` — close the task, remove worktree, archive session
 - `--list` — list active tasks (optionally filtered by project)
 
 **Examples:**
 ```bash
 cw work my-app fix-auth                        # plain branch name
-cw work my-app PROJ-123                        # ticket ID as branch
+cw work my-app fix-auth --workflow bugfix      # with bugfix workflow
+cw work my-app PROJ-123 -w feature             # feature workflow
 cw work my-app https://linear.app/.../PROJ-123 # fetch from Linear
 cw work my-app fix-auth                        # resume existing
 cw work my-app fix-auth --done                 # close and cleanup
@@ -80,6 +82,62 @@ Full workspace overview: accounts, projects with status indicators, active space
 ```bash
 cw dashboard
 ```
+
+**Workflow templates:**
+
+| Workflow | Focus |
+|----------|-------|
+| `feature` | Design-first development with acceptance criteria checklist |
+| `bugfix` | Reproduce → root cause → minimal fix → regression test |
+| `refactor` | Test-driven, no behavior changes, incremental steps |
+| `security-audit` | OWASP Top 10, dependency scan, secret detection |
+| `docs` | Audience-first, tested examples, verified links |
+
+Templates are customizable at `~/.cw/templates/workflows/`.
+
+**Shared context:** All worktrees in the same project share a `SHARED_CONTEXT.md` file (auto-symlinked). Cross-task discoveries are visible to all worktrees immediately.
+
+---
+
+### `cw plan <project> "<description>"`
+
+Plan a large task by having Claude analyze the codebase and split the goal into independent sub-tasks.
+
+```bash
+cw plan my-app "migrate auth to OAuth2"
+cw plan my-app "add payment processing with Stripe"
+```
+
+Claude reads the project structure, proposes 2-6 sub-tasks with branch names, key files, dependencies, and suggested workflows. Then asks if you want to create worktrees for each.
+
+---
+
+### `cw doctor`
+
+Health check for your CW setup. Verifies:
+- Required tools (git, python3, claude CLI)
+- CW initialization and config
+- Account authentication status
+- Project path validity
+- Workflow templates
+- Stale sessions and orphaned worktrees
+
+```bash
+cw doctor
+```
+
+---
+
+### `cw stats [project]`
+
+Session metrics and productivity stats.
+
+```bash
+cw stats                # all projects
+cw stats my-app         # single project
+```
+
+Shows: total/active/done sessions, task/review counts, average opens, average duration for completed sessions, completion rate, and workflow usage.
 
 ---
 

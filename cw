@@ -8,7 +8,7 @@
 # ============================================================================
 set -uo pipefail
 
-CW_VERSION="0.1.0"
+CW_VERSION="0.2.0"
 CW_HOME="${CW_HOME:-$HOME/.cw}"
 CW_ACCOUNTS_DIR="$CW_HOME/accounts"
 CW_REGISTRY="$CW_HOME/projects.json"
@@ -77,7 +77,7 @@ print(m.group(1) if m else 'default')
 }
 
 _ensure_dirs() {
-    mkdir -p "$CW_HOME"/{accounts,templates,agents,commands,mcps,hooks,lib,bin}
+    mkdir -p "$CW_HOME"/{accounts,templates/workflows,agents,commands,mcps,hooks,lib,bin}
 }
 
 _get_project() {
@@ -146,6 +146,7 @@ YAML
     _generate_agents
     _generate_commands
     _generate_mcp_docs
+    _generate_workflows
 
     # Copy dashboard lib from repo to ~/.cw/lib/dashboard
     local repo_dashboard=""
@@ -809,13 +810,14 @@ If I say 'none', do not post. If I say 'edit', let me modify the findings before
 # WORK — Feature/bugfix with worktree + persistent session
 # ════════════════════════════════════════════════════════════════════════════
 cmd_work() {
-    local name="" task="" done_flag=false list_flag=false team_flag=false team_prompt="" base_branch=""
+    local name="" task="" done_flag=false list_flag=false team_flag=false team_prompt="" base_branch="" workflow=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --task|-t)   task="$2"; shift 2 ;;
             --done)      done_flag=true; shift ;;
             --list)      list_flag=true; shift ;;
             --base|-b)   base_branch="$2"; shift 2 ;;
+            --workflow|-w) workflow="$2"; shift 2 ;;
             --team)      team_flag=true; shift
                          # Capture optional team prompt (rest of args in quotes)
                          if [[ $# -gt 0 && "$1" != -* ]]; then
@@ -956,6 +958,44 @@ Get the branch name if it is a PR. Then:
 7. Then start working from the .tasks/$task/ directory."
         fi
 
+        # ── Shared context (per-project, visible to all worktrees) ────────
+        local shared_context="$CW_HOME/sessions/$name/SHARED_CONTEXT.md"
+        if [[ ! -f "$shared_context" ]]; then
+            {
+                echo "# Shared Context: $name"
+                echo "**Project:** $name"
+                echo ""
+                echo "## Cross-Task Notes"
+                echo "<!-- Notes visible to all active worktrees for this project -->"
+                echo "<!-- Update this when you discover something relevant to other tasks -->"
+                echo ""
+                echo "## Decisions"
+                echo "<!-- Architecture decisions, conventions, important context -->"
+                echo ""
+                echo "## Known Issues"
+                echo "<!-- Bugs, tech debt, things to watch out for -->"
+            } > "$shared_context"
+        fi
+        init_prompt="$init_prompt
+
+Also symlink shared context: ln -sf $shared_context .tasks/$task/SHARED_CONTEXT.md
+If SHARED_CONTEXT.md exists in the worktree, read it for cross-task context from other worktrees.
+When you discover something relevant to other tasks (schema changes, API changes, conventions), update SHARED_CONTEXT.md."
+
+        # ── Workflow template ─────────────────────────────────────────────
+        if [[ -n "$workflow" ]]; then
+            local wf_file="$CW_HOME/templates/workflows/$workflow.md"
+            if [[ -f "$wf_file" ]]; then
+                init_prompt="$init_prompt
+
+Follow this workflow:
+$(cat "$wf_file")"
+                _dim "  Using workflow: $workflow"
+            else
+                _warn "Workflow '$workflow' not found. Available: $(ls "$CW_HOME/templates/workflows/" 2>/dev/null | sed 's/\.md$//g' | tr '\n' ' ')"
+            fi
+        fi
+
         # Create notes file in session dir
         {
             echo "# Task: $task"
@@ -990,6 +1030,7 @@ Get the branch name if it is a PR. Then:
             mkdir -p "$(dirname "$proj_exclude")" 2>/dev/null || true
             grep -q ".tasks" "$proj_exclude" 2>/dev/null || echo ".tasks" >> "$proj_exclude"
             grep -q "TASK_NOTES.md" "$proj_exclude" 2>/dev/null || echo "TASK_NOTES.md" >> "$proj_exclude"
+            grep -q "SHARED_CONTEXT.md" "$proj_exclude" 2>/dev/null || echo "SHARED_CONTEXT.md" >> "$proj_exclude"
         fi
 
         # Save session
@@ -998,7 +1039,7 @@ import json
 from datetime import datetime, timezone
 meta = {
     'project': '$name', 'task': '$task', 'type': 'task',
-    'account': '$account',
+    'account': '$account', 'workflow': '$workflow',
     'worktree': '$wt_dir', 'notes': '$notes_file',
     'source': '$task_source', 'source_url': '$task_url',
     'status': 'active',
@@ -1086,60 +1127,67 @@ cmd_spaces() {
         return
     fi
 
-    local found=false
+    # Single python3 call reads ALL session.json files at once
+    local output
+    output=$(python3 - "$sessions_dir" "$filter" "$CW_REGISTRY" << 'PYEOF'
+import json, os, sys
+sessions_dir = sys.argv[1]
+filter_proj = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else ""
+registry = sys.argv[3] if len(sys.argv) > 3 else ""
 
-    # Group by project
-    for proj_dir in "$sessions_dir"/*/; do
-        [[ -d "$proj_dir" ]] || continue
-        local proj; proj=$(basename "$proj_dir")
-        [[ -n "$filter" ]] && [[ "$proj" != "$filter" ]] && continue
+# Load registry for account info
+reg = {}
+try:
+    with open(registry) as f: reg = json.load(f)
+except: pass
 
-        local proj_has_active=false
+NC="\033[0m"; C="\033[0;36m"; Y="\033[1;33m"; DIM="\033[2m"
+found = False
 
-        # Collect active spaces for this project
-        local spaces_output=""
-        for space_dir in "$proj_dir"/*/; do
-            [[ -d "$space_dir" ]] || continue
-            local meta="$space_dir/session.json"
-            [[ -f "$meta" ]] || continue
+for proj in sorted(os.listdir(sessions_dir)):
+    proj_dir = os.path.join(sessions_dir, proj)
+    if not os.path.isdir(proj_dir): continue
+    if filter_proj and proj != filter_proj: continue
 
-            local status stype sid sopens slast
-            status=$(python3 -c "import json; print(json.load(open('$meta')).get('status',''))" 2>/dev/null)
-            [[ "$status" != "active" ]] && continue
+    spaces = []
+    for space in sorted(os.listdir(proj_dir)):
+        meta_file = os.path.join(proj_dir, space, "session.json")
+        if not os.path.isfile(meta_file): continue
+        try:
+            with open(meta_file) as f: m = json.load(f)
+        except: continue
+        if m.get("status") != "active": continue
 
-            stype=$(python3 -c "import json; print(json.load(open('$meta')).get('type','?'))" 2>/dev/null)
-            sopens=$(python3 -c "import json; print(json.load(open('$meta')).get('opens',0))" 2>/dev/null)
-            slast=$(python3 -c "import json; print(json.load(open('$meta')).get('last_opened','?')[:10])" 2>/dev/null)
+        stype = m.get("type", "?")
+        opens = m.get("opens", 0)
+        last = m.get("last_opened", "?")[:10]
 
-            local label="" cmd=""
-            if [[ "$stype" == "task" ]]; then
-                sid=$(python3 -c "import json; print(json.load(open('$meta')).get('task','?'))" 2>/dev/null)
-                label="task: $sid"
-                cmd="cw work $proj --task $sid"
-            elif [[ "$stype" == "review" ]]; then
-                sid=$(python3 -c "import json; print(json.load(open('$meta')).get('pr','?'))" 2>/dev/null)
-                label="review: PR #$sid"
-                cmd="cw review $proj --pr $sid"
-            fi
+        if stype == "task":
+            sid = m.get("task", "?")
+            label = f"task: {sid}"
+            cmd = f"cw work {proj} {sid}"
+        elif stype == "review":
+            sid = m.get("pr", "?")
+            label = f"review: PR #{sid}"
+            cmd = f"cw review {proj} {sid}"
+        else: continue
+        spaces.append((label, opens, last, cmd))
 
-            spaces_output+="    ${Y}$label${NC}  ${DIM}(${sopens}x, $slast)${NC}\n"
-            spaces_output+="      ${DIM}resume:${NC} $cmd\n"
-            spaces_output+="      ${DIM}close:${NC}  $cmd --done\n"
-            proj_has_active=true
-            found=true
-        done
+    if spaces:
+        acct = reg.get(proj, {}).get("account", "")
+        print(f"  {C}{proj}{NC}  {DIM}({acct}){NC}")
+        for label, opens, last, cmd in spaces:
+            print(f"    {Y}{label}{NC}  {DIM}({opens}x, {last}){NC}")
+            print(f"      {DIM}resume:{NC} {cmd}")
+            print(f"      {DIM}close:{NC}  {cmd} --done")
+        print()
+        found = True
 
-        if $proj_has_active; then
-            # Get account for this project
-            local pacct=""
-            local ppj; ppj=$(_get_project "$proj" 2>/dev/null) && pacct=$(_get_field "$ppj" account "")
-            echo -e "  ${C}$proj${NC}  ${DIM}($pacct)${NC}"
-            echo -e "$spaces_output"
-        fi
-    done
-
-    $found || echo -e "  ${DIM}No active spaces${NC}\n"
-
+if not found:
+    print(f"  {DIM}No active spaces{NC}\n")
+PYEOF
+    )
+    echo -e "$output"
     echo -e "  ${DIM}Close all for a project: cw work <proy> --task <t> --done${NC}"
     echo -e "  ${DIM}                            cw review <proy> --pr <n> --done${NC}\n"
 }
@@ -1190,32 +1238,37 @@ _find_stale_spaces() {
 
     local now; now=$(date +%s)
 
-    for proj_dir in "$sessions_dir"/*/; do
-        [[ -d "$proj_dir" ]] || continue
-        local proj; proj=$(basename "$proj_dir")
-
-        for space_dir in "$proj_dir"/*/; do
-            [[ -d "$space_dir" ]] || continue
-            local meta="$space_dir/session.json"
-            [[ -f "$meta" ]] || continue
-
-            python3 -c "
-import json, sys
+    # Single python3 call scans all sessions at once
+    python3 - "$sessions_dir" "$threshold" "$now" << 'PYEOF'
+import json, os, sys
 from datetime import datetime, timezone
-with open('$meta') as f: m = json.load(f)
-if m.get('status') != 'active': sys.exit(0)
-last = m.get('last_opened', m.get('created', ''))
-if not last: sys.exit(0)
-ts = datetime.fromisoformat(last.replace('Z', '+00:00'))
-age = ($now - int(ts.timestamp())) // 86400
-if age >= $threshold:
-    sid = m.get('task') or m.get('pr', '?')
-    stype = m.get('type', '?')
-    wt = m.get('worktree', '')
-    print(f'$proj|{sid}|{stype}|{wt}|$space_dir|{age}')
-" 2>/dev/null || true
-        done
-    done
+sessions_dir = sys.argv[1]
+threshold = int(sys.argv[2])
+now = int(sys.argv[3])
+
+for proj in os.listdir(sessions_dir):
+    proj_dir = os.path.join(sessions_dir, proj)
+    if not os.path.isdir(proj_dir): continue
+    for space in os.listdir(proj_dir):
+        space_dir = os.path.join(proj_dir, space)
+        meta_file = os.path.join(space_dir, "session.json")
+        if not os.path.isfile(meta_file): continue
+        try:
+            with open(meta_file) as f: m = json.load(f)
+        except: continue
+        if m.get("status") != "active": continue
+        last = m.get("last_opened", m.get("created", ""))
+        if not last: continue
+        try:
+            ts = datetime.fromisoformat(last.replace("Z", "+00:00"))
+            age = (now - int(ts.timestamp())) // 86400
+        except: continue
+        if age >= threshold:
+            sid = m.get("task") or m.get("pr", "?")
+            stype = m.get("type", "?")
+            wt = m.get("worktree", "")
+            print(f"{proj}|{sid}|{stype}|{wt}|{space_dir}|{age}")
+PYEOF
 }
 
 # Warn about stale worktrees (called from cmd_work)
@@ -1298,22 +1351,34 @@ _spaces_list() {
         return
     fi
 
-    for proj_dir in "$sessions_dir"/*/; do
-        [[ -d "$proj_dir" ]] || continue
-        local proj; proj=$(basename "$proj_dir")
-        [[ -n "$filter" ]] && [[ "$proj" != "$filter" ]] && continue
+    # Single python3 call for all sessions
+    local output
+    output=$(python3 - "$sessions_dir" "$filter" "$type_filter" << 'PYEOF'
+import json, os, sys
+sessions_dir = sys.argv[1]
+filter_proj = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else ""
+type_filter = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else ""
 
-        for space_dir in "$proj_dir"/${type_filter}-*/; do
-            [[ -d "$space_dir" ]] || continue
-            local meta="$space_dir/session.json"
-            [[ -f "$meta" ]] || continue
-            local st; st=$(python3 -c "import json; print(json.load(open('$meta')).get('status',''))" 2>/dev/null)
-            [[ "$st" != "active" ]] && continue
-            local sid; sid=$(python3 -c "import json; m=json.load(open('$meta')); print(m.get('task','') or m.get('pr','?'))" 2>/dev/null)
-            local sopens; sopens=$(python3 -c "import json; print(json.load(open('$meta')).get('opens',0))" 2>/dev/null)
-            echo -e "  ${C}$proj${NC}  ${Y}$sid${NC}  ${DIM}(${sopens}x)${NC}"
-        done
-    done
+NC="\033[0m"; C="\033[0;36m"; Y="\033[1;33m"; DIM="\033[2m"
+
+for proj in sorted(os.listdir(sessions_dir)):
+    proj_dir = os.path.join(sessions_dir, proj)
+    if not os.path.isdir(proj_dir): continue
+    if filter_proj and proj != filter_proj: continue
+    for space in sorted(os.listdir(proj_dir)):
+        if type_filter and not space.startswith(type_filter + "-"): continue
+        meta_file = os.path.join(proj_dir, space, "session.json")
+        if not os.path.isfile(meta_file): continue
+        try:
+            with open(meta_file) as f: m = json.load(f)
+        except: continue
+        if m.get("status") != "active": continue
+        sid = m.get("task", "") or m.get("pr", "?")
+        opens = m.get("opens", 0)
+        print(f"  {C}{proj}{NC}  {Y}{sid}{NC}  {DIM}({opens}x){NC}")
+PYEOF
+    )
+    [[ -n "$output" ]] && echo -e "$output"
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1336,6 +1401,348 @@ cmd_status() {
         fi
     fi
     echo ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# DOCTOR — Health check
+# ════════════════════════════════════════════════════════════════════════════
+cmd_doctor() {
+    echo -e "\n${BOLD}CW Doctor${NC}\n"
+    local issues=0 warnings=0
+
+    # ── Git ──────────────────────────────────────────────────────────────
+    if command -v git &>/dev/null; then
+        local git_ver; git_ver=$(git --version | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        local major minor
+        major=$(echo "$git_ver" | cut -d. -f1)
+        minor=$(echo "$git_ver" | cut -d. -f2)
+        if [[ $major -lt 2 ]] || [[ $major -eq 2 && $minor -lt 15 ]]; then
+            echo -e "  ${R}✗${NC} git $git_ver (need 2.15+)"
+            issues=$((issues+1))
+        else
+            echo -e "  ${G}✓${NC} git $git_ver"
+        fi
+    else
+        echo -e "  ${R}✗${NC} git not found"
+        issues=$((issues+1))
+    fi
+
+    # ── Python3 ──────────────────────────────────────────────────────────
+    if command -v python3 &>/dev/null; then
+        local py_ver; py_ver=$(python3 --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        echo -e "  ${G}✓${NC} python3 $py_ver"
+    else
+        echo -e "  ${R}✗${NC} python3 not found"
+        issues=$((issues+1))
+    fi
+
+    # ── Claude CLI ───────────────────────────────────────────────────────
+    if command -v claude &>/dev/null; then
+        echo -e "  ${G}✓${NC} claude CLI found"
+    else
+        echo -e "  ${Y}!${NC} claude CLI not found"
+        warnings=$((warnings+1))
+    fi
+
+    # ── CW initialized ──────────────────────────────────────────────────
+    if [[ -f "$CW_CONFIG" ]]; then
+        echo -e "  ${G}✓${NC} CW initialized ($CW_HOME)"
+    else
+        echo -e "  ${Y}!${NC} CW not initialized — run ${C}cw init${NC}"
+        warnings=$((warnings+1))
+    fi
+
+    # ── Accounts ─────────────────────────────────────────────────────────
+    local acct_count=0
+    if [[ -d "$CW_ACCOUNTS_DIR" ]]; then
+        for dir in "$CW_ACCOUNTS_DIR"/*/; do
+            [[ -d "$dir" ]] && acct_count=$((acct_count+1))
+        done
+    fi
+    if [[ $acct_count -gt 0 ]]; then
+        echo -e "  ${G}✓${NC} $acct_count account(s)"
+        for dir in "$CW_ACCOUNTS_DIR"/*/; do
+            [[ -d "$dir" ]] || continue
+            local n; n=$(basename "$dir")
+            if [[ -f "$dir/.claude.json" ]]; then
+                echo -e "    ${G}✓${NC} $n — authenticated"
+            else
+                echo -e "    ${Y}!${NC} $n — ${Y}not authenticated${NC} (run ${C}cw launch $n${NC} then /login)"
+                warnings=$((warnings+1))
+            fi
+        done
+    else
+        echo -e "  ${Y}!${NC} No accounts — run ${C}cw account add <name>${NC}"
+        warnings=$((warnings+1))
+    fi
+
+    # ── Projects ─────────────────────────────────────────────────────────
+    local proj_count=0
+    [[ -f "$CW_REGISTRY" ]] && proj_count=$(python3 -c "import json; print(len(json.load(open('$CW_REGISTRY'))))" 2>/dev/null || echo 0)
+    if [[ "$proj_count" -gt 0 ]]; then
+        echo -e "  ${G}✓${NC} $proj_count project(s) registered"
+        # Check for projects with missing paths
+        python3 -c "
+import json, os
+with open('$CW_REGISTRY') as f: reg = json.load(f)
+for n, i in reg.items():
+    if not os.path.isdir(i.get('path', '')): print(n)
+" 2>/dev/null | while IFS= read -r p; do
+            echo -e "    ${Y}!${NC} $p — path missing"
+            warnings=$((warnings+1))
+        done
+    else
+        echo -e "  ${Y}!${NC} No projects — run ${C}cw project register${NC}"
+        warnings=$((warnings+1))
+    fi
+
+    # ── Workflow templates ───────────────────────────────────────────────
+    local wf_dir="$CW_HOME/templates/workflows"
+    if [[ -d "$wf_dir" ]] && ls "$wf_dir"/*.md &>/dev/null; then
+        local wf_count; wf_count=$(ls "$wf_dir"/*.md 2>/dev/null | wc -l | tr -d ' ')
+        local wf_names; wf_names=$(ls "$wf_dir"/*.md 2>/dev/null | xargs -I{} basename {} .md | tr '\n' ' ')
+        echo -e "  ${G}✓${NC} $wf_count workflow(s): ${DIM}$wf_names${NC}"
+    else
+        echo -e "  ${Y}!${NC} No workflow templates — run ${C}cw init${NC}"
+        warnings=$((warnings+1))
+    fi
+
+    # ── Stale sessions ───────────────────────────────────────────────────
+    local stale; stale=$(_find_stale_spaces)
+    if [[ -n "$stale" ]]; then
+        local stale_count; stale_count=$(echo "$stale" | wc -l | tr -d ' ')
+        echo -e "  ${Y}!${NC} $stale_count stale session(s) — run ${C}cw clean${NC}"
+        warnings=$((warnings+1))
+    else
+        echo -e "  ${G}✓${NC} No stale sessions"
+    fi
+
+    # ── Orphaned worktrees ───────────────────────────────────────────────
+    local orphaned=0
+    if [[ -f "$CW_REGISTRY" ]]; then
+        orphaned=$(python3 -c "
+import json, os, subprocess
+with open('$CW_REGISTRY') as f: reg = json.load(f)
+count = 0
+for n, i in reg.items():
+    path = i.get('path', '')
+    if not os.path.isdir(path): continue
+    for d in ['.tasks', '.reviews']:
+        full = os.path.join(path, d)
+        if not os.path.isdir(full): continue
+        for sub in os.listdir(full):
+            sub_path = os.path.join(full, sub)
+            if os.path.isdir(sub_path) and not os.path.isfile(os.path.join(sub_path, '.git')):
+                count += 1
+print(count)
+" 2>/dev/null || echo 0)
+    fi
+    if [[ "$orphaned" -gt 0 ]]; then
+        echo -e "  ${Y}!${NC} $orphaned orphaned worktree dir(s)"
+        warnings=$((warnings+1))
+    fi
+
+    # ── Summary ──────────────────────────────────────────────────────────
+    echo ""
+    if [[ $issues -eq 0 && $warnings -eq 0 ]]; then
+        echo -e "  ${G}All checks passed!${NC}"
+    elif [[ $issues -eq 0 ]]; then
+        echo -e "  ${Y}$warnings warning(s)${NC} — no critical issues"
+    else
+        echo -e "  ${R}$issues issue(s)${NC}, ${Y}$warnings warning(s)${NC}"
+    fi
+    echo ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# STATS — Session metrics
+# ════════════════════════════════════════════════════════════════════════════
+cmd_stats() {
+    local filter="${1:-}"
+    local sessions_dir="$CW_HOME/sessions"
+
+    echo -e "\n${BOLD}CW Stats${NC}\n"
+
+    if [[ ! -d "$sessions_dir" ]]; then
+        echo -e "  ${DIM}No sessions found${NC}\n"
+        return
+    fi
+
+    python3 - "$sessions_dir" "$filter" << 'PYEOF'
+import json, os, sys
+from collections import defaultdict
+
+sessions_dir = sys.argv[1]
+filter_proj = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else None
+
+stats = defaultdict(lambda: {"total": 0, "active": 0, "done": 0, "tasks": 0, "reviews": 0, "total_opens": 0, "durations": [], "workflows": defaultdict(int)})
+overall = {"total": 0, "active": 0, "done": 0, "tasks": 0, "reviews": 0, "total_opens": 0, "durations": [], "workflows": defaultdict(int)}
+
+for proj in sorted(os.listdir(sessions_dir)):
+    proj_dir = os.path.join(sessions_dir, proj)
+    if not os.path.isdir(proj_dir): continue
+    if filter_proj and proj != filter_proj: continue
+
+    for space in os.listdir(proj_dir):
+        space_dir = os.path.join(proj_dir, space)
+        meta_file = os.path.join(space_dir, "session.json")
+        if not os.path.isfile(meta_file): continue
+
+        try:
+            with open(meta_file) as f: m = json.load(f)
+        except: continue
+
+        s = stats[proj]
+        s["total"] += 1
+        overall["total"] += 1
+
+        status = m.get("status", "")
+        stype = m.get("type", "")
+        opens = m.get("opens", 0)
+        wf = m.get("workflow", "")
+
+        if status == "active":
+            s["active"] += 1
+            overall["active"] += 1
+        elif status == "done":
+            s["done"] += 1
+            overall["done"] += 1
+
+        if stype == "task":
+            s["tasks"] += 1
+            overall["tasks"] += 1
+        elif stype == "review":
+            s["reviews"] += 1
+            overall["reviews"] += 1
+
+        if wf:
+            s["workflows"][wf] += 1
+            overall["workflows"][wf] += 1
+
+        s["total_opens"] += opens
+        overall["total_opens"] += opens
+
+        # Calculate duration for completed sessions
+        created = m.get("created", "")
+        closed = m.get("closed", "")
+        if created and closed:
+            try:
+                from datetime import datetime
+                t1 = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                t2 = datetime.fromisoformat(closed.replace("Z", "+00:00"))
+                hours = (t2 - t1).total_seconds() / 3600
+                s["durations"].append(hours)
+                overall["durations"].append(hours)
+            except: pass
+
+NC = "\033[0m"; C = "\033[0;36m"; Y = "\033[1;33m"; G = "\033[0;32m"
+BOLD = "\033[1m"; DIM = "\033[2m"
+
+if not stats:
+    print(f"  {DIM}No sessions found{NC}")
+    sys.exit(0)
+
+# Per-project stats
+for proj in sorted(stats.keys()):
+    s = stats[proj]
+    avg_opens = s["total_opens"] / s["total"] if s["total"] else 0
+    avg_dur = sum(s["durations"]) / len(s["durations"]) if s["durations"] else 0
+    completion = (s["done"] / s["total"] * 100) if s["total"] else 0
+
+    print(f"  {C}{proj}{NC}")
+    print(f"    Sessions:    {s['total']}  ({G}{s['active']} active{NC}, {DIM}{s['done']} done{NC})")
+    print(f"    Tasks:       {s['tasks']}    Reviews: {s['reviews']}")
+    print(f"    Avg opens:   {avg_opens:.1f}")
+    if s["durations"]:
+        print(f"    Avg duration: {avg_dur:.1f}h")
+    print(f"    Completion:  {completion:.0f}%")
+    if s["workflows"]:
+        wf_str = ", ".join(f"{k}({v})" for k, v in sorted(s["workflows"].items()))
+        print(f"    Workflows:   {wf_str}")
+    print()
+
+# Overall (only if multiple projects)
+if len(stats) > 1:
+    s = overall
+    avg_opens = s["total_opens"] / s["total"] if s["total"] else 0
+    avg_dur = sum(s["durations"]) / len(s["durations"]) if s["durations"] else 0
+    completion = (s["done"] / s["total"] * 100) if s["total"] else 0
+
+    print(f"  {BOLD}Overall{NC}")
+    print(f"    Sessions:    {s['total']}  ({G}{s['active']} active{NC}, {DIM}{s['done']} done{NC})")
+    print(f"    Tasks:       {s['tasks']}    Reviews: {s['reviews']}")
+    print(f"    Avg opens:   {avg_opens:.1f}")
+    if s["durations"]:
+        print(f"    Avg duration: {avg_dur:.1f}h")
+    print(f"    Completion:  {completion:.0f}%")
+    if s["workflows"]:
+        wf_str = ", ".join(f"{k}({v})" for k, v in sorted(s["workflows"].items()))
+        print(f"    Workflows:   {wf_str}")
+    print()
+PYEOF
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# PLAN — Auto-split tasks with Claude
+# ════════════════════════════════════════════════════════════════════════════
+cmd_plan() {
+    local name="" description=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --account|-a) shift 2 ;;
+            -*) shift ;;
+            *)
+                if [[ -z "$name" ]]; then
+                    name="$1"
+                elif [[ -z "$description" ]]; then
+                    description="$1"
+                fi
+                shift ;;
+        esac
+    done
+
+    [[ -z "$name" ]] && { _err "Usage: cw plan <project> \"<description>\""; return 1; }
+    [[ -z "$description" ]] && { _err "Missing description. Usage: cw plan $name \"migrate auth to OAuth2\""; return 1; }
+
+    local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
+    local path; path=$(_get_field "$pj" path "")
+    local account; account=$(_get_field "$pj" account "$(_default_account)")
+    local acct_dir="$CW_ACCOUNTS_DIR/$account"
+
+    _log "Planning: ${C}$name${NC} — ${Y}$description${NC}"
+
+    local plan_prompt="You are a technical project planner. Analyze this project and create an implementation plan.
+
+Project: $name
+Working directory: $path
+Goal: $description
+
+Steps:
+1. Read the project structure, CLAUDE.md, and key files to understand the codebase
+2. Analyze what changes are needed for the goal
+3. Break the work into 2-6 independent sub-tasks that could be worked on in parallel worktrees
+4. For each sub-task, provide:
+   - **Task name** (kebab-case, suitable as a git branch name)
+   - **Description** (1-2 sentences)
+   - **Key files** that will need changes
+   - **Dependencies** (which tasks depend on others, if any)
+   - **Estimated complexity** (small / medium / large)
+   - **Suggested workflow** (feature / bugfix / refactor / security-audit / docs)
+
+Present the plan as a numbered list, then ask:
+'Want me to create worktrees for these tasks? (all / select numbers / none)'
+
+If the user says 'all' or selects numbers, for each selected task run:
+  cw work $name <task-name> --workflow <workflow>
+This will create the worktree and session automatically.
+
+IMPORTANT: Keep the plan focused and practical. Don't over-split — 2-4 tasks is usually better than 6+."
+
+    cd "$path"
+    _set_tab_title "plan: $name"
+    export CW_PROJECT="$name" CW_TASK="plan" CW_TASK_TYPE="plan" CW_ACCOUNT="$account"
+    CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "$plan_prompt"
+    unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
 }
 
 cmd_arcade() {
@@ -1514,135 +1921,108 @@ cmd_dashboard() {
         fi
     fi
 
-    # Show organized groups first (monoku/, meridian/, personal/)
-    for group_dir in "$ws"/*/; do
-        [[ -d "$group_dir" ]] || continue
-        local group; group=$(basename "$group_dir")
+    # Single python3 call scans workspace + registry + filesystem at once
+    python3 - "$ws" "$CW_REGISTRY" << 'PYEOF'
+import json, os, sys, glob
 
-        # Check if this is a group folder (has subdirs that are projects)
-        local has_subprojects=false
-        for sub in "$group_dir"/*/; do
-            [[ -d "$sub" ]] && { [[ -d "$sub/.git" ]] || [[ -d "$sub/.claude" ]] || [[ -f "$sub/CLAUDE.md" ]]; } && { has_subprojects=true; break; }
-        done
+ws = sys.argv[1]
+registry_path = sys.argv[2]
 
-        if $has_subprojects; then
-            # This is a group folder — show its contents
-            local group_account=""
-            # Detect account from first registered project
-            for sub in "$group_dir"/*/; do
-                [[ -d "$sub" ]] || continue
-                local sname; sname=$(basename "$sub")
-                local pj; pj=$(_get_project "$sname" 2>/dev/null) && {
-                    group_account=$(_get_field "$pj" account "")
-                    break
-                }
-            done
-            [[ -n "$group_account" ]] && group_account=" → ${Y}$group_account${NC}"
+NC="\033[0m"; G="\033[0;32m"; Y="\033[1;33m"; C="\033[0;36m"
+BOLD="\033[1m"; DIM="\033[2m"
 
-            echo -e "  ${BOLD}📁 $group/${NC}${group_account}"
+# Load registry
+reg = {}
+try:
+    with open(registry_path) as f: reg = json.load(f)
+except: pass
 
-            for sub in "$group_dir"/*/; do
-                [[ -d "$sub" ]] || continue
-                local sname; sname=$(basename "$sub")
+def is_project(path):
+    return (os.path.isdir(os.path.join(path, ".git")) or
+            os.path.isdir(os.path.join(path, ".claude")) or
+            os.path.isfile(os.path.join(path, "CLAUDE.md")))
 
-                # Skip hidden dirs
-                [[ "$sname" == .* ]] && continue
+def get_indicators(path, name):
+    ind = []
+    if name in reg:
+        ind.append(f"{G}●{NC}")
+    else:
+        ind.append(f"{DIM}○{NC}")
+    if os.path.isfile(os.path.join(path, "CLAUDE.md")):
+        ind.append(f"{G}md{NC}")
+    agents_dir = os.path.join(path, ".claude", "agents")
+    if os.path.isdir(agents_dir):
+        ac = len(glob.glob(os.path.join(agents_dir, "*.md")))
+        if ac > 0: ind.append(f"{C}{ac}ag{NC}")
+    cmds_dir = os.path.join(path, ".claude", "commands")
+    if os.path.isdir(cmds_dir):
+        cc = len(glob.glob(os.path.join(cmds_dir, "*.md")))
+        if cc > 0: ind.append(f"{C}{cc}cm{NC}")
+    settings = os.path.join(path, ".claude", "settings.json")
+    if os.path.isfile(settings):
+        try:
+            with open(settings) as f: s = json.load(f)
+            if s.get("mcpServers") or s.get("mcp_servers"):
+                ind.append(f"{Y}mcp{NC}")
+        except: pass
+    if os.path.isdir(os.path.join(path, ".git")):
+        ind.append(f"{DIM}git{NC}")
+    return " ".join(ind)
 
-                # Check what it has
-                local indicators=""
-                local registered=false
-                local pj; pj=$(_get_project "$sname" 2>/dev/null) && registered=true
+groups_shown = set()
+other_dirs = []
+loose_files = []
 
-                if $registered; then
-                    indicators="${G}●${NC}"
-                else
-                    indicators="${DIM}○${NC}"
-                fi
+for entry in sorted(os.listdir(ws)):
+    full = os.path.join(ws, entry)
+    if os.path.isfile(full):
+        loose_files.append(entry)
+        continue
+    if not os.path.isdir(full): continue
+    if entry.startswith(".") or entry.startswith("__") or "env" in entry.lower():
+        continue
 
-                [[ -f "$sub/CLAUDE.md" ]] && indicators="$indicators ${G}md${NC}"
-                [[ -d "$sub/.claude/agents" ]] && {
-                    local ac; ac=$(find "$sub/.claude/agents" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
-                    [[ "$ac" -gt 0 ]] && indicators="$indicators ${C}${ac}ag${NC}"
-                }
-                [[ -d "$sub/.claude/commands" ]] && {
-                    local cc; cc=$(find "$sub/.claude/commands" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
-                    [[ "$cc" -gt 0 ]] && indicators="$indicators ${C}${cc}cm${NC}"
-                }
-                if [[ -f "$sub/.claude/settings.json" ]]; then
-                    python3 -c "
-import json
-with open('$sub/.claude/settings.json') as f:
-    s = json.load(f)
-if s.get('mcpServers') or s.get('mcp_servers'): exit(0)
-exit(1)
-" 2>/dev/null && indicators="$indicators ${Y}mcp${NC}"
-                fi
-                [[ -d "$sub/.git" ]] && indicators="$indicators ${DIM}git${NC}"
+    # Check if group folder (has project subdirs)
+    subs = []
+    try:
+        subs = [s for s in sorted(os.listdir(full))
+                if os.path.isdir(os.path.join(full, s)) and not s.startswith(".")]
+    except: continue
 
-                echo -e "     $indicators  $sname"
-            done
-            echo ""
+    has_subprojects = any(is_project(os.path.join(full, s)) for s in subs)
 
-        else
-            # This is a standalone item in workspace root
-            local sname="$group"
+    if has_subprojects:
+        # Group folder
+        group_account = ""
+        for s in subs:
+            if s in reg:
+                group_account = f" → {Y}{reg[s].get('account','')}{NC}"
+                break
+        print(f"  {BOLD}📁 {entry}/{NC}{group_account}")
+        for s in subs:
+            sub_path = os.path.join(full, s)
+            if not os.path.isdir(sub_path): continue
+            ind = get_indicators(sub_path, s)
+            print(f"     {ind}  {s}")
+        print()
+        groups_shown.add(entry)
+    elif is_project(full):
+        # Standalone project
+        if entry in reg:
+            acct = reg[entry].get("account", "?")
+            print(f"  {G}●{NC}  {entry}  {DIM}→ {acct}{NC}")
+        else:
+            print(f"  {Y}○{NC}  {entry}  {DIM}(not registered){NC}")
+    else:
+        other_dirs.append(entry)
 
-            # Skip known non-projects
-            [[ "$sname" == .* ]] && continue
-            [[ "$sname" == *env* ]] && continue
-            [[ "$sname" == __* ]] && continue
-
-            # Check if it's a project
-            local is_project=false
-            { [[ -d "$group_dir/.git" ]] || [[ -d "$group_dir/.claude" ]] || [[ -f "$group_dir/CLAUDE.md" ]]; } && is_project=true
-
-            if $is_project; then
-                local registered=false
-                local pj; pj=$(_get_project "$sname" 2>/dev/null) && registered=true
-
-                if $registered; then
-                    local acct; acct=$(_get_field "$pj" account "?")
-                    echo -e "  ${G}●${NC}  $sname  ${DIM}→ $acct${NC}"
-                else
-                    echo -e "  ${Y}○${NC}  $sname  ${DIM}(not registered)${NC}"
-                fi
-            fi
-        fi
-    done
-
-    # Show files at root
-    local loose_files=()
-    for f in "$ws"/*; do
-        [[ -f "$f" ]] && loose_files+=("$(basename "$f")")
-    done
-    if [[ ${#loose_files[@]} -gt 0 ]]; then
-        echo -e "  ${DIM}Loose files: ${loose_files[*]}${NC}"
-        echo ""
-    fi
-
-    # Show non-project dirs
-    local other_dirs=()
-    for d in "$ws"/*/; do
-        [[ -d "$d" ]] || continue
-        local dn; dn=$(basename "$d")
-        [[ "$dn" == .* ]] && continue
-
-        # Skip if group folder
-        local is_group=false
-        for sub in "$d"/*/; do
-            [[ -d "$sub" ]] && { [[ -d "$sub/.git" ]] || [[ -d "$sub/.claude" ]]; } && { is_group=true; break; }
-        done
-        $is_group && continue
-
-        # Skip if project
-        { [[ -d "$d/.git" ]] || [[ -d "$d/.claude" ]] || [[ -f "$d/CLAUDE.md" ]]; } && continue
-
-        other_dirs+=("$dn")
-    done
-    if [[ ${#other_dirs[@]} -gt 0 ]]; then
-        echo -e "  ${DIM}Other: ${other_dirs[*]}${NC}"
-        echo ""
-    fi
+if loose_files:
+    print(f"  {DIM}Loose files: {' '.join(loose_files)}{NC}")
+    print()
+if other_dirs:
+    print(f"  {DIM}Other: {' '.join(other_dirs)}{NC}")
+    print()
+PYEOF
 
     # ── Legend ────────────────────────────────────────────────────────────
     echo -e "  ${DIM}${G}●${NC}${DIM} registered  ${Y}○${NC}${DIM} not registered  ${G}md${NC}${DIM}=CLAUDE.md  ${C}ag${NC}${DIM}=agents  ${C}cm${NC}${DIM}=commands  ${Y}mcp${NC}${DIM}=MCPs${NC}"
@@ -1892,6 +2272,106 @@ Verify with `/mcp` inside Claude Code.
 MD
 }
 
+_generate_workflows() {
+    local wf_dir="$CW_HOME/templates/workflows"
+    mkdir -p "$wf_dir"
+
+    cat > "$wf_dir/feature.md" << 'MD'
+## Workflow: Feature Development
+
+1. **Understand** — Read the task context and acceptance criteria thoroughly
+2. **Design** — Before coding, outline your approach:
+   - Which files need to change?
+   - Any new dependencies needed?
+   - Database/schema changes?
+   - API changes (breaking?)
+3. **Implement** — Write the code. Prefer small, focused changes
+4. **Test** — Write tests for new functionality. Run existing tests
+5. **Document** — Update relevant docs, add code comments where needed
+6. **Self-review** — Read your own diff before marking done
+
+Checklist:
+- [ ] Acceptance criteria met
+- [ ] Tests pass
+- [ ] No regressions
+- [ ] Code is clean and well-named
+MD
+
+    cat > "$wf_dir/bugfix.md" << 'MD'
+## Workflow: Bug Fix
+
+1. **Reproduce** — Confirm the bug exists. Find the minimal reproduction steps
+2. **Root cause** — Use git blame, logs, and debugging to find the actual cause
+3. **Fix** — Apply the minimal fix. Don't refactor surrounding code
+4. **Test** — Write a test that would have caught this bug. Run all tests
+5. **Verify** — Confirm the original reproduction no longer triggers
+6. **Document** — Note the root cause in TASK_NOTES.md for the PR description
+
+Checklist:
+- [ ] Bug reproduced
+- [ ] Root cause identified
+- [ ] Minimal fix applied
+- [ ] Regression test added
+- [ ] All tests pass
+MD
+
+    cat > "$wf_dir/refactor.md" << 'MD'
+## Workflow: Refactoring
+
+1. **Baseline** — Run all tests. Confirm they pass before starting
+2. **Plan** — List specific refactoring goals. What should change? What should NOT change?
+3. **Incremental** — Make changes in small, testable steps. Run tests after each
+4. **No behavior changes** — Refactoring must not change external behavior
+5. **Verify** — All existing tests must still pass. No new features
+6. **Review** — Self-review the diff. Every change should serve the refactoring goal
+
+Checklist:
+- [ ] Tests pass before changes
+- [ ] No behavior changes
+- [ ] Tests pass after changes
+- [ ] Code is measurably better (fewer lines, clearer naming, reduced coupling)
+MD
+
+    cat > "$wf_dir/security-audit.md" << 'MD'
+## Workflow: Security Audit
+
+1. **Scope** — Define what you're auditing (auth, input handling, dependencies, etc.)
+2. **OWASP Top 10** — Check for:
+   - Injection (SQL, command, XSS)
+   - Broken auth/session management
+   - Sensitive data exposure
+   - Broken access control
+   - Security misconfigurations
+   - Vulnerable dependencies
+3. **Dependencies** — Check for known CVEs in dependencies
+4. **Secrets** — Scan for hardcoded secrets, API keys, credentials
+5. **Document** — Each finding: severity, file:line, description, remediation
+6. **Prioritize** — Critical > High > Medium > Low
+
+Checklist:
+- [ ] OWASP Top 10 reviewed
+- [ ] Dependencies scanned
+- [ ] No hardcoded secrets
+- [ ] Findings documented with severity
+MD
+
+    cat > "$wf_dir/docs.md" << 'MD'
+## Workflow: Documentation
+
+1. **Inventory** — What exists? What's missing? What's outdated?
+2. **Audience** — Who is this for? (developers, users, ops?)
+3. **Write** — Clear, concise docs with examples. Follow existing style
+4. **Examples** — Every API/function should have a usage example
+5. **Verify** — Test all code examples. Check all links
+6. **Cross-reference** — Link to related docs, PRs, issues
+
+Checklist:
+- [ ] Docs are accurate and up-to-date
+- [ ] Code examples tested
+- [ ] Links verified
+- [ ] Consistent style with existing docs
+MD
+}
 
 # ════════════════════════════════════════════════════════════════════════════
 # GSD — Get Shit Done workflow integration
@@ -2174,8 +2654,10 @@ ${BOLD}MAIN COMMANDS${NC}
     --team ["<prompt>"]               Use agent teams for parallel build
   work <project> <task>               Work on feature/bug (worktree + session)
     --base, -b <branch>              Base branch for worktree (default: auto-detect)
+    --workflow, -w <type>            Apply workflow template (feature|bugfix|refactor|security-audit|docs)
   work <project> <task> --team        Launch with agent team (parallel work)
   work <project> <url>                Work from Linear/Notion/GitHub URL
+  plan <project> "<description>"      Plan & split task into sub-worktrees
   review <project> <PR>               Review PR (persistent session)
   review <project> <url>              Review from GitHub PR URL
   open <project>                      Open project quick (no worktree)
@@ -2207,6 +2689,8 @@ ${BOLD}SETUP${NC}
 ${BOLD}INFO${NC}
   dashboard                           Full workspace overview
   status                              Quick status
+  stats [project]                     Session metrics and productivity stats
+  doctor                              Health check — verify setup and diagnose issues
   help                                This help
   version                             Show version
 
@@ -2223,13 +2707,14 @@ ${BOLD}EXAMPLES${NC}
   cw create https://notion.so/.../spec -a work      # From Notion spec
 
   cw work daycast fix-auth                          # New task
-  cw work daycast NEW-789                           # Task by ticket ID
+  cw work daycast fix-auth -w bugfix                # With bugfix workflow
+  cw work daycast NEW-789 --workflow feature         # Feature workflow
   cw work daycast https://linear.app/.../NEW-789    # From Linear URL
   cw work daycast fix-auth                          # Resume (auto --continue)
   cw work daycast fix-auth --done                   # Close and cleanup
   cw work daycast big-feat --team                   # Launch with agent team (auto-split)
-  cw work daycast big-feat --team "3 teammates: backend, frontend, tests"
 
+  cw plan daycast "migrate auth to OAuth2"          # Plan & auto-split into sub-tasks
   cw review triton 123                              # New PR review
   cw review triton https://github.com/.../pull/123  # From GitHub URL
   cw review triton 123 --done                       # Close review
@@ -2237,7 +2722,8 @@ ${BOLD}EXAMPLES${NC}
   cw spaces                                         # All active spaces
   cw open daycast                                   # Quick open (no worktree)
   cw dashboard                                      # Full overview
-  cw arcade                                         # Retro visual dashboard
+  cw stats                                          # Session metrics
+  cw doctor                                         # Health check
 
 ${BOLD}INTEGRATIONS${NC}
   cw gsd:init [path]                Initialize GSD workflow in a worktree
@@ -2279,12 +2765,15 @@ main() {
         review)     cmd_review "$@" ;;
         work)       cmd_work "$@" ;;
         create)     cmd_create "$@" ;;
+        plan)       cmd_plan "$@" ;;
         spaces)     cmd_spaces "$@" ;;
         clean)      cmd_clean "$@" ;;
         launch)     cmd_launch "$@" ;;
         dashboard)  cmd_dashboard "$@" ;;
         arcade)     cmd_arcade "$@" ;;
         status)     cmd_status "$@" ;;
+        stats)      cmd_stats "$@" ;;
+        doctor)     cmd_doctor "$@" ;;
         gsd|gsd:init|gsd:sync) cmd_gsd "${cmd#gsd:}" "$@" ;;
         help|-h|--help) cmd_help ;;
         version|-v|--version) echo "cw $CW_VERSION" ;;

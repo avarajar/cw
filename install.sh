@@ -72,7 +72,7 @@ install_files() {
     fi
 
     # Create directory structure
-    mkdir -p "$CW_HOME"/{bin,lib,accounts,sessions,templates,agents,commands,mcps}
+    mkdir -p "$CW_HOME"/{bin,lib,accounts,sessions,templates/workflows,agents,commands,mcps}
 
     # Copy scripts
     cp "$source_dir/cw" "$CW_HOME/bin/cw"
