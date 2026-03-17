@@ -922,8 +922,9 @@ cmd_work() {
 3. Create a worktree from $base_branch: git worktree add .tasks/$task -b <branch_name> $base_branch
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
-6. Fill in the TASK_NOTES.md Context section with the issue details (title, description, acceptance criteria, priority). If there are comments, include a summary of relevant decisions or clarifications.
-7. Then start working from the .tasks/$task/ directory.
+6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
+7. Fill in the TASK_NOTES.md Context section with the issue details (title, description, acceptance criteria, priority). If there are comments, include a summary of relevant decisions or clarifications.
+8. Then start working from the .tasks/$task/ directory.
 
 Source URL: $task_url"
         elif [[ "$task_source" == "notion" ]]; then
@@ -934,8 +935,9 @@ Then:
 3. Create a worktree from $base_branch: git worktree add .tasks/$task -b task/$task $base_branch
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
-6. Fill in the TASK_NOTES.md Context section with the page content.
-7. Then start working from the .tasks/$task/ directory."
+6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
+7. Fill in the TASK_NOTES.md Context section with the page content.
+8. Then start working from the .tasks/$task/ directory."
         elif [[ "$task_source" == "github" ]]; then
             init_prompt="Fetch this GitHub issue/PR using the GitHub MCP: $task_url
 Get the branch name if it is a PR. Then:
@@ -944,8 +946,9 @@ Get the branch name if it is a PR. Then:
 3. Create a worktree from $base_branch: git worktree add .tasks/$task -b <branch_name_or_task/$task> $base_branch
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
-6. Fill in the TASK_NOTES.md Context section.
-7. Then start working from the .tasks/$task/ directory."
+6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
+7. Fill in the TASK_NOTES.md Context section.
+8. Then start working from the .tasks/$task/ directory."
         else
             # No URL — just a branch/task name
             init_prompt="Set up the workspace:
@@ -954,8 +957,9 @@ Get the branch name if it is a PR. Then:
 3. Create a worktree from $base_branch: git worktree add .tasks/$task -b $task $base_branch
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
-6. If there is a TASK_NOTES.md in .tasks/$task/, read it for context.
-7. Then start working from the .tasks/$task/ directory."
+6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
+7. If there is a TASK_NOTES.md in .tasks/$task/, read it for context.
+8. Then start working from the .tasks/$task/ directory."
         fi
 
         # ── Shared context (per-project, visible to all worktrees) ────────
@@ -980,7 +984,9 @@ Get the branch name if it is a PR. Then:
 
 Also symlink shared context: ln -sf $shared_context .tasks/$task/SHARED_CONTEXT.md
 If SHARED_CONTEXT.md exists in the worktree, read it for cross-task context from other worktrees.
-When you discover something relevant to other tasks (schema changes, API changes, conventions), update SHARED_CONTEXT.md."
+When you discover something relevant to other tasks (schema changes, API changes, conventions), update SHARED_CONTEXT.md.
+
+IMPORTANT — Project rules: Before writing any code, read the project's CLAUDE.md at the worktree root if it exists. Also check .claude/rules/ for coding rules (e.g. backend.md, frontend.md, tests.md) — these have glob patterns in their frontmatter that specify which files they apply to. Follow all coding rules, conventions, and restrictions defined in these files when writing code."
 
         # ── Workflow template ─────────────────────────────────────────────
         if [[ -n "$workflow" ]]; then
