@@ -57,7 +57,7 @@ if [[ -n "${BASH_VERSION:-}" ]]; then
     _cw_comp() {
         local cur="${COMP_WORDS[COMP_CWORD]}" prev="${COMP_WORDS[COMP_CWORD-1]}"
         case "$prev" in
-            cw) COMPREPLY=($(compgen -W "init account project open work review spaces launch dashboard status help" -- "$cur")) ;;
+            cw) COMPREPLY=($(compgen -W "init account project open work review plan spaces launch dashboard status stats doctor help" -- "$cur")) ;;
             account) COMPREPLY=($(compgen -W "add list remove" -- "$cur")) ;;
             project) COMPREPLY=($(compgen -W "register list scaffold setup-mcps setup-agents info" -- "$cur")) ;;
             open|info|setup-mcps|setup-agents)
@@ -95,6 +95,7 @@ if [[ -n "${BASH_VERSION:-}" ]]; then
                 [[ -d "$CW_HOME/sessions/$proj" ]] && \
                 COMPREPLY=($(compgen -W "$(for d in $CW_HOME/sessions/$proj/review-*/session.json; do [[ -f "$d" ]] && python3 -c "import json; m=json.load(open('$d')); m.get('status')=='active' and print(m.get('pr',''))" 2>/dev/null; done)" -- "$cur")) ;;
             --type|-t) COMPREPLY=($(compgen -W "fullstack api knowledge infra agents" -- "$cur")) ;;
+            --workflow|-w) COMPREPLY=($(compgen -W "$(ls "$CW_HOME/templates/workflows/" 2>/dev/null | sed 's/\.md$//')" -- "$cur")) ;;
             --account|-a) [[ -d "$CW_HOME/accounts" ]] && COMPREPLY=($(compgen -W "$(ls "$CW_HOME/accounts" 2>/dev/null)" -- "$cur")) ;;
         esac
     }
@@ -104,7 +105,7 @@ fi
 # ── Zsh completions ─────────────────────────────────────────────────────────
 if [[ -n "${ZSH_VERSION:-}" ]]; then
     _cw_comp_zsh() {
-        local -a cmds=('init' 'account' 'project' 'open' 'work' 'review' 'spaces' 'launch' 'dashboard' 'status' 'help')
+        local -a cmds=('init' 'account' 'project' 'open' 'work' 'review' 'plan' 'spaces' 'launch' 'dashboard' 'status' 'stats' 'doctor' 'help')
         _arguments '1:command:($cmds)' '*::arg:->args'
         case "$state" in
             args)

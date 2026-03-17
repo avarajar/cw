@@ -103,6 +103,10 @@ This:
 
 ## What's Next
 
+- Run `cw doctor` to verify your setup is complete
 - Set up MCP integrations for Linear, GitHub, Notion (`cw project setup-mcps <name>`)
+- Try workflow templates: `cw work my-app fix-bug --workflow bugfix`
+- Plan large features: `cw plan my-app "add user authentication"`
+- Check your stats: `cw stats`
 - Customize the [CLAUDE.md template](./claude-md.md) for your projects
-- Learn about [session persistence](./architecture.md#session-persistence)
+- Learn about [session persistence](./architecture.md#session-persistence) and [shared context](./architecture.md#shared-context)

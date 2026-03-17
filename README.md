@@ -83,7 +83,8 @@ Creates the directory, initializes git, registers the project, and launches Clau
 
 ```bash
 cw work my-app fix-auth                                # branch name
-cw work my-app PROJ-123                                # ticket ID
+cw work my-app fix-auth --workflow bugfix              # with bugfix workflow
+cw work my-app PROJ-123 -w feature                     # feature workflow
 cw work my-app https://linear.app/team/issue/PROJ-123  # Linear URL
 cw work my-app https://github.com/org/repo/issues/42   # GitHub issue
 cw work my-app https://notion.so/team/Auth-Redesign    # Notion page
@@ -93,6 +94,24 @@ cw work my-app fix-auth --done                         # close + cleanup
 ```
 
 Creates an isolated worktree, tracks the session, fetches context from URLs via MCP, and launches Claude. `.env` files from the project root are automatically symlinked into worktrees. Resuming picks up exactly where you left off.
+
+#### Workflow Templates
+
+The `--workflow` flag applies structured instructions for different types of work:
+
+| Workflow | Use case |
+|----------|----------|
+| `feature` | New feature development with design-first approach |
+| `bugfix` | Bug fixes with reproduce-first methodology |
+| `refactor` | Safe refactoring with test-driven verification |
+| `security-audit` | OWASP-based security review |
+| `docs` | Documentation with audience-first approach |
+
+Workflow templates live in `~/.cw/templates/workflows/` and are fully customizable.
+
+#### Shared Context
+
+All worktrees in the same project share a `SHARED_CONTEXT.md` file (symlinked automatically). When one worktree discovers something relevant to others (schema changes, API changes, conventions), it updates the shared context — other worktrees see it immediately.
 
 ### Agent Teams — Parallel Work (Experimental)
 
@@ -104,6 +123,15 @@ cw work my-app big-feature --team "backend, frontend, tests"   # specify teammat
 Leverages Claude Code's [agent teams](https://code.claude.com/docs/en/agent-teams) for parallel work. Multiple teammates tackle different parts of the task simultaneously, coordinating through a shared task list. The arcade dashboard shows each teammate's activity in real-time.
 
 > `cw create` also supports `--team` for bootstrapping new projects with agent teams.
+
+### Plan — Auto-Split Tasks
+
+```bash
+cw plan my-app "migrate auth to OAuth2"
+cw plan my-app "add payment processing with Stripe"
+```
+
+Launches Claude to analyze your project, break the goal into 2-6 independent sub-tasks, and optionally create worktrees for each. Each sub-task gets a suggested workflow template. Great for large features that benefit from parallel work.
 
 ### Review — PR Reviews
 
@@ -126,6 +154,23 @@ cw clean --force        # skip confirmation prompt
 ```
 
 Finds worktrees and sessions that have been inactive beyond a threshold and cleans them up. `.env` files are automatically symlinked into worktrees on task creation, so environment variables are always available.
+
+### Doctor — Health Check
+
+```bash
+cw doctor
+```
+
+Validates your entire setup: git version, python3, claude CLI, account authentication, project paths, workflow templates, stale sessions, and orphaned worktrees. Run it to diagnose issues or verify a fresh install.
+
+### Stats — Session Metrics
+
+```bash
+cw stats                # all projects
+cw stats my-app         # single project
+```
+
+Shows productivity metrics across sessions: total/active/done tasks, average opens per session, completion rate, duration for completed tasks, and workflow usage breakdown.
 
 ### Quick Access
 
@@ -352,13 +397,17 @@ No. You can use plain branch names (`cw work my-app fix-auth`). URL integration 
 | `cw init` | Initialize CW directory structure |
 | `cw create "<description>"` | Bootstrap new project from scratch |
 | `cw work <project> <task\|URL>` | Work on feature/bug in isolated worktree |
+| `cw work <project> <task> --workflow <type>` | Work with workflow template (feature\|bugfix\|refactor\|security-audit\|docs) |
 | `cw work <project> <task> --team` | Work with agent teams |
 | `cw work <project> <task> --done` | Close task, cleanup worktree |
+| `cw plan <project> "<description>"` | Plan & auto-split into sub-worktrees |
 | `cw review <project> <PR\|URL>` | Review PR in isolated worktree |
 | `cw review <project> <PR> --done` | Close review |
 | `cw open <project>` | Quick open (no worktree) |
 | `cw spaces` | List active tasks and reviews |
 | `cw dashboard` | Full workspace overview |
+| `cw stats [project]` | Session metrics and productivity stats |
+| `cw doctor` | Health check — verify setup and diagnose issues |
 | `cw arcade` | Live activity dashboard |
 | `cw arcade --setup` | Install activity hooks |
 | `cw account add\|list\|remove` | Manage accounts |
