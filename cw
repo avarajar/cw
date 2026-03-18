@@ -77,7 +77,7 @@ print(m.group(1) if m else 'default')
 }
 
 _ensure_dirs() {
-    mkdir -p "$CW_HOME"/{accounts,templates/workflows,agents,commands,mcps,hooks,lib,bin}
+    mkdir -p "$CW_HOME"/{accounts,templates/workflows,agents,commands,mcps,hooks,lib,bin,stacks}
 }
 
 _get_project() {
@@ -147,6 +147,7 @@ YAML
     _generate_commands
     _generate_mcp_docs
     _generate_workflows
+    _generate_stacks
 
     # Copy dashboard lib from repo to ~/.cw/lib/dashboard
     local repo_dashboard=""
@@ -1513,6 +1514,17 @@ for n, i in reg.items():
         warnings=$((warnings+1))
     fi
 
+    # ── Stack definitions ─────────────────────────────────────────────
+    local stack_dir="$CW_HOME/stacks"
+    if [[ -d "$stack_dir" ]] && ls "$stack_dir"/*.sh &>/dev/null; then
+        local st_count; st_count=$(ls "$stack_dir"/*.sh 2>/dev/null | wc -l | tr -d ' ')
+        local st_names; st_names=$(ls "$stack_dir"/*.sh 2>/dev/null | xargs -I{} basename {} .sh | tr '\n' ' ')
+        echo -e "  ${G}✓${NC} $st_count stack(s): ${DIM}$st_names${NC}"
+    else
+        echo -e "  ${Y}!${NC} No stack definitions — run ${C}cw init${NC}"
+        warnings=$((warnings+1))
+    fi
+
     # ── Stale sessions ───────────────────────────────────────────────────
     local stale; stale=$(_find_stale_spaces)
     if [[ -n "$stale" ]]; then
@@ -2380,6 +2392,790 @@ MD
 }
 
 # ════════════════════════════════════════════════════════════════════════════
+# STACK — Auto-configure Claude Code for project tech stack
+# ════════════════════════════════════════════════════════════════════════════
+
+_generate_stacks() {
+    local sd="$CW_HOME/stacks"
+    mkdir -p "$sd"
+
+    # ── Runtime stacks ─────────────────────────────────────────────────
+    cat > "$sd/node.sh" << 'STACKEOF'
+STACK_NAME="Node.js"
+STACK_LAYER="runtime"
+STACK_PRIORITY=10
+STACK_DEPENDS=""
+DETECT_FILES="package.json"
+DETECT_PATTERN=""
+STACK_PLUGINS=""
+STACK_AGENTS=""
+STACK_CLAUDE_MD="## Node.js Conventions
+
+- Use the project's package manager (check lockfile: package-lock.json→npm, yarn.lock→yarn, pnpm-lock.yaml→pnpm, bun.lockb→bun)
+- Run tests with the test script in package.json before committing
+- Prefer ES modules (import/export) unless the project uses CommonJS
+- Check for .nvmrc or .node-version for the expected Node version
+- Never commit node_modules/"
+STACKEOF
+
+    cat > "$sd/python.sh" << 'STACKEOF'
+STACK_NAME="Python"
+STACK_LAYER="runtime"
+STACK_PRIORITY=10
+STACK_DEPENDS=""
+DETECT_FILES="requirements.txt|pyproject.toml|setup.py|Pipfile"
+DETECT_PATTERN=""
+STACK_PLUGINS=""
+STACK_AGENTS=""
+STACK_CLAUDE_MD="## Python Conventions
+
+- Use the project's virtual environment (check for venv/, .venv/, or Pipfile)
+- Follow PEP 8 style, use type hints for function signatures
+- Run tests with pytest (or the project's test runner) before committing
+- Check pyproject.toml or setup.cfg for project configuration
+- Never commit __pycache__/ or .pyc files"
+STACKEOF
+
+    cat > "$sd/go.sh" << 'STACKEOF'
+STACK_NAME="Go"
+STACK_LAYER="runtime"
+STACK_PRIORITY=10
+STACK_DEPENDS=""
+DETECT_FILES="go.mod"
+DETECT_PATTERN=""
+STACK_PLUGINS=""
+STACK_AGENTS=""
+STACK_CLAUDE_MD="## Go Conventions
+
+- Run \`go test ./...\` before committing
+- Handle errors explicitly — never ignore returned errors
+- Follow standard Go project layout (cmd/, internal/, pkg/)
+- Use \`go fmt\` and \`go vet\` for code quality
+- Check go.mod for the Go version and dependencies"
+STACKEOF
+
+    cat > "$sd/rust.sh" << 'STACKEOF'
+STACK_NAME="Rust"
+STACK_LAYER="runtime"
+STACK_PRIORITY=10
+STACK_DEPENDS=""
+DETECT_FILES="Cargo.toml"
+DETECT_PATTERN=""
+STACK_PLUGINS=""
+STACK_AGENTS=""
+STACK_CLAUDE_MD="## Rust Conventions
+
+- Run \`cargo test\` before committing
+- Run \`cargo clippy\` for lints and \`cargo fmt\` for formatting
+- Prefer Result<T, E> over panic! for error handling
+- Follow ownership rules — minimize .clone() usage
+- Check Cargo.toml for edition, features, and workspace config"
+STACKEOF
+
+    cat > "$sd/ruby.sh" << 'STACKEOF'
+STACK_NAME="Ruby"
+STACK_LAYER="runtime"
+STACK_PRIORITY=10
+STACK_DEPENDS=""
+DETECT_FILES="Gemfile"
+DETECT_PATTERN=""
+STACK_PLUGINS=""
+STACK_AGENTS=""
+STACK_CLAUDE_MD="## Ruby Conventions
+
+- Use Bundler for dependency management (\`bundle exec\` for commands)
+- Run tests with \`bundle exec rspec\` or \`bundle exec rake test\`
+- Check .ruby-version for the expected Ruby version
+- Follow the project's style (check for .rubocop.yml)"
+STACKEOF
+
+    # ── Framework stacks ───────────────────────────────────────────────
+    cat > "$sd/nextjs.sh" << 'STACKEOF'
+STACK_NAME="Next.js"
+STACK_LAYER="framework"
+STACK_PRIORITY=20
+STACK_DEPENDS="node"
+DETECT_FILES="package.json"
+DETECT_PATTERN="next"
+STACK_PLUGINS="vercel"
+STACK_AGENTS="nextjs-dev"
+STACK_CLAUDE_MD="## Next.js Conventions
+
+- Default to Server Components; only add 'use client' when needed
+- Use Server Actions ('use server') for data mutations
+- All request APIs are async: await cookies(), await headers(), await params
+- Use next/image for images and next/font for fonts
+- Route Handlers for public APIs, Server Actions for internal mutations
+- Check next.config.ts for project-specific settings"
+STACKEOF
+
+    cat > "$sd/react.sh" << 'STACKEOF'
+STACK_NAME="React"
+STACK_LAYER="framework"
+STACK_PRIORITY=15
+STACK_DEPENDS="node"
+DETECT_FILES="package.json"
+DETECT_PATTERN="react"
+STACK_PLUGINS=""
+STACK_AGENTS=""
+STACK_CLAUDE_MD="## React Conventions
+
+- Use functional components with hooks (no class components)
+- Keep components small and focused (single responsibility)
+- Use custom hooks to extract reusable logic
+- Memoize expensive computations with useMemo/useCallback when needed
+- Follow the existing state management pattern (Context, Redux, Zustand, etc.)"
+STACKEOF
+
+    cat > "$sd/django.sh" << 'STACKEOF'
+STACK_NAME="Django"
+STACK_LAYER="framework"
+STACK_PRIORITY=20
+STACK_DEPENDS="python"
+DETECT_FILES="manage.py"
+DETECT_PATTERN=""
+STACK_PLUGINS=""
+STACK_AGENTS="django-dev"
+STACK_CLAUDE_MD="## Django Conventions
+
+- Run migrations with \`python manage.py migrate\` after model changes
+- Create migrations with \`python manage.py makemigrations\`
+- Run tests with \`python manage.py test\` or pytest-django
+- Follow Django project structure (apps, models, views, urls, templates)
+- Use Django ORM — avoid raw SQL unless necessary for performance"
+STACKEOF
+
+    cat > "$sd/fastapi.sh" << 'STACKEOF'
+STACK_NAME="FastAPI"
+STACK_LAYER="framework"
+STACK_PRIORITY=20
+STACK_DEPENDS="python"
+DETECT_FILES="requirements.txt|pyproject.toml"
+DETECT_PATTERN="fastapi"
+STACK_PLUGINS=""
+STACK_AGENTS="api-dev"
+STACK_CLAUDE_MD="## FastAPI Conventions
+
+- Use Pydantic models for request/response validation
+- Use async def for route handlers when doing I/O
+- Follow RESTful conventions for endpoint naming
+- Use dependency injection for shared logic (Depends())
+- Check for alembic.ini for database migrations"
+STACKEOF
+
+    # ── Meta stacks ────────────────────────────────────────────────────
+    cat > "$sd/vercel.sh" << 'STACKEOF'
+STACK_NAME="Vercel"
+STACK_LAYER="meta"
+STACK_PRIORITY=30
+STACK_DEPENDS=""
+DETECT_FILES="vercel.json|.vercel"
+DETECT_PATTERN=""
+STACK_PLUGINS="vercel"
+STACK_AGENTS=""
+STACK_CLAUDE_MD="## Vercel Conventions
+
+- Use environment variables via Vercel dashboard or CLI (vercel env)
+- Never hardcode secrets — use .env.local for local development
+- Configure build settings in vercel.json if needed
+- Use vercel dev for local development with Vercel features"
+STACKEOF
+
+    cat > "$sd/prisma.sh" << 'STACKEOF'
+STACK_NAME="Prisma"
+STACK_LAYER="meta"
+STACK_PRIORITY=30
+STACK_DEPENDS=""
+DETECT_FILES="prisma/schema.prisma"
+DETECT_PATTERN=""
+STACK_PLUGINS=""
+STACK_AGENTS=""
+STACK_CLAUDE_MD="## Prisma Conventions
+
+- Run \`npx prisma generate\` after schema changes
+- Run \`npx prisma migrate dev\` for development migrations
+- Use \`npx prisma studio\` to inspect data
+- Always check schema.prisma for the data model before writing queries
+- Use transactions for multi-table operations"
+STACKEOF
+
+    cat > "$sd/docker.sh" << 'STACKEOF'
+STACK_NAME="Docker"
+STACK_LAYER="meta"
+STACK_PRIORITY=30
+STACK_DEPENDS=""
+DETECT_FILES="Dockerfile|docker-compose.yml|docker-compose.yaml|compose.yml|compose.yaml"
+DETECT_PATTERN=""
+STACK_PLUGINS=""
+STACK_AGENTS=""
+STACK_CLAUDE_MD="## Docker Conventions
+
+- Use multi-stage builds to minimize image size
+- Check docker-compose.yml for service dependencies
+- Use .dockerignore to exclude unnecessary files
+- Run \`docker compose up\` for local development with services
+- Never commit secrets in Dockerfiles — use build args or env vars"
+STACKEOF
+
+    cat > "$sd/stripe.sh" << 'STACKEOF'
+STACK_NAME="Stripe"
+STACK_LAYER="meta"
+STACK_PRIORITY=30
+STACK_DEPENDS=""
+DETECT_FILES="package.json|requirements.txt|Gemfile"
+DETECT_PATTERN="stripe"
+STACK_PLUGINS=""
+STACK_AGENTS=""
+STACK_CLAUDE_MD="## Stripe Conventions
+
+- Use Stripe CLI for local webhook testing (\`stripe listen --forward-to\`)
+- Always verify webhook signatures in production
+- Use test mode keys for development (sk_test_*, pk_test_*)
+- Handle idempotency for payment operations
+- Check for stripe.js or @stripe/stripe-js for frontend integration"
+STACKEOF
+
+    _log "Stack definitions generated (${C}$sd${NC})"
+}
+
+# Agent templates for stack-specific agents
+_generate_stack_agents() {
+    local agents_dir="$CW_HOME/agents"
+    mkdir -p "$agents_dir"
+
+    [[ -f "$agents_dir/nextjs-dev.md" ]] || cat > "$agents_dir/nextjs-dev.md" << 'MD'
+---
+name: nextjs-dev
+description: >
+  Next.js development specialist. Invoke for App Router, Server Components,
+  Server Actions, routing, data fetching, and rendering strategies.
+  Examples: "help with server component", "fix SSR issue", "add API route"
+model: inherit
+tools: Read, Write, Edit, Grep, Glob, Bash
+---
+You are a Next.js App Router specialist.
+
+Key patterns:
+- Server Components are default (no directive needed)
+- Client Components need 'use client' at the top
+- Server Actions need 'use server' at the top
+- All request APIs are async: await cookies(), await headers()
+- Use next/image, next/font, next/link for optimized assets
+- Route Handlers go in app/api/*/route.ts
+- Layouts persist across navigations, use for shared UI
+MD
+
+    [[ -f "$agents_dir/django-dev.md" ]] || cat > "$agents_dir/django-dev.md" << 'MD'
+---
+name: django-dev
+description: >
+  Django development specialist. Invoke for models, views, migrations,
+  templates, admin, ORM queries, and Django REST Framework.
+  Examples: "create model", "fix migration", "add API endpoint"
+model: inherit
+tools: Read, Write, Edit, Grep, Glob, Bash
+---
+You are a Django development specialist.
+
+Key patterns:
+- Models define the data layer — always makemigrations after changes
+- Use class-based views for CRUD, function-based for custom logic
+- DRF serializers for API responses
+- Use select_related/prefetch_related to avoid N+1 queries
+- Admin site for quick data management
+MD
+
+    [[ -f "$agents_dir/api-dev.md" ]] || cat > "$agents_dir/api-dev.md" << 'MD'
+---
+name: api-dev
+description: >
+  API development specialist. Invoke for REST/GraphQL endpoints, Pydantic models,
+  async handlers, middleware, and API testing.
+  Examples: "add endpoint", "fix validation", "add middleware"
+model: inherit
+tools: Read, Write, Edit, Grep, Glob, Bash
+---
+You are an API development specialist (FastAPI/Express/etc).
+
+Key patterns:
+- Use typed request/response models for validation
+- Async handlers for I/O-bound operations
+- Dependency injection for shared logic
+- Proper error responses with status codes
+- Rate limiting and auth middleware
+MD
+}
+
+# ── Stack detection engine ─────────────────────────────────────────────
+_stack_detect() {
+    local project_path="${1:?Usage: _stack_detect <project_path>}"
+    local sd="$CW_HOME/stacks"
+    [[ -d "$sd" ]] || { _err "No stacks directory. Run: cw init"; return 1; }
+
+    local detected=()
+
+    for stack_file in "$sd"/*.sh; do
+        [[ -f "$stack_file" ]] || continue
+
+        # Reset variables before sourcing
+        local STACK_NAME="" STACK_LAYER="" STACK_PRIORITY=0 STACK_DEPENDS=""
+        local DETECT_FILES="" DETECT_PATTERN=""
+        local STACK_PLUGINS="" STACK_AGENTS="" STACK_CLAUDE_MD=""
+
+        # Source the stack definition
+        # shellcheck disable=SC1090
+        source "$stack_file"
+
+        local stack_id
+        stack_id=$(basename "$stack_file" .sh)
+
+        # Check DETECT_FILES (pipe-separated)
+        local found=false
+        IFS='|' read -ra files <<< "$DETECT_FILES"
+        for f in "${files[@]}"; do
+            [[ -z "$f" ]] && continue
+            # Support paths with / (like prisma/schema.prisma)
+            if [[ -e "$project_path/$f" ]]; then
+                found=true
+                break
+            fi
+        done
+
+        $found || continue
+
+        # If DETECT_PATTERN is set, check it
+        if [[ -n "$DETECT_PATTERN" ]]; then
+            local pattern_found=false
+            # For package.json, parse deps with python3
+            if [[ -f "$project_path/package.json" ]]; then
+                if python3 -c "
+import json, sys
+with open('$project_path/package.json') as f: pkg = json.load(f)
+deps = list(pkg.get('dependencies', {}).keys()) + list(pkg.get('devDependencies', {}).keys())
+sys.exit(0 if any('$DETECT_PATTERN' in d for d in deps) else 1)
+" 2>/dev/null; then
+                    pattern_found=true
+                fi
+            fi
+            # For requirements.txt, Gemfile, etc — grep
+            if ! $pattern_found; then
+                for f in "${files[@]}"; do
+                    [[ -z "$f" || "$f" == "package.json" ]] && continue
+                    if [[ -f "$project_path/$f" ]] && grep -qi "$DETECT_PATTERN" "$project_path/$f" 2>/dev/null; then
+                        pattern_found=true
+                        break
+                    fi
+                done
+            fi
+            $pattern_found || continue
+        fi
+
+        detected+=("$STACK_PRIORITY|$STACK_LAYER|$stack_id|$STACK_NAME|$STACK_DEPENDS")
+    done
+
+    # Resolve dependencies — add missing deps
+    local resolved=()
+    local dep_ids=()
+    for entry in "${detected[@]}"; do
+        dep_ids+=("$(echo "$entry" | cut -d'|' -f3)")
+    done
+
+    for entry in "${detected[@]}"; do
+        local deps
+        deps=$(echo "$entry" | cut -d'|' -f5)
+        if [[ -n "$deps" ]]; then
+            IFS=' ' read -ra dep_list <<< "$deps"
+            for dep in "${dep_list[@]}"; do
+                # Check if dep is already detected
+                local dep_found=false
+                for did in "${dep_ids[@]}"; do
+                    [[ "$did" == "$dep" ]] && { dep_found=true; break; }
+                done
+                if ! $dep_found && [[ -f "$CW_HOME/stacks/$dep.sh" ]]; then
+                    local DEP_NAME="" DEP_LAYER="" DEP_PRIORITY=0
+                    # shellcheck disable=SC1090
+                    source "$CW_HOME/stacks/$dep.sh"
+                    resolved+=("$STACK_PRIORITY|$STACK_LAYER|$dep|$STACK_NAME|")
+                    dep_ids+=("$dep")
+                fi
+            done
+        fi
+    done
+
+    # Combine detected + resolved deps
+    local all=("${detected[@]}" "${resolved[@]}")
+
+    # Sort by layer order (runtime=1, framework=2, meta=3) then by priority
+    printf '%s\n' "${all[@]}" | python3 -c "
+import sys
+layer_order = {'runtime': 1, 'framework': 2, 'meta': 3}
+lines = [l.strip() for l in sys.stdin if l.strip()]
+lines.sort(key=lambda l: (layer_order.get(l.split('|')[1], 9), int(l.split('|')[0])))
+for l in lines: print(l)
+" 2>/dev/null
+}
+
+# ── Stack display ──────────────────────────────────────────────────────
+_stack_show() {
+    local project_path="$1"
+    shift
+    local stacks=("$@")
+
+    if [[ ${#stacks[@]} -eq 0 ]]; then
+        echo -e "  ${DIM}No stacks detected${NC}"
+        return
+    fi
+
+    local current_layer=""
+    for entry in "${stacks[@]}"; do
+        local layer stack_id stack_name
+        layer=$(echo "$entry" | cut -d'|' -f2)
+        stack_id=$(echo "$entry" | cut -d'|' -f3)
+        stack_name=$(echo "$entry" | cut -d'|' -f4)
+
+        if [[ "$layer" != "$current_layer" ]]; then
+            current_layer="$layer"
+            local layer_color="$C"
+            case "$layer" in
+                runtime)   layer_color="$B" ;;
+                framework) layer_color="$M" ;;
+                meta)      layer_color="$C" ;;
+            esac
+            echo -e "  ${layer_color}${BOLD}$layer${NC}"
+        fi
+        echo -e "    ${G}●${NC} $stack_name ${DIM}($stack_id)${NC}"
+    done
+}
+
+# ── Stack application engine ───────────────────────────────────────────
+_stack_apply() {
+    local proj_name="$1" proj_path="$2" acct_dir="$3" dry_run="${4:-false}"
+    shift 4
+    local stacks=("$@")
+
+    [[ ${#stacks[@]} -eq 0 ]] && return
+
+    # Generate agent templates if needed
+    _generate_stack_agents
+
+    local applied=()
+
+    for entry in "${stacks[@]}"; do
+        local stack_id stack_name
+        stack_id=$(echo "$entry" | cut -d'|' -f3)
+        stack_name=$(echo "$entry" | cut -d'|' -f4)
+
+        # Re-source to get STACK_PLUGINS, STACK_AGENTS, STACK_CLAUDE_MD
+        local STACK_PLUGINS="" STACK_AGENTS="" STACK_CLAUDE_MD=""
+        # shellcheck disable=SC1090
+        source "$CW_HOME/stacks/$stack_id.sh"
+
+        # ── Install plugins ────────────────────────────────────────────
+        if [[ -n "$STACK_PLUGINS" ]]; then
+            for plugin in $STACK_PLUGINS; do
+                if $dry_run; then
+                    _log "  ${DIM}[dry-run]${NC} Would install plugin: ${C}$plugin${NC}"
+                else
+                    # Check if plugin already installed
+                    if command -v claude &>/dev/null && claude plugin list 2>/dev/null | grep -q "$plugin"; then
+                        _dim "  Plugin $plugin already installed"
+                    else
+                        _log "  Installing plugin: ${C}$plugin${NC}"
+                        if command -v claude &>/dev/null; then
+                            CLAUDE_CONFIG_DIR="$acct_dir" claude plugin add "$plugin" 2>/dev/null || _warn "  Could not install plugin $plugin"
+                        else
+                            _warn "  claude CLI not found — skip plugin $plugin"
+                        fi
+                    fi
+                fi
+            done
+        fi
+
+        # ── Install agents ─────────────────────────────────────────────
+        if [[ -n "$STACK_AGENTS" ]]; then
+            mkdir -p "$proj_path/.claude/agents"
+            for agent in $STACK_AGENTS; do
+                local src="$CW_HOME/agents/$agent.md"
+                local dst="$proj_path/.claude/agents/$agent.md"
+                if $dry_run; then
+                    _log "  ${DIM}[dry-run]${NC} Would copy agent: ${C}$agent${NC}"
+                else
+                    if [[ -f "$dst" ]]; then
+                        _dim "  Agent $agent already installed"
+                    elif [[ -f "$src" ]]; then
+                        cp "$src" "$dst"
+                        _log "  Installed agent: ${C}$agent${NC}"
+                    else
+                        _warn "  Agent source not found: $src"
+                    fi
+                fi
+            done
+        fi
+
+        # ── Inject CLAUDE.md section ───────────────────────────────────
+        if [[ -n "$STACK_CLAUDE_MD" ]]; then
+            local claude_md="$proj_path/CLAUDE.md"
+            local marker_start="<!-- cw:stack:$stack_id -->"
+            local marker_end="<!-- /cw:stack:$stack_id -->"
+
+            if $dry_run; then
+                _log "  ${DIM}[dry-run]${NC} Would add CLAUDE.md section: ${C}$stack_name${NC}"
+            else
+                if [[ -f "$claude_md" ]] && grep -q "$marker_start" "$claude_md" 2>/dev/null; then
+                    # Replace existing section
+                    python3 -c "
+import re
+with open('$claude_md') as f: content = f.read()
+pattern = re.escape('$marker_start') + r'.*?' + re.escape('$marker_end')
+replacement = '''$marker_start
+$STACK_CLAUDE_MD
+$marker_end'''
+content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+with open('$claude_md', 'w') as f: f.write(content)
+" 2>/dev/null
+                    _dim "  Updated CLAUDE.md section: $stack_name"
+                else
+                    # Append new section
+                    [[ -f "$claude_md" ]] || touch "$claude_md"
+                    printf '\n%s\n%s\n%s\n' "$marker_start" "$STACK_CLAUDE_MD" "$marker_end" >> "$claude_md"
+                    _log "  Added CLAUDE.md section: ${C}$stack_name${NC}"
+                fi
+            fi
+        fi
+
+        applied+=("$stack_id")
+    done
+
+    # Save state
+    if ! $dry_run && [[ ${#applied[@]} -gt 0 ]]; then
+        _stack_save_state "$proj_name" "${applied[@]}"
+    fi
+}
+
+# ── Stack state persistence ────────────────────────────────────────────
+_stack_save_state() {
+    local proj_name="$1"; shift
+    local stacks=("$@")
+    local state_dir="$CW_HOME/sessions/$proj_name"
+    mkdir -p "$state_dir"
+    python3 -c "
+import json
+from datetime import datetime, timezone
+data = {
+    'stacks': $(printf '%s\n' "${stacks[@]}" | python3 -c "import sys,json; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))"),
+    'applied_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+}
+with open('$state_dir/stack.json', 'w') as f: json.dump(data, f, indent=2)
+" 2>/dev/null
+}
+
+_stack_load_state() {
+    local proj_name="$1"
+    local state_file="$CW_HOME/sessions/$proj_name/stack.json"
+    if [[ -f "$state_file" ]]; then
+        python3 -c "
+import json
+with open('$state_file') as f: data = json.load(f)
+for s in data.get('stacks', []): print(s)
+print('---')
+print(data.get('applied_at', 'unknown'))
+" 2>/dev/null
+    fi
+}
+
+_stack_reset() {
+    local proj_name="${1:?Usage: _stack_reset <project>}"
+    local state_file="$CW_HOME/sessions/$proj_name/stack.json"
+    if [[ -f "$state_file" ]]; then
+        rm "$state_file"
+        _log "Stack state reset for ${C}$proj_name${NC}"
+    else
+        _warn "No stack state found for $proj_name"
+    fi
+}
+
+_stack_list() {
+    local sd="$CW_HOME/stacks"
+    if [[ ! -d "$sd" ]] || ! ls "$sd"/*.sh &>/dev/null; then
+        _warn "No stacks found. Run: ${C}cw init${NC}"
+        return
+    fi
+
+    echo -e "\n${BOLD}Available Stacks${NC}\n"
+
+    # Collect stack info via python3 to avoid delimiter issues
+    python3 -c "
+import os, sys
+sd = '$sd'
+stacks = []
+for f in sorted(os.listdir(sd)):
+    if not f.endswith('.sh'): continue
+    info = {'id': f[:-3]}
+    with open(os.path.join(sd, f)) as fh:
+        for line in fh:
+            line = line.strip()
+            if '=' in line and not line.startswith('#'):
+                key, _, val = line.partition('=')
+                val = val.strip('\"').strip(\"'\")
+                if key == 'STACK_NAME': info['name'] = val
+                elif key == 'STACK_LAYER': info['layer'] = val
+                elif key == 'STACK_PRIORITY': info['priority'] = int(val) if val.isdigit() else 0
+                elif key == 'DETECT_FILES': info['detect'] = val.replace('|', ', ')
+                elif key == 'STACK_PLUGINS': info['plugins'] = val
+                elif key == 'STACK_AGENTS': info['agents'] = val
+    stacks.append(info)
+
+layer_order = {'runtime': 1, 'framework': 2, 'meta': 3}
+stacks.sort(key=lambda s: (layer_order.get(s.get('layer',''), 9), s.get('priority', 0)))
+
+current_layer = ''
+for s in stacks:
+    layer = s.get('layer', '')
+    if layer != current_layer:
+        current_layer = layer
+        # TAB-separated: TYPE TAB layer
+        print(f'L\t{layer}')
+    extras = []
+    if s.get('plugins'): extras.append(f'plugins:{s[\"plugins\"]}')
+    if s.get('agents'): extras.append(f'agents:{s[\"agents\"]}')
+    ext = ' '.join(extras)
+    # TAB-separated: TYPE TAB name TAB id TAB detect TAB extras
+    print(f'S\t{s.get(\"name\",\"?\")}\t{s[\"id\"]}\t{s.get(\"detect\",\"\")}\t{ext}')
+" 2>/dev/null | while IFS=$'\t' read -r typ f1 f2 f3 f4; do
+        if [[ "$typ" == "L" ]]; then
+            local layer_color="$C"
+            case "$f1" in
+                runtime)   layer_color="$B" ;;
+                framework) layer_color="$M" ;;
+                meta)      layer_color="$C" ;;
+            esac
+            echo -e "  ${layer_color}${BOLD}$f1${NC}"
+        elif [[ "$typ" == "S" ]]; then
+            local line_out="    ${G}●${NC} ${BOLD}$f1${NC} ${DIM}($f2)${NC}  detects: ${DIM}$f3${NC}"
+            [[ -n "$f4" ]] && line_out+="  ${C}$f4${NC}"
+            echo -e "$line_out"
+        fi
+    done
+    echo ""
+}
+
+# ── Main command ───────────────────────────────────────────────────────
+cmd_stack() {
+    local project="" detect_only=false apply_flag=false list_flag=false
+    local reset_flag=false dry_run=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --detect)   detect_only=true; shift ;;
+            --apply)    apply_flag=true; shift ;;
+            --list)     list_flag=true; shift ;;
+            --reset)    reset_flag=true; shift ;;
+            --dry-run)  dry_run=true; shift ;;
+            -*)         _err "Unknown flag: $1"; return 1 ;;
+            *)          project="$1"; shift ;;
+        esac
+    done
+
+    # --list: show available stacks
+    if $list_flag; then
+        _stack_list
+        return
+    fi
+
+    # Resolve project
+    local proj_path="" proj_name="" account=""
+    if [[ -n "$project" ]]; then
+        local proj_data
+        proj_data=$(_get_project "$project") || { _err "Project '$project' not found in registry."; return 1; }
+        proj_path=$(_get_field "$proj_data" "path" "")
+        proj_name="$project"
+        account=$(_get_field "$proj_data" "account" "$(_default_account)")
+    else
+        # Try current directory
+        proj_path="$(pwd)"
+        # Look up in registry by path
+        proj_name=$(python3 -c "
+import json, os
+with open('$CW_REGISTRY') as f: reg = json.load(f)
+cwd = os.path.realpath('$proj_path')
+for n, i in reg.items():
+    if os.path.realpath(i.get('path', '')) == cwd:
+        print(n); break
+" 2>/dev/null)
+        if [[ -z "$proj_name" ]]; then
+            proj_name=$(basename "$proj_path")
+            _warn "Project not in registry — using directory: ${C}$proj_path${NC}"
+        else
+            local proj_data
+            proj_data=$(_get_project "$proj_name")
+            account=$(_get_field "$proj_data" "account" "$(_default_account)")
+        fi
+    fi
+
+    [[ -d "$proj_path" ]] || { _err "Project path not found: $proj_path"; return 1; }
+
+    local acct_dir="$CW_ACCOUNTS_DIR/${account:-$(_default_account)}"
+
+    # --reset: clear stack state
+    if $reset_flag; then
+        [[ -n "$proj_name" ]] && _stack_reset "$proj_name"
+        return
+    fi
+
+    # Detect stacks
+    echo -e "\n${BOLD}Stack Detection${NC} — ${C}$proj_path${NC}\n"
+    local detected_raw
+    detected_raw=$(_stack_detect "$proj_path")
+
+    local detected=()
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && detected+=("$line")
+    done <<< "$detected_raw"
+
+    if [[ ${#detected[@]} -eq 0 ]]; then
+        echo -e "  ${DIM}No stacks detected${NC}\n"
+        return
+    fi
+
+    _stack_show "$proj_path" "${detected[@]}"
+    echo ""
+
+    # --detect: stop after showing
+    if $detect_only; then
+        return
+    fi
+
+    # --dry-run or --apply: skip confirmation
+    if $dry_run; then
+        _log "Dry run — showing what would be applied:\n"
+        _stack_apply "$proj_name" "$proj_path" "$acct_dir" "true" "${detected[@]}"
+        echo ""
+        return
+    fi
+
+    if ! $apply_flag; then
+        # Interactive confirmation
+        read -rp "  Apply these stacks? [Y/n] " confirm
+        [[ "$confirm" =~ ^[nN]$ ]] && { _log "Skipped."; return; }
+    fi
+
+    _log "Applying stacks...\n"
+    _stack_apply "$proj_name" "$proj_path" "$acct_dir" "false" "${detected[@]}"
+    echo ""
+    _log "${G}✓${NC} Stacks applied to ${C}$proj_name${NC}"
+
+    # Show previously applied if exists
+    local prev
+    prev=$(_stack_load_state "$proj_name" 2>/dev/null)
+    if [[ -n "$prev" ]]; then
+        local applied_at
+        applied_at=$(echo "$prev" | tail -1)
+        [[ "$applied_at" != "---" ]] && _dim "  Last applied: $applied_at"
+    fi
+    echo ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
 # GSD — Get Shit Done workflow integration
 # ════════════════════════════════════════════════════════════════════════════
 cmd_gsd() {
@@ -2642,6 +3438,10 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
 
     unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) CREATE $proj_name account=$account" >> "$CW_SESSIONS_LOG"
+
+    # Tip: suggest running cw stack
+    echo ""
+    _log "${DIM}Tip: run ${C}cw stack $proj_name${DIM} to auto-configure Claude for your tech stack${NC}"
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -2691,6 +3491,12 @@ ${BOLD}SETUP${NC}
   project list                        List projects
   project setup-mcps <name>           Configure GitHub/Linear/Notion/Slack
   project setup-agents <name>         Install agents and commands
+  stack [project] [flags]             Auto-configure Claude for tech stack
+    --detect                          Only detect (don't apply)
+    --apply                           Apply without confirmation
+    --list                            List available stacks
+    --reset                           Clear applied stack state
+    --dry-run                         Show what would be done
 
 ${BOLD}INFO${NC}
   dashboard                           Full workspace overview
@@ -2730,6 +3536,11 @@ ${BOLD}EXAMPLES${NC}
   cw dashboard                                      # Full overview
   cw stats                                          # Session metrics
   cw doctor                                         # Health check
+
+  cw stack --list                                    # Available stacks
+  cw stack my-app --detect                           # Detect stack (no apply)
+  cw stack my-app --dry-run                          # Show what would be applied
+  cw stack my-app                                    # Detect + confirm + apply
 
 ${BOLD}INTEGRATIONS${NC}
   cw gsd:init [path]                Initialize GSD workflow in a worktree
@@ -2780,6 +3591,7 @@ main() {
         status)     cmd_status "$@" ;;
         stats)      cmd_stats "$@" ;;
         doctor)     cmd_doctor "$@" ;;
+        stack)      cmd_stack "$@" ;;
         gsd|gsd:init|gsd:sync) cmd_gsd "${cmd#gsd:}" "$@" ;;
         help|-h|--help) cmd_help ;;
         version|-v|--version) echo "cw $CW_VERSION" ;;
