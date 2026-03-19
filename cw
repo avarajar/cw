@@ -352,19 +352,27 @@ _project_setup_mcps() {
     local account; account=$(_get_field "$pj" account "$(_default_account)")
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
 
-    # Check which MCPs are already installed
-    local existing=""
-    existing=$(CLAUDE_CONFIG_DIR="$acct_dir" claude mcp list 2>/dev/null || true)
+    # Check which MCPs are already installed (direct JSON read)
+    local settings_file="$acct_dir/settings.json"
+    local existing_mcps=""
+    if [[ -f "$settings_file" ]]; then
+        existing_mcps=$(python3 -c "
+import json
+with open('$settings_file') as f:
+    d = json.load(f)
+print(' '.join(d.get('mcpServers', {}).keys()))
+" 2>/dev/null || true)
+    fi
 
     echo -e "\n${BOLD}Configure MCPs for ${C}$name${NC} (account: ${Y}$account${NC})\n"
 
     # Show status for each MCP
     local gh_status="${DIM}not installed${NC}" li_status="${DIM}not installed${NC}"
     local no_status="${DIM}not installed${NC}" sl_status="${DIM}not installed${NC}"
-    [[ "$existing" == *"github"* ]] && gh_status="${G}installed${NC}"
-    [[ "$existing" == *"linear"* ]] && li_status="${G}installed${NC}"
-    [[ "$existing" == *"notion"* ]] && no_status="${G}installed${NC}"
-    [[ "$existing" == *"slack"* ]]  && sl_status="${G}installed${NC}"
+    [[ "$existing_mcps" == *"github"* ]] && gh_status="${G}installed${NC}"
+    [[ "$existing_mcps" == *"linear"* ]] && li_status="${G}installed${NC}"
+    [[ "$existing_mcps" == *"notion"* ]] && no_status="${G}installed${NC}"
+    [[ "$existing_mcps" == *"slack"* ]]  && sl_status="${G}installed${NC}"
 
     echo -e "  ${C}[1]${NC} GitHub     — PRs, issues, code search       [$gh_status]"
     echo -e "  ${C}[2]${NC} Linear     — Issues, projects, sprints      [$li_status]"
@@ -379,47 +387,64 @@ _project_setup_mcps() {
     echo ""
     local installed=0
 
+    # Helper: add http MCP directly to settings.json
+    _setup_mcp_http() {
+        local mcp_name="$1" mcp_url="$2"
+        python3 -c "
+import json, os
+sf = '$settings_file'
+if os.path.exists(sf):
+    with open(sf) as f:
+        d = json.load(f)
+else:
+    d = {}
+if 'mcpServers' not in d:
+    d['mcpServers'] = {}
+d['mcpServers']['$mcp_name'] = {'url': '$mcp_url'}
+with open(sf, 'w') as f:
+    json.dump(d, f, indent=2)
+    f.write('\n')
+" 2>/dev/null
+    }
+
     if [[ "$choices" == *"1"* ]]; then
-        if [[ "$existing" == *"github"* ]]; then
+        if [[ "$existing_mcps" == *"github"* ]]; then
             _dim "  GitHub: already installed, skipping"
         else
             _log "Installing GitHub MCP..."
-            if CLAUDE_CONFIG_DIR="$acct_dir" claude mcp add --transport http github https://api.githubcopilot.com/mcp/ --scope user 2>/dev/null; then
+            if _setup_mcp_http "github" "https://api.githubcopilot.com/mcp/"; then
                 echo -e "  ${G}✓${NC} GitHub MCP added"
                 installed=$((installed+1))
             else
-                _warn "GitHub MCP failed. Run manually:"
-                echo -e "    ${BOLD}CLAUDE_CONFIG_DIR=$acct_dir claude mcp add --transport http github https://api.githubcopilot.com/mcp/ --scope user${NC}"
+                _warn "GitHub MCP failed to write settings.json"
             fi
         fi
     fi
 
     if [[ "$choices" == *"2"* ]]; then
-        if [[ "$existing" == *"linear"* ]]; then
+        if [[ "$existing_mcps" == *"linear"* ]]; then
             _dim "  Linear: already installed, skipping"
         else
             _log "Installing Linear MCP..."
-            if CLAUDE_CONFIG_DIR="$acct_dir" claude mcp add --transport http linear https://mcp.linear.app/mcp --scope user 2>/dev/null; then
+            if _setup_mcp_http "linear" "https://mcp.linear.app/mcp"; then
                 echo -e "  ${G}✓${NC} Linear MCP added"
                 installed=$((installed+1))
             else
-                _warn "Linear MCP failed. Run manually:"
-                echo -e "    ${BOLD}CLAUDE_CONFIG_DIR=$acct_dir claude mcp add --transport http linear https://mcp.linear.app/mcp --scope user${NC}"
+                _warn "Linear MCP failed to write settings.json"
             fi
         fi
     fi
 
     if [[ "$choices" == *"3"* ]]; then
-        if [[ "$existing" == *"notion"* ]]; then
+        if [[ "$existing_mcps" == *"notion"* ]]; then
             _dim "  Notion: already installed, skipping"
         else
             _log "Installing Notion MCP..."
-            if CLAUDE_CONFIG_DIR="$acct_dir" claude mcp add --transport http notion https://mcp.notion.com/mcp --scope user 2>/dev/null; then
+            if _setup_mcp_http "notion" "https://mcp.notion.com/mcp"; then
                 echo -e "  ${G}✓${NC} Notion MCP added"
                 installed=$((installed+1))
             else
-                _warn "Notion MCP failed. Run manually:"
-                echo -e "    ${BOLD}CLAUDE_CONFIG_DIR=$acct_dir claude mcp add --transport http notion https://mcp.notion.com/mcp --scope user${NC}"
+                _warn "Notion MCP failed to write settings.json"
             fi
         fi
     fi
@@ -552,32 +577,61 @@ _mcp_add() {
     fi
     local account; account=$(basename "$acct_dir")
 
-    # Check if already installed
-    local existing; existing=$(CLAUDE_CONFIG_DIR="$acct_dir" claude mcp list 2>/dev/null || true)
-    if [[ "$existing" == *"$mcp_name"* ]]; then
-        _warn "MCP '$mcp_name' already installed on account '$account'. Remove first to reinstall."
-        return 1
+    local settings_file="$acct_dir/settings.json"
+
+    # Check if already installed (direct JSON read)
+    if [[ -f "$settings_file" ]]; then
+        local has_mcp; has_mcp=$(python3 -c "
+import json, sys
+with open('$settings_file') as f:
+    d = json.load(f)
+print('yes' if '$mcp_name' in d.get('mcpServers', {}) else 'no')
+" 2>/dev/null || echo "no")
+        if [[ "$has_mcp" == "yes" ]]; then
+            _warn "MCP '$mcp_name' already installed on account '$account'. Remove first to reinstall."
+            return 1
+        fi
     fi
 
-    # Install
+    # Install by writing directly to settings.json
     if [[ "$transport" == "stdio" ]]; then
         _log "Adding stdio MCP ${C}$mcp_name${NC} to account ${Y}$account${NC}..."
-        if CLAUDE_CONFIG_DIR="$acct_dir" claude mcp add --scope user "$mcp_name" -- "${cmd_args[@]}" 2>/dev/null; then
-            echo -e "  ${G}✓${NC} ${C}$mcp_name${NC} added (stdio: ${cmd_args[*]})"
-        else
-            _warn "Failed. Run manually:"
-            echo -e "    ${BOLD}CLAUDE_CONFIG_DIR=$acct_dir claude mcp add --scope user $mcp_name -- ${cmd_args[*]}${NC}"
-            return 1
-        fi
+        local cmd_json; cmd_json=$(python3 -c "
+import json, sys
+args = sys.argv[1:]
+print(json.dumps({'command': args[0], 'args': args[1:]}))
+" "${cmd_args[@]}")
     else
         _log "Adding http MCP ${C}$mcp_name${NC} to account ${Y}$account${NC}..."
-        if CLAUDE_CONFIG_DIR="$acct_dir" claude mcp add --transport http --scope user "$mcp_name" "$url" 2>/dev/null; then
-            echo -e "  ${G}✓${NC} ${C}$mcp_name${NC} added (http: $url)"
+        local cmd_json; cmd_json=$(python3 -c "
+import json; print(json.dumps({'url': '$url'}))")
+    fi
+
+    python3 -c "
+import json, sys, os
+sf = '$settings_file'
+if os.path.exists(sf):
+    with open(sf) as f:
+        d = json.load(f)
+else:
+    d = {}
+if 'mcpServers' not in d:
+    d['mcpServers'] = {}
+d['mcpServers']['$mcp_name'] = json.loads(sys.argv[1])
+with open(sf, 'w') as f:
+    json.dump(d, f, indent=2)
+    f.write('\n')
+" "$cmd_json" 2>/dev/null
+
+    if [[ $? -eq 0 ]]; then
+        if [[ "$transport" == "stdio" ]]; then
+            echo -e "  ${G}✓${NC} ${C}$mcp_name${NC} added (stdio: ${cmd_args[*]})"
         else
-            _warn "Failed. Run manually:"
-            echo -e "    ${BOLD}CLAUDE_CONFIG_DIR=$acct_dir claude mcp add --transport http --scope user $mcp_name $url${NC}"
-            return 1
+            echo -e "  ${G}✓${NC} ${C}$mcp_name${NC} added (http: $url)"
         fi
+    else
+        _warn "Failed to write settings.json"
+        return 1
     fi
 }
 
@@ -609,11 +663,34 @@ _mcp_remove() {
     fi
     local account; account=$(basename "$acct_dir")
 
+    local settings_file="$acct_dir/settings.json"
+    if [[ ! -f "$settings_file" ]]; then
+        _warn "No settings.json found for account '$account'."
+        return 1
+    fi
+
     _log "Removing MCP ${C}$mcp_name${NC} from account ${Y}$account${NC}..."
-    if CLAUDE_CONFIG_DIR="$acct_dir" claude mcp remove --scope user "$mcp_name" 2>/dev/null; then
+    local result; result=$(python3 -c "
+import json
+sf = '$settings_file'
+with open(sf) as f:
+    d = json.load(f)
+mcps = d.get('mcpServers', {})
+if '$mcp_name' not in mcps:
+    print('not_found')
+else:
+    del mcps['$mcp_name']
+    d['mcpServers'] = mcps
+    with open(sf, 'w') as f:
+        json.dump(d, f, indent=2)
+        f.write('\n')
+    print('ok')
+" 2>/dev/null)
+
+    if [[ "$result" == "ok" ]]; then
         echo -e "  ${G}✓${NC} ${C}$mcp_name${NC} removed"
     else
-        _warn "Failed to remove '$mcp_name'. Is it installed?"
+        _warn "MCP '$mcp_name' not found on account '$account'."
         echo -e "  Check with: ${C}cw mcp list --account $account${NC}"
         return 1
     fi
@@ -640,13 +717,39 @@ _mcp_list() {
     local account; account=$(basename "$acct_dir")
 
     echo -e "\n${BOLD}MCPs for account ${Y}$account${NC}\n"
-    local output; output=$(CLAUDE_CONFIG_DIR="$acct_dir" claude mcp list 2>/dev/null || true)
+    local settings_file="$acct_dir/settings.json"
+    if [[ ! -f "$settings_file" ]]; then
+        _dim "  No MCPs installed."
+        echo -e "\n  Add one: ${C}cw mcp add <name> --account $account -- <command> [args]${NC}"
+        echo -e "       or: ${C}cw mcp add <name> --account $account <url>${NC}\n"
+        return
+    fi
+
+    local output; output=$(python3 -c "
+import json
+with open('$settings_file') as f:
+    d = json.load(f)
+mcps = d.get('mcpServers', {})
+if not mcps:
+    exit(1)
+for name, cfg in mcps.items():
+    if 'url' in cfg:
+        print(f'  {name}: {cfg[\"url\"]} (HTTP)')
+    elif 'command' in cfg:
+        args = ' '.join(cfg.get('args', []))
+        cmd = cfg['command']
+        print(f'  {name}: {cmd} {args} (stdio)')
+    else:
+        print(f'  {name}: (unknown config)')
+" 2>/dev/null)
+
     if [[ -z "$output" ]]; then
         _dim "  No MCPs installed."
         echo -e "\n  Add one: ${C}cw mcp add <name> --account $account -- <command> [args]${NC}"
         echo -e "       or: ${C}cw mcp add <name> --account $account <url>${NC}\n"
     else
         echo "$output"
+        echo ""
     fi
 }
 
