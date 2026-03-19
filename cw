@@ -438,6 +438,218 @@ _project_setup_mcps() {
     fi
 }
 
+# ════════════════════════════════════════════════════════════════════════════
+# MCP — Manage MCPs per account
+# ════════════════════════════════════════════════════════════════════════════
+_resolve_account_dir() {
+    # Resolve account dir from --account flag or project name
+    # Usage: _resolve_account_dir [--account <acct>] [<project>]
+    local account="" project=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --account|-a) account="${2:?--account requires a value}"; shift 2 ;;
+            *) project="$1"; shift ;;
+        esac
+    done
+
+    if [[ -n "$account" ]]; then
+        local dir="$CW_ACCOUNTS_DIR/$account"
+        [[ -d "$dir" ]] || { _err "Account '$account' not found."; return 1; }
+        echo "$dir"
+        return
+    fi
+
+    if [[ -n "$project" ]]; then
+        local pj; pj=$(_get_project "$project") || { _err "Project '$project' not found."; return 1; }
+        account=$(_get_field "$pj" account "$(_default_account)")
+        echo "$CW_ACCOUNTS_DIR/$account"
+        return
+    fi
+
+    # Fallback: default account
+    account=$(_default_account)
+    [[ -n "$account" ]] || { _err "No account specified and no default account."; return 1; }
+    echo "$CW_ACCOUNTS_DIR/$account"
+}
+
+cmd_mcp() {
+    local sub="${1:-list}"; shift || true
+    case "$sub" in
+        add)    _mcp_add "$@" ;;
+        remove|rm) _mcp_remove "$@" ;;
+        list|ls)   _mcp_list "$@" ;;
+        *) _err "Usage: cw mcp <add|remove|list> [--account <acct> | <project>]"
+           echo -e "\n${BOLD}Commands:${NC}"
+           echo -e "  ${C}add${NC} <name> [--transport http] <url>        Add HTTP MCP"
+           echo -e "  ${C}add${NC} <name> -- <command> [args...]          Add stdio MCP"
+           echo -e "  ${C}remove${NC} <name> [--account <a> | <project>]  Remove MCP"
+           echo -e "  ${C}list${NC} [--account <a> | <project>]           List MCPs"
+           echo -e "\n${BOLD}Scope:${NC} (pick one)"
+           echo -e "  ${C}--account${NC}, ${C}-a${NC} <name>    Target account directly"
+           echo -e "  ${C}<project>${NC}              Use the project's associated account"
+           echo -e "  ${DIM}(default)${NC}              Use default account\n"
+           ;;
+    esac
+}
+
+_mcp_add() {
+    # Parse: cw mcp add <name> [--transport http] <url> [--account <a> | <project>]
+    #    or: cw mcp add <name> [--account <a> | <project>] -- <command> [args...]
+    local mcp_name="" transport="" url="" account_flag="" project_flag=""
+    local -a cmd_args=()
+    local saw_dashdash=false
+
+    while [[ $# -gt 0 ]]; do
+        if $saw_dashdash; then
+            cmd_args+=("$1"); shift; continue
+        fi
+        case "$1" in
+            --transport|-t) transport="${2:?--transport requires a value}"; shift 2 ;;
+            --account|-a)   account_flag="$2"; shift 2 ;;
+            --)             saw_dashdash=true; shift ;;
+            -*)             _err "Unknown flag: $1"; return 1 ;;
+            *)
+                if [[ -z "$mcp_name" ]]; then
+                    mcp_name="$1"
+                elif [[ -z "$url" ]]; then
+                    # Could be URL or project name — decide later
+                    url="$1"
+                else
+                    # Third positional = project (url was the URL)
+                    project_flag="$1"
+                fi
+                shift ;;
+        esac
+    done
+
+    [[ -n "$mcp_name" ]] || { _err "Usage: cw mcp add <name> [--transport http] <url> | -- <command> [args...]"; return 1; }
+
+    # Determine transport type
+    if $saw_dashdash && [[ ${#cmd_args[@]} -gt 0 ]]; then
+        # stdio transport: cw mcp add <name> [scope] -- cmd args...
+        transport="stdio"
+        # url might actually be a project name if set
+        if [[ -n "$url" ]]; then
+            project_flag="$url"
+            url=""
+        fi
+    elif [[ -n "$url" ]]; then
+        # http transport (explicit or inferred)
+        [[ -z "$transport" ]] && transport="http"
+    else
+        _err "Provide a URL (http) or -- <command> (stdio)."
+        return 1
+    fi
+
+    # Resolve account directory
+    local acct_dir
+    if [[ -n "$account_flag" ]]; then
+        acct_dir=$(_resolve_account_dir --account "$account_flag") || return 1
+    elif [[ -n "$project_flag" ]]; then
+        acct_dir=$(_resolve_account_dir "$project_flag") || return 1
+    else
+        acct_dir=$(_resolve_account_dir) || return 1
+    fi
+    local account; account=$(basename "$acct_dir")
+
+    # Check if already installed
+    local existing; existing=$(CLAUDE_CONFIG_DIR="$acct_dir" claude mcp list 2>/dev/null || true)
+    if [[ "$existing" == *"$mcp_name"* ]]; then
+        _warn "MCP '$mcp_name' already installed on account '$account'. Remove first to reinstall."
+        return 1
+    fi
+
+    # Install
+    if [[ "$transport" == "stdio" ]]; then
+        _log "Adding stdio MCP ${C}$mcp_name${NC} to account ${Y}$account${NC}..."
+        if CLAUDE_CONFIG_DIR="$acct_dir" claude mcp add --scope user "$mcp_name" -- "${cmd_args[@]}" 2>/dev/null; then
+            echo -e "  ${G}✓${NC} ${C}$mcp_name${NC} added (stdio: ${cmd_args[*]})"
+        else
+            _warn "Failed. Run manually:"
+            echo -e "    ${BOLD}CLAUDE_CONFIG_DIR=$acct_dir claude mcp add --scope user $mcp_name -- ${cmd_args[*]}${NC}"
+            return 1
+        fi
+    else
+        _log "Adding http MCP ${C}$mcp_name${NC} to account ${Y}$account${NC}..."
+        if CLAUDE_CONFIG_DIR="$acct_dir" claude mcp add --transport http --scope user "$mcp_name" "$url" 2>/dev/null; then
+            echo -e "  ${G}✓${NC} ${C}$mcp_name${NC} added (http: $url)"
+        else
+            _warn "Failed. Run manually:"
+            echo -e "    ${BOLD}CLAUDE_CONFIG_DIR=$acct_dir claude mcp add --transport http --scope user $mcp_name $url${NC}"
+            return 1
+        fi
+    fi
+}
+
+_mcp_remove() {
+    local mcp_name="" account_flag="" project_flag=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --account|-a) account_flag="$2"; shift 2 ;;
+            -*)           _err "Unknown flag: $1"; return 1 ;;
+            *)
+                if [[ -z "$mcp_name" ]]; then
+                    mcp_name="$1"
+                else
+                    project_flag="$1"
+                fi
+                shift ;;
+        esac
+    done
+
+    [[ -n "$mcp_name" ]] || { _err "Usage: cw mcp remove <name> [--account <a> | <project>]"; return 1; }
+
+    local acct_dir
+    if [[ -n "$account_flag" ]]; then
+        acct_dir=$(_resolve_account_dir --account "$account_flag") || return 1
+    elif [[ -n "$project_flag" ]]; then
+        acct_dir=$(_resolve_account_dir "$project_flag") || return 1
+    else
+        acct_dir=$(_resolve_account_dir) || return 1
+    fi
+    local account; account=$(basename "$acct_dir")
+
+    _log "Removing MCP ${C}$mcp_name${NC} from account ${Y}$account${NC}..."
+    if CLAUDE_CONFIG_DIR="$acct_dir" claude mcp remove --scope user "$mcp_name" 2>/dev/null; then
+        echo -e "  ${G}✓${NC} ${C}$mcp_name${NC} removed"
+    else
+        _warn "Failed to remove '$mcp_name'. Is it installed?"
+        echo -e "  Check with: ${C}cw mcp list --account $account${NC}"
+        return 1
+    fi
+}
+
+_mcp_list() {
+    local account_flag="" project_flag=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --account|-a) account_flag="$2"; shift 2 ;;
+            -*)           _err "Unknown flag: $1"; return 1 ;;
+            *)            project_flag="$1"; shift ;;
+        esac
+    done
+
+    local acct_dir
+    if [[ -n "$account_flag" ]]; then
+        acct_dir=$(_resolve_account_dir --account "$account_flag") || return 1
+    elif [[ -n "$project_flag" ]]; then
+        acct_dir=$(_resolve_account_dir "$project_flag") || return 1
+    else
+        acct_dir=$(_resolve_account_dir) || return 1
+    fi
+    local account; account=$(basename "$acct_dir")
+
+    echo -e "\n${BOLD}MCPs for account ${Y}$account${NC}\n"
+    local output; output=$(CLAUDE_CONFIG_DIR="$acct_dir" claude mcp list 2>/dev/null || true)
+    if [[ -z "$output" ]]; then
+        _dim "  No MCPs installed."
+        echo -e "\n  Add one: ${C}cw mcp add <name> --account $account -- <command> [args]${NC}"
+        echo -e "       or: ${C}cw mcp add <name> --account $account <url>${NC}\n"
+    else
+        echo "$output"
+    fi
+}
+
 _project_setup_agents() {
     local name="${1:?Usage: cw project setup-agents <name>}"
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
@@ -3491,6 +3703,11 @@ ${BOLD}SETUP${NC}
   project list                        List projects
   project setup-mcps <name>           Configure GitHub/Linear/Notion/Slack
   project setup-agents <name>         Install agents and commands
+  mcp add <name> <url> [scope]        Add HTTP MCP to account
+  mcp add <name> [scope] -- <cmd>     Add stdio MCP to account
+  mcp remove <name> [scope]           Remove MCP from account
+  mcp list [scope]                    List MCPs on account
+    [scope]: --account <a> | <project>  (default: default account)
   stack [project] [flags]             Auto-configure Claude for tech stack
     --detect                          Only detect (don't apply)
     --apply                           Apply without confirmation
@@ -3592,6 +3809,7 @@ main() {
         stats)      cmd_stats "$@" ;;
         doctor)     cmd_doctor "$@" ;;
         stack)      cmd_stack "$@" ;;
+        mcp)        cmd_mcp "$@" ;;
         gsd|gsd:init|gsd:sync) cmd_gsd "${cmd#gsd:}" "$@" ;;
         help|-h|--help) cmd_help ;;
         version|-v|--version) echo "cw $CW_VERSION" ;;
