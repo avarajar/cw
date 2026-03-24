@@ -5,7 +5,8 @@ CW Review Auto-Close Hook (PostToolUse on Bash)
 Detects when Claude posts a review via `gh api` or `gh pr review`
 and automatically closes the review session + tells Claude to stop.
 
-Triggers on any review event: APPROVE, REQUEST_CHANGES, or COMMENT.
+Only triggers session close on APPROVE. REQUEST_CHANGES and COMMENT
+leave the session open so the reviewer can continue iterating.
 
 Reads CW_PROJECT, CW_TASK, CW_TASK_TYPE from environment (set by cmd_review).
 """
@@ -97,6 +98,12 @@ def main():
         sys.exit(0)
 
     _debug(f"DETECTED: {review_event} for {project} {task}")
+
+    # Only auto-close on APPROVE — REQUEST_CHANGES and COMMENT leave
+    # the session open so the reviewer can keep iterating.
+    if review_event != "APPROVE":
+        _debug(f"SKIP: not closing session — event is {review_event}, not APPROVE")
+        sys.exit(0)
 
     # Check that the command succeeded
     # tool_response has: stdout, stderr, interrupted — no exit_code field
