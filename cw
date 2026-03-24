@@ -293,8 +293,7 @@ with open(f, 'w') as fh: json.dump(reg, fh, indent=2)
 "
     mkdir -p "$path/.claude"
     if [[ ! -f "$path/CLAUDE.md" ]]; then
-        local tpl="$CW_HOME/templates/CLAUDE.${ptype}.md"
-        [[ -f "$tpl" ]] && cp "$tpl" "$path/CLAUDE.md" || cp "$CW_HOME/templates/CLAUDE.fullstack.md" "$path/CLAUDE.md"
+        _generate_claude_md "$path" "$ptype"
     fi
 
     _log "Project ${C}$name${NC} registered (account=${Y}$account${NC}, type=$ptype)"
@@ -369,20 +368,23 @@ print(' '.join(d.get('mcpServers', {}).keys()))
     # Show status for each MCP
     local gh_status="${DIM}not installed${NC}" li_status="${DIM}not installed${NC}"
     local no_status="${DIM}not installed${NC}" sl_status="${DIM}not installed${NC}"
+    local wa_status="${DIM}not installed${NC}"
     [[ "$existing_mcps" == *"github"* ]] && gh_status="${G}installed${NC}"
     [[ "$existing_mcps" == *"linear"* ]] && li_status="${G}installed${NC}"
     [[ "$existing_mcps" == *"notion"* ]] && no_status="${G}installed${NC}"
     [[ "$existing_mcps" == *"slack"* ]]  && sl_status="${G}installed${NC}"
+    [[ -d "$HOME/.claude/skills/web-access" ]] && wa_status="${G}installed${NC}"
 
     echo -e "  ${C}[1]${NC} GitHub     — PRs, issues, code search       [$gh_status]"
     echo -e "  ${C}[2]${NC} Linear     — Issues, projects, sprints      [$li_status]"
     echo -e "  ${C}[3]${NC} Notion     — Docs, wikis, knowledge base    [$no_status]"
     echo -e "  ${C}[4]${NC} Slack      — Messages, channels, threads    [$sl_status]"
-    echo -e "  ${C}[5]${NC} All"
+    echo -e "  ${C}[5]${NC} Web Access — Browse, fetch, CDP automation  [$wa_status]"
+    echo -e "  ${C}[6]${NC} All"
     echo -e "  ${C}[0]${NC} Cancel\n"
     read -rp "Select (e.g. 1,2,3): " choices
     [[ "$choices" == "0" ]] && return
-    [[ "$choices" == "5" ]] && choices="1,2,3,4"
+    [[ "$choices" == "6" ]] && choices="1,2,3,4,5"
 
     echo ""
     local installed=0
@@ -455,10 +457,27 @@ with open(sf, 'w') as f:
         echo -e "    • Custom MCP via stdio transport"
     fi
 
+    if [[ "$choices" == *"5"* ]]; then
+        local skill_dir="$HOME/.claude/skills/web-access"
+        if [[ -d "$skill_dir" ]]; then
+            _dim "  Web Access: already installed, skipping"
+        else
+            _log "Installing Web Access skill..."
+            if git clone -q https://github.com/eze-is/web-access.git "$skill_dir" 2>/dev/null; then
+                echo -e "  ${G}✓${NC} Web Access skill installed to ${C}$skill_dir${NC}"
+                echo -e "  ${Y}Requires${NC}: Node.js 22+, Chrome with remote debugging"
+                echo -e "  Check deps: ${C}bash $skill_dir/scripts/check-deps.sh${NC}"
+                installed=$((installed+1))
+            else
+                _warn "Web Access: git clone failed"
+            fi
+        fi
+    fi
+
     echo ""
     if [[ $installed -gt 0 ]]; then
-        _log "${G}✓${NC} $installed MCP(s) installed for account ${C}$account${NC}"
-        echo -e "  Each MCP will prompt for OAuth on first use inside Claude Code."
+        _log "${G}✓${NC} $installed integration(s) installed for account ${C}$account${NC}"
+        echo -e "  MCPs will prompt for OAuth on first use inside Claude Code."
         echo -e "  Verify with ${C}/mcp${NC} inside a Claude session.\n"
     fi
 }
@@ -2371,6 +2390,249 @@ PYEOF
     echo -e "  ${C}cw open <proy>${NC}                    Open project quick (no worktree)"
     echo -e "  ${C}cw spaces${NC}                         Show active spaces"
     echo ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# GENERATE CLAUDE.MD — Analyze codebase and generate contextual CLAUDE.md
+# ════════════════════════════════════════════════════════════════════════════
+
+_generate_claude_md() {
+    local path="${1:?}" ptype="${2:-fullstack}"
+
+    _log "Analyzing codebase to generate CLAUDE.md..."
+
+    python3 << 'PYEOF' "$path" "$ptype"
+import sys, os, json, glob
+
+path = sys.argv[1]
+ptype = sys.argv[2]
+
+# ── Detect project signals ──────────────────────────────────────────────
+
+def has(*names):
+    return any(os.path.exists(os.path.join(path, n)) for n in names)
+
+def read_json(name):
+    fp = os.path.join(path, name)
+    if os.path.isfile(fp):
+        try:
+            with open(fp) as f: return json.load(f)
+        except: pass
+    return {}
+
+def find_dirs():
+    """Return top-level directory names."""
+    return [d for d in os.listdir(path)
+            if os.path.isdir(os.path.join(path, d)) and not d.startswith('.')]
+
+def find_files(pattern):
+    return glob.glob(os.path.join(path, pattern))
+
+pkg = read_json("package.json")
+deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+scripts = pkg.get("scripts", {})
+dirs = find_dirs()
+
+# ── Framework detection ──────────────────────────────────────────────────
+
+frameworks = []
+if "next" in deps:
+    frameworks.append("Next.js")
+elif "nuxt" in deps or "nuxt3" in deps:
+    frameworks.append("Nuxt")
+elif "svelte" in deps or "@sveltejs/kit" in deps:
+    frameworks.append("SvelteKit")
+elif "astro" in deps:
+    frameworks.append("Astro")
+elif "react" in deps:
+    frameworks.append("React")
+elif "vue" in deps:
+    frameworks.append("Vue")
+elif "angular" in deps or "@angular/core" in deps:
+    frameworks.append("Angular")
+
+if has("requirements.txt", "pyproject.toml", "setup.py", "Pipfile"):
+    py_deps = ""
+    for f in ["requirements.txt", "pyproject.toml"]:
+        fp = os.path.join(path, f)
+        if os.path.isfile(fp):
+            try:
+                with open(fp) as fh: py_deps = fh.read().lower()
+            except: pass
+            break
+    if "django" in py_deps:
+        frameworks.append("Django")
+    elif "fastapi" in py_deps or "fast-api" in py_deps:
+        frameworks.append("FastAPI")
+    elif "flask" in py_deps:
+        frameworks.append("Flask")
+    else:
+        frameworks.append("Python")
+
+if has("go.mod"):
+    frameworks.append("Go")
+if has("Cargo.toml"):
+    frameworks.append("Rust")
+if has("mix.exs"):
+    frameworks.append("Elixir")
+
+# ── Language detection ───────────────────────────────────────────────────
+
+lang = "JavaScript/TypeScript"
+if has("tsconfig.json"):
+    lang = "TypeScript"
+elif not pkg and has("requirements.txt", "pyproject.toml"):
+    lang = "Python"
+elif has("go.mod"):
+    lang = "Go"
+elif has("Cargo.toml"):
+    lang = "Rust"
+elif has("mix.exs"):
+    lang = "Elixir"
+
+# ── Build / tooling detection ───────────────────────────────────────────
+
+tools = []
+if has("turbo.json"):
+    tools.append("Turborepo")
+if has("pnpm-workspace.yaml", "pnpm-lock.yaml"):
+    tools.append("pnpm")
+elif has("yarn.lock"):
+    tools.append("yarn")
+elif has("package-lock.json", "bun.lockb"):
+    tools.append("bun" if has("bun.lockb") else "npm")
+if has("Dockerfile", "docker-compose.yml", "docker-compose.yaml"):
+    tools.append("Docker")
+if "tailwindcss" in deps or has("tailwind.config.js", "tailwind.config.ts"):
+    tools.append("Tailwind CSS")
+if "prisma" in deps or has("prisma/schema.prisma"):
+    tools.append("Prisma")
+if has("drizzle.config.ts"):
+    tools.append("Drizzle")
+if "vitest" in deps:
+    tools.append("Vitest")
+elif "jest" in deps:
+    tools.append("Jest")
+if "@testing-library/react" in deps:
+    tools.append("Testing Library")
+if has(".eslintrc", ".eslintrc.js", ".eslintrc.json", "eslint.config.js", "eslint.config.mjs"):
+    tools.append("ESLint")
+if has("biome.json"):
+    tools.append("Biome")
+
+# ── Key dependencies ─────────────────────────────────────────────────────
+
+notable_deps = []
+for d in ["ai", "@ai-sdk/react", "stripe", "clerk", "@clerk/nextjs",
+          "@auth/core", "next-auth", "drizzle-orm", "prisma",
+          "@trpc/server", "graphql", "zod", "shadcn", "@radix-ui/react-dialog"]:
+    if d in deps:
+        notable_deps.append(d)
+
+# ── Structure detection ──────────────────────────────────────────────────
+
+structure_lines = []
+important_dirs = ["src", "app", "pages", "components", "lib", "utils",
+                  "api", "server", "services", "hooks", "store", "styles",
+                  "public", "static", "tests", "test", "__tests__",
+                  "scripts", "docs", "packages", "apps"]
+found_dirs = [d for d in important_dirs if d in dirs]
+if found_dirs:
+    structure_lines = [f"- `/{d}/`" for d in found_dirs]
+
+# ── Dev commands ─────────────────────────────────────────────────────────
+
+dev_cmds = {}
+for key in ["dev", "start", "build", "test", "lint", "format", "typecheck", "check"]:
+    if key in scripts:
+        dev_cmds[key] = scripts[key]
+
+# ── Read README for description ──────────────────────────────────────────
+
+description = ""
+for readme in ["README.md", "readme.md", "README.rst"]:
+    fp = os.path.join(path, readme)
+    if os.path.isfile(fp):
+        try:
+            with open(fp) as f:
+                lines = f.read().strip().split("\n")
+            # Grab first non-empty, non-heading line as description
+            for line in lines:
+                stripped = line.strip().lstrip("#").strip()
+                if stripped and not stripped.startswith("[") and not stripped.startswith("!"):
+                    description = stripped
+                    break
+        except: pass
+        break
+
+# ── Generate CLAUDE.md ───────────────────────────────────────────────────
+
+lines = ["# Project Instructions\n"]
+
+# Overview
+lines.append("## Overview")
+if description:
+    lines.append(description)
+if frameworks:
+    lines.append(f"**Stack**: {', '.join(frameworks)}" + (f" ({lang})" if lang not in ' '.join(frameworks) else ""))
+elif lang:
+    lines.append(f"**Language**: {lang}")
+lines.append("")
+
+# Architecture
+lines.append("## Architecture")
+if tools:
+    lines.append(f"**Tooling**: {', '.join(tools)}")
+if notable_deps:
+    lines.append(f"**Key deps**: {', '.join(notable_deps)}")
+if structure_lines:
+    lines.append("\n**Structure**:")
+    lines.extend(structure_lines)
+lines.append("")
+
+# Conventions
+lines.append("## Conventions")
+lines.append("- Follow existing code style and patterns")
+lines.append("- Write tests for new features")
+lines.append("- Conventional commits")
+if "TypeScript" in lang:
+    lines.append("- Strict TypeScript — avoid `any`, use proper types")
+if "Tailwind CSS" in tools:
+    lines.append("- Use Tailwind utility classes, avoid inline styles")
+if "Prisma" in tools or "Drizzle" in tools:
+    lines.append("- Database migrations must be reversible")
+lines.append("")
+
+# Development
+if dev_cmds:
+    lines.append("## Development")
+    lines.append("```bash")
+    pm = "pnpm" if "pnpm" in tools else "yarn" if "yarn" in tools else "bun" if "bun" in tools else "npm run"
+    for key, cmd in dev_cmds.items():
+        lines.append(f"{pm} {key:<12} # {cmd}")
+    lines.append("```")
+    lines.append("")
+
+# Integrations
+lines.append("## Integrations")
+lines.append("When I ask you to create an issue, use Linear.")
+lines.append("When I ask you to document something, use Notion.")
+lines.append("When I reference a conversation, check Slack.")
+
+# Write
+output = "\n".join(lines) + "\n"
+with open(os.path.join(path, "CLAUDE.md"), "w") as f:
+    f.write(output)
+PYEOF
+
+    if [[ -f "$path/CLAUDE.md" ]]; then
+        echo -e "  ${G}✓${NC} Generated ${C}CLAUDE.md${NC} from codebase analysis"
+    else
+        # Fallback to template if analysis failed
+        _warn "Analysis failed, using template"
+        local tpl="$CW_HOME/templates/CLAUDE.${ptype}.md"
+        [[ -f "$tpl" ]] && cp "$tpl" "$path/CLAUDE.md" || cp "$CW_HOME/templates/CLAUDE.fullstack.md" "$path/CLAUDE.md"
+    fi
 }
 
 # ════════════════════════════════════════════════════════════════════════════
