@@ -1302,7 +1302,9 @@ Also symlink shared context: ln -sf $shared_context .tasks/$task/SHARED_CONTEXT.
 If SHARED_CONTEXT.md exists in the worktree, read it for cross-task context from other worktrees.
 When you discover something relevant to other tasks (schema changes, API changes, conventions), update SHARED_CONTEXT.md.
 
-IMPORTANT — Project rules: Before writing any code, read the project's CLAUDE.md at the worktree root if it exists. Also check .claude/rules/ for coding rules (e.g. backend.md, frontend.md, tests.md) — these have glob patterns in their frontmatter that specify which files they apply to. Follow all coding rules, conventions, and restrictions defined in these files when writing code."
+IMPORTANT — Project rules: Before writing any code, read the project's CLAUDE.md at the worktree root if it exists. Also check .claude/rules/ for coding rules (e.g. backend.md, frontend.md, tests.md) — these have glob patterns in their frontmatter that specify which files they apply to. Follow all coding rules, conventions, and restrictions defined in these files when writing code.
+
+IMPORTANT — Code quality: When you finish implementing the task (before committing), run /simplify to review the code for reuse, quality, and efficiency. Fix any issues found before considering the task done."
 
         # ── Workflow template ─────────────────────────────────────────────
         if [[ -n "$workflow" ]]; then
