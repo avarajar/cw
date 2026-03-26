@@ -1493,9 +1493,10 @@ for proj in sorted(os.listdir(sessions_dir)):
     if filter_proj and proj != filter_proj: continue
 
     spaces = []
-    for space in sorted(os.listdir(proj_dir)):
-        meta_file = os.path.join(proj_dir, space, "session.json")
-        if not os.path.isfile(meta_file): continue
+    # Walk recursively to find session.json (task names with slashes create nested dirs)
+    for root, dirs, files in os.walk(proj_dir):
+        if "session.json" not in files: continue
+        meta_file = os.path.join(root, "session.json")
         try:
             with open(meta_file) as f: m = json.load(f)
         except: continue
