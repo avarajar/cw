@@ -2192,6 +2192,24 @@ if os.path.isfile(autoclose_script):
     if not already_installed:
         settings["hooks"]["PostToolUse"].append(autoclose_entry)
 
+# ── CW hooks: auto-compact (PostToolUse — counts tool calls, suggests /compact) ──
+autocompact_script = os.path.join(cw_hooks_dir, "auto-compact.py")
+if os.path.isfile(autocompact_script):
+    autocompact_cmd = f"python3 {autocompact_script}"
+    autocompact_handler = {"type": "command", "command": autocompact_cmd, "timeout": 3000}
+    autocompact_entry = {"matcher": "", "hooks": [autocompact_handler]}
+
+    if "PostToolUse" not in settings["hooks"]:
+        settings["hooks"]["PostToolUse"] = []
+    existing_post = settings["hooks"]["PostToolUse"]
+    already_ac = any(
+        autocompact_cmd in h.get("command", "")
+        or any(autocompact_cmd in sub.get("command", "") for sub in h.get("hooks", []) if isinstance(sub, dict))
+        for h in existing_post if isinstance(h, dict)
+    )
+    if not already_ac:
+        settings["hooks"]["PostToolUse"].append(autocompact_entry)
+
 os.makedirs(os.path.dirname(settings_path), exist_ok=True)
 with open(settings_path, "w") as f:
     json.dump(settings, f, indent=2)

@@ -17,5 +17,8 @@
   "disableConfigChangeHook": false,
   "disableWorktreeCreateHook": false,
   "disableWorktreeRemoveHook": false,
-  "disableLogging": true
+  "disableLogging": true,
+  "disableAutoCompactHook": false,
+  "autoCompactThreshold": 100,
+  "autoCompactCooldown": 60
 }
