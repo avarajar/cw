@@ -80,6 +80,21 @@ _ensure_dirs() {
     mkdir -p "$CW_HOME"/{accounts,templates/workflows,agents,commands,mcps,hooks,lib,bin,stacks}
 }
 
+_ensure_statusline() {
+    local acct_dir="${1:?Usage: _ensure_statusline <acct_dir>}"
+    local settings="$acct_dir/settings.json"
+    local sl_script="$HOME/.claude/statusline-command.sh"
+    [[ -f "$sl_script" ]] || return 0
+    [[ -f "$settings" ]] || return 0
+    python3 -c "
+import json, sys
+with open('$settings') as f: s = json.load(f)
+if 'statusLine' in s: sys.exit(0)
+s['statusLine'] = {'type': 'command', 'command': 'bash $sl_script'}
+with open('$settings', 'w') as f: json.dump(s, f, indent=2)
+"
+}
+
 _get_project() {
     python3 -c "
 import json, sys
@@ -840,6 +855,7 @@ cmd_open() {
     account="${account:-$(_get_field "$pj" account "$(_default_account)")}"
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
     _log "Opening ${C}$name${NC}  account=${M}$account${NC}"
+    _ensure_statusline "$acct_dir"
 
     cd "$path"
     _set_tab_title "$name"
@@ -859,6 +875,7 @@ cmd_launch() {
     local dir="$CW_ACCOUNTS_DIR/$account"
     [[ -d "$dir" ]] || { _err "Account '$account' does not exist."; return 1; }
     _log "Launching Claude (${C}$account${NC})..."
+    _ensure_statusline "$dir"
     CLAUDE_CONFIG_DIR="$dir" claude "$@"
 }
 
@@ -896,6 +913,7 @@ cmd_review() {
     local path; path=$(_get_field "$pj" path "")
     local account; account=$(_get_field "$pj" account "$(_default_account)")
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
+    _ensure_statusline "$acct_dir"
 
     [[ -z "$pr" ]] && { _err "Missing PR. Usage: cw review $name 123"; return 1; }
 
@@ -1207,6 +1225,7 @@ cmd_work() {
     local path; path=$(_get_field "$pj" path "")
     local account; account=$(_get_field "$pj" account "$(_default_account)")
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
+    _ensure_statusline "$acct_dir"
 
     local session_dir="$CW_HOME/sessions/$name/task-$task"
     local session_meta="$session_dir/session.json"
@@ -2065,6 +2084,7 @@ cmd_plan() {
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
 
     _log "Planning: ${C}$name${NC} — ${Y}$description${NC}"
+    _ensure_statusline "$acct_dir"
 
     local plan_prompt="You are a technical project planner. Analyze this project and create an implementation plan.
 
@@ -4031,6 +4051,7 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
 
     _log "Launching Claude..."
     $team_flag && _log "Agent teams ${G}enabled${NC}"
+    _ensure_statusline "$acct_dir"
 
     env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "$(cat "$prompt_file")"
 
