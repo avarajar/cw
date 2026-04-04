@@ -2266,16 +2266,24 @@ cmd_forge() {
     local port="${1:-3000}"
     _log "Launching ${C}Forge${NC} visual dashboard on port ${Y}$port${NC}..."
 
-    # Try global install first, then npx
-    if command -v forge &>/dev/null; then
-        forge console --port "$port"
-    elif command -v npx &>/dev/null; then
-        npx @forge-dev/platform --port "$port"
-    else
-        _err "Node.js / npx not found. Install Node.js >= 20 first."
-        _err "Then: npm i -g @forge-dev/platform"
-        return 1
+    # 1. Global install
+    if command -v forge-platform &>/dev/null; then
+        FORGE_PORT="$port" forge-platform
+        return
     fi
+
+    # 2. Local repo (dev mode)
+    local forge_repo="${FORGE_REPO:-$HOME/Workspace/personal/forge}"
+    if [[ -f "$forge_repo/packages/platform/dist/index.js" ]]; then
+        FORGE_PORT="$port" node "$forge_repo/packages/platform/dist/index.js"
+        return
+    fi
+
+    # 3. Not found — guide the user
+    _err "Forge not found. Options:"
+    _err "  1. Build from source: cd $forge_repo && npm install && npm run build"
+    _err "  2. Set FORGE_REPO to your forge checkout"
+    return 1
 }
 
 cmd_dashboard() {
