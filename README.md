@@ -177,7 +177,8 @@ Shows productivity metrics across sessions: total/active/done tasks, average ope
 ```bash
 cw open my-app          # open Claude in project (no worktree)
 cw spaces               # list all active tasks and reviews
-cw dashboard            # full workspace overview
+cw dashboard            # full workspace overview (terminal)
+cw forge                # launch visual dashboard (web UI)
 ```
 
 ## Multi-Account Routing
@@ -209,6 +210,33 @@ The `--setup` command installs Claude Code hooks in all your accounts. New accou
 <!-- If you have a screenshot of the arcade dashboard, add it here:
 ![Arcade Dashboard](docs/assets/arcade-screenshot.png)
 -->
+
+## Forge — Visual Dashboard
+
+[Forge](https://github.com/avarajar/forge) is the full web dashboard for CW. Instead of `cw spaces` and `cw dashboard` in the terminal, you get a visual UI with multi-tab terminals, filters, project info, and one-click actions.
+
+```bash
+cw forge              # launch Forge dashboard in browser
+```
+
+![Forge Task List](https://raw.githubusercontent.com/avarajar/forge/main/docs/screenshots/task-list.png)
+
+**Features:**
+- Task list with filters by account, project, and type (dev/review/design/plan)
+- Multi-tab interactive terminals — multiple Claude Code sessions side by side
+- Project info — auto-detected stack, MCPs, plugins at a glance
+- One-click start, resume, and done for tasks and reviews
+- Keyboard shortcuts (Cmd+1..5, Cmd+W, Cmd+L)
+
+**Install:**
+```bash
+npm i -g @forge-dev/platform    # install once
+cw forge                        # launch anytime
+```
+
+Or without installing: `npx @forge-dev/platform`
+
+See the [Forge repo](https://github.com/avarajar/forge) for full docs and screenshots.
 
 ## How It Works
 
@@ -406,6 +434,7 @@ No. You can use plain branch names (`cw work my-app fix-auth`). URL integration 
 | `cw open <project>` | Quick open (no worktree) |
 | `cw spaces` | List active tasks and reviews |
 | `cw dashboard` | Full workspace overview |
+| `cw forge` | Launch Forge visual dashboard (web UI) |
 | `cw stats [project]` | Session metrics and productivity stats |
 | `cw doctor` | Health check — verify setup and diagnose issues |
 | `cw arcade` | Live activity dashboard |
