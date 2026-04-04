@@ -2262,6 +2262,22 @@ _arcade_setup_hooks() {
     _log "Run ${C}cw arcade${NC} to see live activity."
 }
 
+cmd_forge() {
+    local port="${1:-3000}"
+    _log "Launching ${C}Forge${NC} visual dashboard on port ${Y}$port${NC}..."
+
+    # Try global install first, then npx
+    if command -v forge &>/dev/null; then
+        forge console --port "$port"
+    elif command -v npx &>/dev/null; then
+        npx @forge-dev/platform --port "$port"
+    else
+        _err "Node.js / npx not found. Install Node.js >= 20 first."
+        _err "Then: npm i -g @forge-dev/platform"
+        return 1
+    fi
+}
+
 cmd_dashboard() {
     local ws="${CW_WORKSPACE:-$HOME/workspace}"
 
@@ -4124,6 +4140,7 @@ ${BOLD}SETUP${NC}
 
 ${BOLD}INFO${NC}
   dashboard                           Full workspace overview
+  forge                               Launch Forge visual dashboard (web UI)
   status                              Quick status
   stats [project]                     Session metrics and productivity stats
   doctor                              Health check — verify setup and diagnose issues
@@ -4211,6 +4228,7 @@ main() {
         clean)      cmd_clean "$@" ;;
         launch)     cmd_launch "$@" ;;
         dashboard)  cmd_dashboard "$@" ;;
+        forge)      cmd_forge "$@" ;;
         arcade)     cmd_arcade "$@" ;;
         status)     cmd_status "$@" ;;
         stats)      cmd_stats "$@" ;;
