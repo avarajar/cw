@@ -883,13 +883,14 @@ cmd_launch() {
 # REVIEW — PR review with persistent session (no worktree)
 # ════════════════════════════════════════════════════════════════════════════
 cmd_review() {
-    local name="" pr="" done_flag=false cont_flag=false list_flag=false
+    local name="" pr="" done_flag=false cont_flag=false list_flag=false account_override=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --pr)      pr="$2"; shift 2 ;;
             --done)    done_flag=true; shift ;;
             --continue) cont_flag=true; shift ;;
             --list)    list_flag=true; shift ;;
+            --account|-a) account_override="$2"; shift 2 ;;
             -*)        shift ;;
             *)         
                 if [[ -z "$name" ]]; then
@@ -911,7 +912,7 @@ cmd_review() {
 
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
-    local account; account=$(_get_field "$pj" account "$(_default_account)")
+    local account; account=${account_override:-$(_get_field "$pj" account "$(_default_account)")}
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
     _ensure_statusline "$acct_dir"
 
@@ -1163,7 +1164,7 @@ If I say 'none', do not post. If I say 'edit', let me modify the findings before
 # WORK — Feature/bugfix with worktree + persistent session
 # ════════════════════════════════════════════════════════════════════════════
 cmd_work() {
-    local name="" task="" done_flag=false list_flag=false team_flag=false team_prompt="" base_branch="" workflow=""
+    local name="" task="" done_flag=false list_flag=false team_flag=false team_prompt="" base_branch="" workflow="" account_override=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --task|-t)   task="$2"; shift 2 ;;
@@ -1171,6 +1172,7 @@ cmd_work() {
             --list)      list_flag=true; shift ;;
             --base|-b)   base_branch="$2"; shift 2 ;;
             --workflow|-w) workflow="$2"; shift 2 ;;
+            --account|-a) account_override="$2"; shift 2 ;;
             --team)      team_flag=true; shift
                          # Capture optional team prompt (rest of args in quotes)
                          if [[ $# -gt 0 && "$1" != -* ]]; then
@@ -1223,7 +1225,7 @@ cmd_work() {
 
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
-    local account; account=$(_get_field "$pj" account "$(_default_account)")
+    local account; account=${account_override:-$(_get_field "$pj" account "$(_default_account)")}
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
     _ensure_statusline "$acct_dir"
 
