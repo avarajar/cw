@@ -138,7 +138,7 @@ cmd_init() {
 
         cat > "$CW_CONFIG" << YAML
 # CW v3 Configuration
-default_account: monoku
+default_account: default
 default_mode: code
 notifications: true
 max_concurrent: 8
@@ -213,6 +213,18 @@ cmd_account() {
                     _arcade_install_hooks_for "$dir/settings.json" "$hook_script"
                     _log "  Activity hooks auto-installed."
                 fi
+            fi
+
+            # Auto-set as default if current default account doesn't exist
+            local current_default; current_default=$(_default_account)
+            if [[ ! -d "$CW_ACCOUNTS_DIR/$current_default" ]] && [[ -f "$CW_CONFIG" ]]; then
+                python3 -c "
+import re
+with open('$CW_CONFIG') as f: text = f.read()
+text = re.sub(r'^default_account:.*', 'default_account: $name', text, flags=re.M)
+with open('$CW_CONFIG', 'w') as f: f.write(text)
+"
+                _log "Set ${C}$name${NC} as default account."
             fi
 
             _log "Account ${C}$name${NC} created."
@@ -1272,10 +1284,14 @@ cmd_work() {
         # Build initial prompt for Claude based on source
         local init_prompt=""
         if [[ "$task_source" == "linear" ]]; then
-            init_prompt="Fetch Linear issue $task using the Linear MCP (get_issue tool). Get the git branch name from the issue. Also fetch the issue comments (list_comments tool) to check for discussion, decisions, or additional context. Then:
+            init_prompt="Fetch Linear issue $task using the Linear MCP (get_issue tool). Also fetch the issue comments (list_comments tool) to check for discussion, decisions, or additional context.
+
+IMPORTANT: Use the git branch name from the Linear issue response (the branchName field) for the git branch. Do NOT use the issue ID ($task) as the branch name.
+
+Set up the workspace using the Linear branch name:
 1. Run: git fetch origin
-2. If the branch already exists locally, delete it: git branch -D <branch_name> (ignore errors)
-3. Create a worktree from $base_branch: git worktree add .tasks/$task -b <branch_name> $base_branch
+2. If the Linear branch already exists locally, delete it: git branch -D <linear_branch_name> (ignore errors)
+3. Create a worktree using the Linear branch name: git worktree add .tasks/$task -b <linear_branch_name> $base_branch
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
 6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
@@ -2993,6 +3009,7 @@ MD
     cat > "$wf_dir/bugfix.md" << 'MD'
 ## Workflow: Bug Fix
 
+0. **Context** — Check TASK_NOTES.md and any linked issue (Linear, GitHub, Notion) for a bug description. If no description is available, ASK the user to describe the bug before proceeding. Do not infer the bug from the task name alone.
 1. **Reproduce** — Confirm the bug exists. Find the minimal reproduction steps
 2. **Root cause** — Use git blame, logs, and debugging to find the actual cause
 3. **Fix** — Apply the minimal fix. Don't refactor surrounding code
@@ -3001,6 +3018,7 @@ MD
 6. **Document** — Note the root cause in TASK_NOTES.md for the PR description
 
 Checklist:
+- [ ] Bug description available (from issue or user)
 - [ ] Bug reproduced
 - [ ] Root cause identified
 - [ ] Minimal fix applied
