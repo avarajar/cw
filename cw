@@ -1360,6 +1360,20 @@ $(cat "$wf_file")"
             fi
         fi
 
+        # ── Account work context (init) ──────────────────────────────────
+        local acct_init_tpl="$acct_dir/templates/work_init.md"
+        if [[ -f "$acct_init_tpl" ]]; then
+            local acct_ctx
+            acct_ctx=$(cat "$acct_init_tpl")
+            acct_ctx="${acct_ctx//\$\{task\}/$task}"
+            acct_ctx="${acct_ctx//\$\{project\}/$name}"
+            acct_ctx="${acct_ctx//\$\{branch\}/$task}"
+            init_prompt="$init_prompt
+
+$acct_ctx"
+            _dim "  Account context: $account"
+        fi
+
         # Create notes file in session dir
         {
             echo "# Task: $task"
@@ -1460,9 +1474,34 @@ After setting up the workspace, analyze the task scope and create an agent team 
         printf '%s' "$init_prompt" > "$prompt_file"
         env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "$(cat "$prompt_file")"
     elif ! $is_new; then
+        # ── Resume context (worktree + branch awareness) ─────────────
+        local current_branch=""
+        if [[ -d "$wt_dir" ]]; then
+            current_branch=$(cd "$wt_dir" && git rev-parse --abbrev-ref HEAD 2>/dev/null) || true
+        fi
+
+        local resume_msg="Resuming task **$task** (project: **$name**).
+Your worktree is: \`$wt_dir\`
+Your feature branch is: \`${current_branch:-$task}\`
+IMPORTANT: Verify you are in the worktree directory and on the correct feature branch before making any changes. If not, \`cd $wt_dir\` and \`git checkout ${current_branch:-$task}\`."
+
+        # ── Account-specific resume template ─────────────────────────
+        local acct_resume_tpl="$acct_dir/templates/work_resume.md"
+        if [[ -f "$acct_resume_tpl" ]]; then
+            local acct_resume
+            acct_resume=$(cat "$acct_resume_tpl")
+            acct_resume="${acct_resume//\$\{task\}/$task}"
+            acct_resume="${acct_resume//\$\{project\}/$name}"
+            acct_resume="${acct_resume//\$\{branch\}/$current_branch}"
+            resume_msg="$resume_msg
+
+$acct_resume"
+            _dim "  Resume context: $account"
+        fi
+
         # Try to continue last conversation; if none found, start fresh
-        env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --continue \
-            || env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS
+        env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --continue "$resume_msg" \
+            || env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "$resume_msg"
     else
         if $team_flag && [[ -n "$team_prompt" ]]; then
             env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "Create an agent team for this task: $team_prompt"
