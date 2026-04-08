@@ -1367,16 +1367,30 @@ Then:
 6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
 7. Fill in the TASK_NOTES.md Context section with the page content.
 8. Then start working from the .tasks/$task/ directory."
-        elif [[ "$task_source" == "github" ]]; then
-            init_prompt="Fetch this GitHub issue/PR using the GitHub MCP: $task_url
-Get the branch name if it is a PR. Then:
+        elif [[ "$task_source" == "github" ]] && [[ "$task_url" == *"/pull/"* ]]; then
+            local _pr_num
+            _pr_num=$(echo "$task_url" | grep -oE '[0-9]+$')
+            init_prompt="Set up the workspace for GitHub PR #$_pr_num ($task_url):
 1. Run: git fetch origin
-2. If the branch already exists locally, delete it: git branch -D <branch_name> (ignore errors)
-3. Create a worktree from $base_branch: git worktree add .tasks/$task -b <branch_name_or_task/$task> $base_branch
+2. Get the PR branch name: \`gh pr view $_pr_num --json headRefName -q .headRefName\`
+3. If the PR branch already exists locally, delete it: \`git branch -D <pr_branch>\` (ignore errors)
+4. Create a worktree from the PR's remote branch: \`git worktree add .tasks/$task -b <pr_branch> origin/<pr_branch>\`
+   IMPORTANT: Use \`origin/<pr_branch>\` as the start point, NOT $base_branch — you need the PR's actual commits.
+5. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
+6. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
+7. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
+8. Fill in the TASK_NOTES.md Context section with the PR details.
+9. Then start working from the .tasks/$task/ directory."
+        elif [[ "$task_source" == "github" ]]; then
+            init_prompt="Fetch this GitHub issue using gh or the GitHub MCP: $task_url
+Then:
+1. Run: git fetch origin
+2. If branch task/$task exists locally, delete it: git branch -D task/$task (ignore errors)
+3. Create a worktree from $base_branch: git worktree add .tasks/$task -b task/$task $base_branch
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
 6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
-7. Fill in the TASK_NOTES.md Context section.
+7. Fill in the TASK_NOTES.md Context section with the issue details.
 8. Then start working from the .tasks/$task/ directory."
         else
             # No URL — just a branch/task name
