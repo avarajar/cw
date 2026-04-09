@@ -1394,7 +1394,17 @@ Then:
 8. Then start working from the .tasks/$task/ directory."
         else
             # No URL — just a branch/task name
-            init_prompt="Set up the workspace:
+            # Check if Forge pre-wrote a description in TASK_NOTES.md
+            local prewritten_desc=""
+            if [[ -f "$notes_file" ]]; then
+                prewritten_desc=$(sed -n '/^## Description$/,/^## /{ /^## /d; p; }' "$notes_file" | sed '/^$/d')
+            fi
+
+            if [[ -n "$prewritten_desc" ]]; then
+                init_prompt="Task description:
+$prewritten_desc
+
+Set up the workspace:
 1. Run: git fetch origin
 2. If branch $task exists locally, delete it: git branch -D $task (ignore errors)
 3. Create a worktree from $base_branch: git worktree add .tasks/$task -b $task $base_branch
@@ -1403,6 +1413,17 @@ Then:
 6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
 7. If there is a TASK_NOTES.md in .tasks/$task/, read it for context.
 8. Then start working from the .tasks/$task/ directory."
+            else
+                init_prompt="Set up the workspace:
+1. Run: git fetch origin
+2. If branch $task exists locally, delete it: git branch -D $task (ignore errors)
+3. Create a worktree from $base_branch: git worktree add .tasks/$task -b $task $base_branch
+4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
+5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
+6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
+7. If there is a TASK_NOTES.md in .tasks/$task/, read it for context.
+8. Then start working from the .tasks/$task/ directory."
+            fi
         fi
 
         # ── Shared context (per-project, visible to all worktrees) ────────
