@@ -1044,6 +1044,18 @@ with open('$session_meta', 'w') as f:
 "
         _log "Session created: ${C}$session_dir${NC}"
 
+        # ── Account skills: symlink into ~/.claude/skills/ for discovery ──
+        local acct_skills_dir="$acct_dir/skills"
+        if [[ -d "$acct_skills_dir" ]]; then
+            for skill_dir in "$acct_skills_dir"/*/; do
+                [[ -d "$skill_dir" ]] || continue
+                local skill_name
+                skill_name=$(basename "$skill_dir")
+                local target="$HOME/.claude/skills/acct--${account}--${skill_name}"
+                [[ -e "$target" ]] || ln -sf "$skill_dir" "$target"
+            done
+        fi
+
         # Create review notes
         {
             echo "# Review: PR #$pr"
@@ -1394,7 +1406,17 @@ Then:
 8. Then start working from the .tasks/$task/ directory."
         else
             # No URL — just a branch/task name
-            init_prompt="Set up the workspace:
+            # Check if Forge pre-wrote a description in TASK_NOTES.md
+            local prewritten_desc=""
+            if [[ -f "$notes_file" ]]; then
+                prewritten_desc=$(sed -n '/^## Description$/,/^## /{ /^## /d; p; }' "$notes_file" | sed '/^$/d')
+            fi
+
+            if [[ -n "$prewritten_desc" ]]; then
+                init_prompt="Task description:
+$prewritten_desc
+
+Set up the workspace:
 1. Run: git fetch origin
 2. If branch $task exists locally, delete it: git branch -D $task (ignore errors)
 3. Create a worktree from $base_branch: git worktree add .tasks/$task -b $task $base_branch
@@ -1403,6 +1425,17 @@ Then:
 6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
 7. If there is a TASK_NOTES.md in .tasks/$task/, read it for context.
 8. Then start working from the .tasks/$task/ directory."
+            else
+                init_prompt="Set up the workspace:
+1. Run: git fetch origin
+2. If branch $task exists locally, delete it: git branch -D $task (ignore errors)
+3. Create a worktree from $base_branch: git worktree add .tasks/$task -b $task $base_branch
+4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
+5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
+6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
+7. If there is a TASK_NOTES.md in .tasks/$task/, read it for context.
+8. Then start working from the .tasks/$task/ directory."
+            fi
         fi
 
         # ── Shared context (per-project, visible to all worktrees) ────────
@@ -1517,6 +1550,18 @@ meta = {
 }
 with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
 "
+
+        # ── Account skills: symlink into ~/.claude/skills/ for discovery ──
+        local acct_skills_dir="$acct_dir/skills"
+        if [[ -d "$acct_skills_dir" ]]; then
+            for skill_dir in "$acct_skills_dir"/*/; do
+                [[ -d "$skill_dir" ]] || continue
+                local skill_name
+                skill_name=$(basename "$skill_dir")
+                local target="$HOME/.claude/skills/acct--${account}--${skill_name}"
+                [[ -e "$target" ]] || ln -sf "$skill_dir" "$target"
+            done
+        fi
 
     else
         _log "Resuming task: ${C}$name${NC} task=${Y}$task${NC}"
@@ -1725,6 +1770,11 @@ meta['closed'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
 "
     fi
+
+    # Clean up account skill symlinks
+    for link in "$HOME/.claude/skills"/acct--*; do
+        [[ -L "$link" ]] && rm -f "$link"
+    done
 
     _log "${G}$type $id closed${NC}"
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) DONE $name $type=$id" >> "$CW_SESSIONS_LOG"
