@@ -1044,6 +1044,18 @@ with open('$session_meta', 'w') as f:
 "
         _log "Session created: ${C}$session_dir${NC}"
 
+        # ── Account skills: symlink into ~/.claude/skills/ for discovery ──
+        local acct_skills_dir="$acct_dir/skills"
+        if [[ -d "$acct_skills_dir" ]]; then
+            for skill_dir in "$acct_skills_dir"/*/; do
+                [[ -d "$skill_dir" ]] || continue
+                local skill_name
+                skill_name=$(basename "$skill_dir")
+                local target="$HOME/.claude/skills/acct--${account}--${skill_name}"
+                [[ -e "$target" ]] || ln -sf "$skill_dir" "$target"
+            done
+        fi
+
         # Create review notes
         {
             echo "# Review: PR #$pr"
@@ -1539,6 +1551,18 @@ meta = {
 with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
 "
 
+        # ── Account skills: symlink into ~/.claude/skills/ for discovery ──
+        local acct_skills_dir="$acct_dir/skills"
+        if [[ -d "$acct_skills_dir" ]]; then
+            for skill_dir in "$acct_skills_dir"/*/; do
+                [[ -d "$skill_dir" ]] || continue
+                local skill_name
+                skill_name=$(basename "$skill_dir")
+                local target="$HOME/.claude/skills/acct--${account}--${skill_name}"
+                [[ -e "$target" ]] || ln -sf "$skill_dir" "$target"
+            done
+        fi
+
     else
         _log "Resuming task: ${C}$name${NC} task=${Y}$task${NC}"
         _dim "  Model: $model"
@@ -1746,6 +1770,11 @@ meta['closed'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
 "
     fi
+
+    # Clean up account skill symlinks
+    for link in "$HOME/.claude/skills"/acct--*; do
+        [[ -L "$link" ]] && rm -f "$link"
+    done
 
     _log "${G}$type $id closed${NC}"
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) DONE $name $type=$id" >> "$CW_SESSIONS_LOG"
