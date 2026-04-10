@@ -78,23 +78,30 @@ print(m.group(1) if m else 'default')
 
 _model_for_type() {
     local task_type="${1:-work}"
-    local default_model="sonnet"
-    case "$task_type" in
-        plan) default_model="opus" ;;
-        create) default_model="haiku" ;;
-    esac
     if [[ -f "$CW_CONFIG" ]]; then
-        local val
-        val=$(python3 -c "
+        python3 -c "
 import re
 with open('$CW_CONFIG') as f: text = f.read()
 m = re.search(r'^  $task_type:\s*(\S+)', text, re.M)
-print(m.group(1) if m else '$default_model')
-" 2>/dev/null || echo "$default_model")
-        echo "$val"
+print(m.group(1) if m else '$CW_DEFAULT_MODEL')
+" 2>/dev/null || echo "$CW_DEFAULT_MODEL"
     else
-        echo "$default_model"
+        echo "$CW_DEFAULT_MODEL"
     fi
+}
+
+# When no explicit model is given, remove any saved model from account settings
+# so Claude uses its platform default — same as /model → "Default (recommended)"
+_use_platform_default_model() {
+    local settings="$1/settings.json"
+    [[ -f "$settings" ]] || return
+    python3 -c "
+import json
+with open('$settings') as f: s = json.load(f)
+if 'model' in s:
+    del s['model']
+    with open('$settings', 'w') as f: json.dump(s, f, indent=2)
+" 2>/dev/null || true
 }
 
 _ensure_dirs() {
@@ -959,6 +966,12 @@ cmd_review() {
     _ensure_statusline "$acct_dir"
 
     local model="${model_override:-$(_model_for_type review)}"
+    local model_args=()
+    if [[ -n "$model" ]]; then
+        model_args=("--model" "$model")
+    else
+        _use_platform_default_model "$acct_dir"
+    fi
 
     [[ -z "$pr" ]] && { _err "Missing PR. Usage: cw review $name 123"; return 1; }
 
@@ -1021,7 +1034,7 @@ with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
 
     if $is_new; then
         _log "New review: ${C}$name${NC} PR #${Y}$pr${NC}"
-        _dim "  Model: $model"
+        _dim "  Model: ${model:-claude default}"
 
         # Save session metadata
         python3 -c "
@@ -1078,7 +1091,7 @@ with open('$session_meta', 'w') as f:
     else
         # Existing review - update metadata
         _log "Resuming review: ${C}$name${NC} PR #${Y}$pr${NC}"
-        _dim "  Model: $model"
+        _dim "  Model: ${model:-claude default}"
         python3 -c "
 import json
 from datetime import datetime, timezone
@@ -1137,9 +1150,9 @@ If I say 'none', do not post. If I say 'edit', let me modify before posting."
         local prompt_file="$session_dir/recheck_prompt.txt"
         printf '%s' "$recheck_prompt" > "$prompt_file"
         CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account" \
-        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --model "$model" --resume "$session_name" "$(cat "$prompt_file")" \
-            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --model "$model" --continue "$(cat "$prompt_file")" \
-            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --model "$model" --name "$session_name" "$(cat "$prompt_file")"
+        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --resume "$session_name" "$(cat "$prompt_file")" \
+            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --continue "$(cat "$prompt_file")" \
+            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$prompt_file")"
     else
         # Build review prompt: project skill > global skill > default
         # Search order:
@@ -1225,7 +1238,7 @@ If I say 'none', do not post. If I say 'edit', let me modify the findings before
         local prompt_file="$session_dir/init_prompt.txt"
         printf '%s' "$review_prompt" > "$prompt_file"
         CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account" \
-        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --model "$model" --name "$session_name" "$(cat "$prompt_file")"
+        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$prompt_file")"
     fi
 
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) REVIEW $name pr=$pr account=$account" >> "$CW_SESSIONS_LOG"
@@ -1302,6 +1315,12 @@ cmd_work() {
     _ensure_statusline "$acct_dir"
 
     local model="${model_override:-$(_model_for_type work)}"
+    local model_args=()
+    if [[ -n "$model" ]]; then
+        model_args=("--model" "$model")
+    else
+        _use_platform_default_model "$acct_dir"
+    fi
 
     local session_dir="$CW_HOME/sessions/$name/task-$task"
     local session_meta="$session_dir/session.json"
@@ -1348,7 +1367,7 @@ cmd_work() {
 
     if $is_new; then
         _log "New task: ${C}$name${NC} task=${Y}$task${NC}"
-        _dim "  Model: $model"
+        _dim "  Model: ${model:-claude default}"
 
         # Build initial prompt for Claude based on source
         local init_prompt=""
@@ -1565,7 +1584,7 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
 
     else
         _log "Resuming task: ${C}$name${NC} task=${Y}$task${NC}"
-        _dim "  Model: $model"
+        _dim "  Model: ${model:-claude default}"
         python3 -c "
 import json
 from datetime import datetime, timezone
@@ -1612,7 +1631,7 @@ After setting up the workspace, analyze the task scope and create an agent team 
 
         local prompt_file="$session_dir/init_prompt.txt"
         printf '%s' "$init_prompt" > "$prompt_file"
-        env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --model "$model" --name "$session_name" "$(cat "$prompt_file")"
+        env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$prompt_file")"
     elif ! $is_new; then
         # ── Resume context (worktree + branch awareness) ─────────────
         local current_branch=""
@@ -1642,17 +1661,17 @@ $acct_resume"
         local session_name="$account/$name/$task"
 
         # Try to resume named session; fall back to --continue, then start fresh
-        env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --model "$model" --resume "$session_name" "$resume_msg" \
-            || env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --model "$model" --continue "$resume_msg" \
-            || env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --model "$model" --name "$session_name" "$resume_msg"
+        env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --resume "$session_name" "$resume_msg" \
+            || env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --continue "$resume_msg" \
+            || env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$resume_msg"
     else
         local session_name="$account/$name/$task"
         if $team_flag && [[ -n "$team_prompt" ]]; then
-            env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --model "$model" --name "$session_name" "Create an agent team for this task: $team_prompt"
+            env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "Create an agent team for this task: $team_prompt"
         elif $team_flag; then
-            env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --model "$model" --name "$session_name"
+            env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name"
         else
-            CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --model "$model" --name "$session_name"
+            CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name"
         fi
     fi
 
@@ -2274,9 +2293,15 @@ cmd_plan() {
     local account; account=$(_get_field "$pj" account "$(_default_account)")
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
     local model="${model_override:-$(_model_for_type plan)}"
+    local model_args=()
+    if [[ -n "$model" ]]; then
+        model_args=("--model" "$model")
+    else
+        _use_platform_default_model "$acct_dir"
+    fi
 
     _log "Planning: ${C}$name${NC} — ${Y}$description${NC}"
-    _dim "  Model: $model"
+    _dim "  Model: ${model:-claude default}"
     _ensure_statusline "$acct_dir"
 
     local plan_prompt="You are a technical project planner. Analyze this project and create an implementation plan.
@@ -2309,7 +2334,7 @@ IMPORTANT: Keep the plan focused and practical. Don't over-split — 2-4 tasks i
     cd "$path"
     _set_tab_title "plan: $name"
     export CW_PROJECT="$name" CW_TASK="plan" CW_TASK_TYPE="plan" CW_ACCOUNT="$account"
-    CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --model "$model" --name "$account/$name/plan" "$plan_prompt"
+    CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$account/$name/plan" "$plan_prompt"
     unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
 }
 
@@ -4124,6 +4149,12 @@ cmd_create() {
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
     [[ -d "$acct_dir" ]] || { _err "Account '$account' not found."; return 1; }
     local model="${model_override:-$(_model_for_type create)}"
+    local model_args=()
+    if [[ -n "$model" ]]; then
+        model_args=("--model" "$model")
+    else
+        _use_platform_default_model "$acct_dir"
+    fi
 
     # ── Project name ──────────────────────────────────────────────────
     if [[ -z "$proj_name" ]]; then
@@ -4263,11 +4294,11 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
     printf '%s' "$init_prompt" > "$prompt_file"
 
     _log "Launching Claude..."
-    _dim "  Model: $model"
+    _dim "  Model: ${model:-claude default}"
     $team_flag && _log "Agent teams ${G}enabled${NC}"
     _ensure_statusline "$acct_dir"
 
-    env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS --model "$model" --name "$account/$proj_name/init" "$(cat "$prompt_file")"
+    env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$account/$proj_name/init" "$(cat "$prompt_file")"
 
     unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) CREATE $proj_name account=$account" >> "$CW_SESSIONS_LOG"
