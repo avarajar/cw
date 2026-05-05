@@ -1064,6 +1064,8 @@ with open('$session_meta', 'w') as f:
                 [[ -d "$skill_dir" ]] || continue
                 local skill_name
                 skill_name=$(basename "$skill_dir")
+                # Skip already-prefixed entries to prevent recursive prefix accumulation
+                case "$skill_name" in acct--*) continue ;; esac
                 local target="$HOME/.claude/skills/acct--${account}--${skill_name}"
                 [[ -e "$target" ]] || ln -sf "$skill_dir" "$target"
             done
@@ -1577,6 +1579,8 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
                 [[ -d "$skill_dir" ]] || continue
                 local skill_name
                 skill_name=$(basename "$skill_dir")
+                # Skip already-prefixed entries to prevent recursive prefix accumulation
+                case "$skill_name" in acct--*) continue ;; esac
                 local target="$HOME/.claude/skills/acct--${account}--${skill_name}"
                 [[ -e "$target" ]] || ln -sf "$skill_dir" "$target"
             done
@@ -1790,9 +1794,16 @@ with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
 "
     fi
 
-    # Clean up account skill symlinks
+    # Clean up account skill symlinks (both target and source dirs, in case
+    # the source got polluted by an earlier buggy run)
     for link in "$HOME/.claude/skills"/acct--*; do
         [[ -L "$link" ]] && rm -f "$link"
+    done
+    for acct_dir in "$CW_HOME/accounts"/*/; do
+        [[ -d "$acct_dir/skills" ]] || continue
+        for link in "$acct_dir/skills"/acct--*; do
+            [[ -L "$link" ]] && rm -f "$link"
+        done
     done
 
     _log "${G}$type $id closed${NC}"
