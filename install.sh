@@ -121,7 +121,9 @@ install_files() {
     ok "Files installed to $CW_HOME"
 
     # Cleanup temp dir if used
-    [[ -d "${tmp_dir:-}" ]] && rm -rf "$tmp_dir"
+    if [[ -n "${tmp_dir:-}" && -d "$tmp_dir" ]]; then
+        rm -rf "$tmp_dir"
+    fi
 }
 
 # ── Shell integration ───────────────────────────────────────────────────────
