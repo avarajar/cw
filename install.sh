@@ -120,7 +120,9 @@ install_files() {
 
     ok "Files installed to $CW_HOME"
 
-    # Cleanup temp dir if used
+    # Cleanup temp dir if used. Must be `if` (not `[[ ]] && cmd`) because a
+    # false test on the function's last statement propagates exit 1 and
+    # `set -e` would abort the script before setup_shell runs.
     if [[ -n "${tmp_dir:-}" && -d "$tmp_dir" ]]; then
         rm -rf "$tmp_dir"
     fi
