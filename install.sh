@@ -54,6 +54,16 @@ check_requirements() {
         exit 1
     fi
 
+    # Check that `env bash` resolves to bash 4+. macOS ships /bin/bash 3.2,
+    # which breaks cw at runtime even if install.sh ran under a newer bash.
+    local env_bash_version
+    env_bash_version=$(/usr/bin/env bash -c 'echo "$BASH_VERSINFO"' 2>/dev/null || echo 0)
+    if [[ $env_bash_version -lt 4 ]]; then
+        err "cw requires bash >= 4, but \`env bash\` resolves to bash $env_bash_version on this system."
+        err "On macOS: brew install bash, then ensure /opt/homebrew/bin precedes /bin in PATH."
+        exit 1
+    fi
+
     ok "Requirements met"
 }
 
