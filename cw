@@ -6,6 +6,17 @@
 #
 # Usage: cw <command> [options]
 # ============================================================================
+
+# Bash 4+ is required. On macOS, `env bash` falls back to the stock
+# /bin/bash (3.2), where `"${empty_array[@]}"` under `set -u` raises
+# "unbound variable" and aborts with a cryptic error mid-script.
+if (( BASH_VERSINFO[0] < 4 )); then
+    printf 'cw: requires bash >= 4 (you have %s, at %s).\n' "$BASH_VERSION" "$BASH" >&2
+    printf '    On macOS: brew install bash\n' >&2
+    printf '    Then re-run cw from a shell where the new bash is first in PATH.\n' >&2
+    exit 1
+fi
+
 set -uo pipefail
 
 CW_VERSION="0.2.0"
