@@ -1843,10 +1843,11 @@ now = int(sys.argv[3])
 for proj in os.listdir(sessions_dir):
     proj_dir = os.path.join(sessions_dir, proj)
     if not os.path.isdir(proj_dir): continue
-    for space in os.listdir(proj_dir):
-        space_dir = os.path.join(proj_dir, space)
+    # Walk recursively to find session.json (task names with slashes create nested dirs)
+    for root, dirs, files in os.walk(proj_dir):
+        if "session.json" not in files: continue
+        space_dir = root
         meta_file = os.path.join(space_dir, "session.json")
-        if not os.path.isfile(meta_file): continue
         try:
             with open(meta_file) as f: m = json.load(f)
         except: continue
@@ -1959,13 +1960,15 @@ for proj in sorted(os.listdir(sessions_dir)):
     proj_dir = os.path.join(sessions_dir, proj)
     if not os.path.isdir(proj_dir): continue
     if filter_proj and proj != filter_proj: continue
-    for space in sorted(os.listdir(proj_dir)):
-        if type_filter and not space.startswith(type_filter + "-"): continue
-        meta_file = os.path.join(proj_dir, space, "session.json")
-        if not os.path.isfile(meta_file): continue
+    # Walk recursively to find session.json (task names with slashes create nested dirs)
+    for root, dirs, files in os.walk(proj_dir):
+        dirs.sort()
+        if "session.json" not in files: continue
+        meta_file = os.path.join(root, "session.json")
         try:
             with open(meta_file) as f: m = json.load(f)
         except: continue
+        if type_filter and m.get("type") != type_filter: continue
         if m.get("status") != "active": continue
         sid = m.get("task", "") or m.get("pr", "?")
         opens = m.get("opens", 0)
@@ -2188,10 +2191,10 @@ for proj in sorted(os.listdir(sessions_dir)):
     if not os.path.isdir(proj_dir): continue
     if filter_proj and proj != filter_proj: continue
 
-    for space in os.listdir(proj_dir):
-        space_dir = os.path.join(proj_dir, space)
-        meta_file = os.path.join(space_dir, "session.json")
-        if not os.path.isfile(meta_file): continue
+    # Walk recursively to find session.json (task names with slashes create nested dirs)
+    for root, dirs, files in os.walk(proj_dir):
+        if "session.json" not in files: continue
+        meta_file = os.path.join(root, "session.json")
 
         try:
             with open(meta_file) as f: m = json.load(f)
