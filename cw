@@ -1496,7 +1496,9 @@ When you discover something relevant to other tasks (schema changes, API changes
 
 IMPORTANT — Project rules: Before writing any code, read the project's CLAUDE.md at the worktree root if it exists. Also check .claude/rules/ for coding rules (e.g. backend.md, frontend.md, tests.md) — these have glob patterns in their frontmatter that specify which files they apply to. Follow all coding rules, conventions, and restrictions defined in these files when writing code.
 
-IMPORTANT — Code quality: When you finish implementing the task (before committing), run /simplify to review the code for reuse, quality, and efficiency. Fix any issues found before considering the task done."
+IMPORTANT — Code quality: When you finish implementing the task (before committing), run /simplify to review the code for reuse, quality, and efficiency. Fix any issues found before considering the task done.
+
+IMPORTANT — Comment style: When writing code, keep comments minimal and to a single line. Do not write multi-line comment blocks or docstring-style explanations. Comments must never reference task IDs, branch names, or GitHub/Linear issue or PR numbers — that context belongs in the PR description, not in the code."
 
         # ── Workflow template ─────────────────────────────────────────────
         if [[ -n "$workflow" ]]; then
