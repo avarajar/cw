@@ -25,6 +25,7 @@ src/
 - Conventional commits: `feat:`, `fix:`, `chore:`
 - Tests required for all new features
 - No direct pushes to main
+- Code comments: single line only, no docstring-style or multi-line blocks; never reference task IDs, branch names, or GitHub/Linear issue numbers
 <!-- Add project-specific conventions -->
 
 ## Working with me (Claude)
