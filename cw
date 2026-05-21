@@ -1496,9 +1496,7 @@ When you discover something relevant to other tasks (schema changes, API changes
 
 IMPORTANT — Project rules: Before writing any code, read the project's CLAUDE.md at the worktree root if it exists. Also check .claude/rules/ for coding rules (e.g. backend.md, frontend.md, tests.md) — these have glob patterns in their frontmatter that specify which files they apply to. Follow all coding rules, conventions, and restrictions defined in these files when writing code.
 
-IMPORTANT — Code quality: When you finish implementing the task (before committing), run /simplify to review the code for reuse, quality, and efficiency. Fix any issues found before considering the task done.
-
-IMPORTANT — Comment style: When writing code, keep comments minimal and to a single line. Do not write multi-line comment blocks or docstring-style explanations. Comments must never reference task IDs, branch names, or GitHub/Linear issue or PR numbers — that context belongs in the PR description, not in the code."
+IMPORTANT — Code quality: When you finish implementing the task (before committing), run /simplify to review the code for reuse, quality, and efficiency. Fix any issues found before considering the task done."
 
         # ── Workflow template ─────────────────────────────────────────────
         if [[ -n "$workflow" ]]; then
@@ -1647,6 +1645,11 @@ After setting up the workspace, analyze the task scope and create an agent team 
         local session_name="$account/$name/$task"
 
         local prompt_file="$session_dir/init_prompt.txt"
+        # Comment-style rule appended here, right before the write, so it
+        # stays the last thing the agent reads regardless of earlier blocks.
+        init_prompt="$init_prompt
+
+MANDATORY — Comment & notes style: Keep every comment to a single short line. Never write multi-line comment blocks or docstring-style explanations. This applies both to comments in code and to notes you write in TASK_NOTES.md or any task file. Comments must never reference task IDs, branch names, or GitHub/Linear issue or PR numbers — that context belongs in the PR description, not in the code. This rule is not optional; follow it in every file you touch."
         printf '%s' "$init_prompt" > "$prompt_file"
         env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$prompt_file")"
     elif ! $is_new; then
