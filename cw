@@ -1299,6 +1299,10 @@ cmd_loop() {
     if $done_flag; then
         slug="${slug:-$prompt}"
         [[ -z "$slug" ]] && { _err "Usage: cw loop $name <slug> --done"; return 1; }
+        if [[ ! "$slug" =~ ^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$ ]]; then
+            _err "Invalid loop name '$slug'. Use lowercase letters, numbers, hyphens (max 30 chars)."
+            return 1
+        fi
         local session_dir="$CW_HOME/sessions/$name/loop-$slug"
         _log "Closing loop: ${C}$name${NC} ${Y}$slug${NC}"
         if [[ -f "$session_dir/session.json" ]]; then
@@ -1331,6 +1335,10 @@ PYEOF
         slug="${slug#-}"; slug="${slug%-}"
     fi
     [[ -z "$slug" ]] && { _err "Could not derive a session name from the prompt. Pass --name <slug>."; return 1; }
+    if [[ ! "$slug" =~ ^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$ ]]; then
+        _err "Invalid loop name '$slug'. Use lowercase letters, numbers, hyphens (max 30 chars)."
+        return 1
+    fi
 
     local sessions_dir="$CW_HOME/sessions/$name"
     local session_dir="$sessions_dir/loop-$slug"
