@@ -94,10 +94,10 @@ _model_for_type() {
 import re
 with open('$CW_CONFIG') as f: text = f.read()
 m = re.search(r'^  $task_type:\s*(\S+)', text, re.M)
-print(m.group(1) if m else '$CW_DEFAULT_MODEL')
-" 2>/dev/null || echo "$CW_DEFAULT_MODEL"
+print(m.group(1) if m else '${CW_DEFAULT_MODEL:-}')
+" 2>/dev/null || echo "${CW_DEFAULT_MODEL:-}"
     else
-        echo "$CW_DEFAULT_MODEL"
+        echo "${CW_DEFAULT_MODEL:-}"
     fi
 }
 
@@ -1391,6 +1391,7 @@ meta = {
     'type': 'loop',
     'account': os.environ['CW_L_ACCOUNT'],
     'model': os.environ['CW_L_MODEL'],
+    'worktree': '',
     'loop_prompt': os.environ['CW_L_PROMPT'],
     'loop_interval': os.environ['CW_L_INTERVAL'],
     'notes': os.environ['CW_L_NOTES'],
