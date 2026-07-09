@@ -94,10 +94,10 @@ _model_for_type() {
 import re
 with open('$CW_CONFIG') as f: text = f.read()
 m = re.search(r'^  $task_type:\s*(\S+)', text, re.M)
-print(m.group(1) if m else '$CW_DEFAULT_MODEL')
-" 2>/dev/null || echo "$CW_DEFAULT_MODEL"
+print(m.group(1) if m else '${CW_DEFAULT_MODEL:-}')
+" 2>/dev/null || echo "${CW_DEFAULT_MODEL:-}"
     else
-        echo "$CW_DEFAULT_MODEL"
+        echo "${CW_DEFAULT_MODEL:-}"
     fi
 }
 
@@ -1255,6 +1255,225 @@ If I say 'none', do not post. If I say 'edit', let me modify the findings before
     fi
 
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) REVIEW $name pr=$pr account=$account" >> "$CW_SESSIONS_LOG"
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# LOOP — recurring/self-paced Claude session via /loop (no worktree)
+# ════════════════════════════════════════════════════════════════════════════
+cmd_loop() {
+    local name="" prompt="" slug="" interval="" done_flag=false list_flag=false account_override="" model_override=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --every|-e)   interval="$2"; shift 2 ;;
+            --name)       slug="$2"; shift 2 ;;
+            --done)       done_flag=true; shift ;;
+            --list)       list_flag=true; shift ;;
+            --account|-a) account_override="$2"; shift 2 ;;
+            --model|-m)   model_override="$2"; shift 2 ;;
+            -*)           shift ;;
+            *)
+                if [[ -z "$name" ]]; then
+                    name="$1"
+                elif [[ -z "$prompt" ]]; then
+                    prompt="$1"
+                fi
+                shift ;;
+        esac
+    done
+
+    # ── List active loops ────────────────────────────────────────────────
+    if $list_flag; then
+        _spaces_list "$name" "loop"
+        return
+    fi
+
+    [[ -z "$name" ]] && { _err "Usage: cw loop <project> \"<prompt>\" [--every 30m]"; return 1; }
+
+    local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
+    local path; path=$(_get_field "$pj" path "")
+    local account; account=${account_override:-$(_get_field "$pj" account "$(_default_account)")}
+    local acct_dir="$CW_ACCOUNTS_DIR/$account"
+    _ensure_statusline "$acct_dir"
+
+    # ── Done: close loop session (second positional = slug) ─────────────
+    if $done_flag; then
+        slug="${slug:-$prompt}"
+        [[ -z "$slug" ]] && { _err "Usage: cw loop $name <slug> --done"; return 1; }
+        if [[ ! "$slug" =~ ^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$ ]]; then
+            _err "Invalid loop name '$slug'. Use lowercase letters, numbers, hyphens (max 30 chars)."
+            return 1
+        fi
+        local session_dir="$CW_HOME/sessions/$name/loop-$slug"
+        _log "Closing loop: ${C}$name${NC} ${Y}$slug${NC}"
+        if [[ -f "$session_dir/session.json" ]]; then
+            CW_META_FILE="$session_dir/session.json" python3 - <<'PYEOF'
+import json, os
+from datetime import datetime, timezone
+p = os.environ['CW_META_FILE']
+with open(p) as f: meta = json.load(f)
+meta['status'] = 'done'
+meta['closed'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+with open(p, 'w') as f: json.dump(meta, f, indent=2)
+PYEOF
+        fi
+        _log "${G}Loop $slug closed${NC}"
+        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) DONE $name loop=$slug" >> "$CW_SESSIONS_LOG"
+        return
+    fi
+
+    [[ -z "$prompt" ]] && { _err "Missing prompt. Usage: cw loop $name \"run tests and fix breakage\" --every 30m"; return 1; }
+
+    # ── Validate interval ────────────────────────────────────────────────
+    if [[ -n "$interval" ]] && [[ ! "$interval" =~ ^[0-9]+[smh]$ ]]; then
+        _err "Invalid interval '$interval'. Use forms like 30s, 5m, 2h."
+        return 1
+    fi
+
+    # ── Derive slug from prompt when not given ──────────────────────────
+    if [[ -z "$slug" ]]; then
+        slug=$(printf '%s' "$prompt" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | cut -c1-30)
+        slug="${slug#-}"; slug="${slug%-}"
+    fi
+    [[ -z "$slug" ]] && { _err "Could not derive a session name from the prompt. Pass --name <slug>."; return 1; }
+    if [[ ! "$slug" =~ ^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$ ]]; then
+        _err "Invalid loop name '$slug'. Use lowercase letters, numbers, hyphens (max 30 chars)."
+        return 1
+    fi
+
+    local sessions_dir="$CW_HOME/sessions/$name"
+    local session_dir="$sessions_dir/loop-$slug"
+    local session_meta="$session_dir/session.json"
+    local notes_file="$session_dir/LOOP_NOTES.md"
+
+    mkdir -p "$session_dir"
+
+    local is_new=true
+    [[ -f "$session_meta" ]] && is_new=false
+
+    # If session exists but is done, reset it for a fresh start
+    if ! $is_new; then
+        local session_status
+        session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
+        if [[ "$session_status" == "done" ]]; then
+            _log "Previous loop ${Y}$slug${NC} was closed — starting fresh"
+            rm -f "$session_meta"
+            is_new=true
+        fi
+    fi
+
+    local model="${model_override:-$(_model_for_type loop)}"
+    if [[ -z "$model_override" ]] && ! $is_new && [[ -f "$session_meta" ]]; then
+        local stored_model
+        stored_model=$(python3 -c "import json; print(json.load(open('$session_meta')).get('model',''))" 2>/dev/null)
+        [[ -n "$stored_model" ]] && model="$stored_model"
+    fi
+    local model_args=()
+    if [[ -n "$model" ]]; then
+        model_args=("--model" "$model")
+    else
+        _use_platform_default_model "$acct_dir"
+    fi
+
+    if $is_new; then
+        _log "New loop: ${C}$name${NC} ${Y}$slug${NC} (${interval:-self-paced})"
+        _dim "  Model: ${model:-claude default}"
+
+        # Save session metadata (env vars → python, no quote injection)
+        CW_L_PROJECT="$name" CW_L_SLUG="$slug" CW_L_ACCOUNT="$account" CW_L_MODEL="$model" \
+        CW_L_PROMPT="$prompt" CW_L_INTERVAL="$interval" CW_L_NOTES="$notes_file" CW_L_META="$session_meta" \
+        python3 - <<'PYEOF'
+import json, os
+from datetime import datetime, timezone
+now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+meta = {
+    'project': os.environ['CW_L_PROJECT'],
+    'task': os.environ['CW_L_SLUG'],
+    'type': 'loop',
+    'account': os.environ['CW_L_ACCOUNT'],
+    'model': os.environ['CW_L_MODEL'],
+    'worktree': '',
+    'loop_prompt': os.environ['CW_L_PROMPT'],
+    'loop_interval': os.environ['CW_L_INTERVAL'],
+    'notes': os.environ['CW_L_NOTES'],
+    'status': 'active',
+    'created': now,
+    'last_opened': now,
+    'opens': 1
+}
+with open(os.environ['CW_L_META'], 'w') as f:
+    json.dump(meta, f, indent=2)
+PYEOF
+        _log "Session created: ${C}$session_dir${NC}"
+
+        # ── Account skills: symlink into ~/.claude/skills/ for discovery ──
+        local acct_skills_dir="$acct_dir/skills"
+        if [[ -d "$acct_skills_dir" ]]; then
+            for skill_dir in "$acct_skills_dir"/*/; do
+                [[ -d "$skill_dir" ]] || continue
+                local skill_name
+                skill_name=$(basename "$skill_dir")
+                # Skip already-prefixed entries to prevent recursive prefix accumulation
+                case "$skill_name" in acct--*) continue ;; esac
+                local target="$HOME/.claude/skills/acct--${account}--${skill_name}"
+                [[ -e "$target" ]] || ln -sf "$skill_dir" "$target"
+            done
+        fi
+
+        # Loop notes
+        {
+            echo "# Loop: $slug"
+            echo "**Project:** $name"
+            echo "**Interval:** ${interval:-self-paced}"
+            echo "**Created:** $(date +%Y-%m-%d)"
+            echo ""
+            echo "## Objective"
+            echo "$prompt"
+            echo ""
+            echo "## Iteration Log"
+            echo "<!-- Claude appends notable outcomes per iteration -->"
+            echo ""
+            echo "## Notes"
+            echo "<!-- Findings, decisions, references -->"
+        } > "$notes_file"
+    else
+        _log "Resuming loop: ${C}$name${NC} ${Y}$slug${NC}"
+        _dim "  Model: ${model:-claude default}"
+        CW_L_META="$session_meta" CW_L_MODEL="$model_override" python3 - <<'PYEOF'
+import json, os
+from datetime import datetime, timezone
+p = os.environ['CW_L_META']
+with open(p) as f: meta = json.load(f)
+meta['last_opened'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+meta['opens'] = meta.get('opens', 0) + 1
+if os.environ.get('CW_L_MODEL'):
+    meta['model'] = os.environ['CW_L_MODEL']
+with open(p, 'w') as f: json.dump(meta, f, indent=2)
+PYEOF
+    fi
+
+    # ── Run Claude ────────────────────────────────────────────────────
+    cd "$path"
+    _set_tab_title "Loop:$slug - $name"
+    local session_name="$account/$name/loop-$slug"
+
+    if $is_new; then
+        # Initial prompt: invoke the /loop skill with interval + objective
+        local init_prompt
+        if [[ -n "$interval" ]]; then
+            init_prompt="/loop $interval $prompt"
+        else
+            init_prompt="/loop $prompt"
+        fi
+        printf '%s' "$init_prompt" > "$session_dir/loop_prompt.txt"
+        CW_PROJECT="$name" CW_TASK="loop-$slug" CW_TASK_TYPE="loop" CW_ACCOUNT="$account" \
+        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$session_dir/loop_prompt.txt")"
+    else
+        local resume_prompt="Resume the loop for this session: read $notes_file for the objective and interval, then re-invoke /loop with that same objective (and interval, if any)."
+        CW_PROJECT="$name" CW_TASK="loop-$slug" CW_TASK_TYPE="loop" CW_ACCOUNT="$account" \
+        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --resume "$session_name" "$resume_prompt" \
+            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --continue "$resume_prompt" \
+            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$resume_prompt"
+    fi
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -4360,6 +4579,9 @@ ${BOLD}MAIN COMMANDS${NC}
   plan <project> "<description>"      Plan & split task into sub-worktrees
   review <project> <PR>               Review PR (persistent session)
   review <project> <url>              Review from GitHub PR URL
+  loop <project> "<prompt>"           Recurring/self-paced Claude loop (no worktree)
+    --every, -e <interval>            Fixed interval (30s, 5m, 2h); omit = self-paced
+    --name <slug>                     Explicit session name (default: derived from prompt)
   open <project>                      Open project quick (no worktree)
   launch [account]                    Open Claude with account (no project needed)
   spaces                              Show active spaces
@@ -4480,6 +4702,7 @@ main() {
         project)    cmd_project "$@" ;;
         open)       cmd_open "$@" ;;
         review)     cmd_review "$@" ;;
+        loop)       cmd_loop "$@" ;;
         work)       cmd_work "$@" ;;
         create)     cmd_create "$@" ;;
         plan)       cmd_plan "$@" ;;
