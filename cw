@@ -4724,4 +4724,5 @@ main() {
     esac
 }
 
-main "$@"
+# only run when executed, so tests can source the script
+[[ "${BASH_SOURCE[0]}" == "$0" ]] && main "$@"
