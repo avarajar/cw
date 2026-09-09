@@ -609,7 +609,7 @@ cmd_project() {
 }
 
 _project_register() {
-    local path="" alias_name=""
+    local path="" alias_name="" harness=""
     local account; account=$(_default_account)
     local ptype="fullstack"
 
@@ -619,6 +619,7 @@ _project_register() {
             --account|-a) account="$2"; shift 2 ;;
             --type|-t)    ptype="$2"; shift 2 ;;
             --alias)      alias_name="$2"; shift 2 ;;
+            --harness|-H) harness="$2"; shift 2 ;;
             -*)           shift ;;
             *)
                 if [[ -z "$path" ]]; then
@@ -645,10 +646,13 @@ f = '$CW_REGISTRY'
 try:
     with open(f) as fh: reg = json.load(fh)
 except: reg = {}
-reg['$name'] = {
+entry = {
     'path': '$path', 'account': '$account', 'type': '$ptype',
     'registered': '$(date -u +%Y-%m-%dT%H:%M:%SZ)'
 }
+if '$harness':
+    entry['harness'] = '$harness'
+reg['$name'] = entry
 with open(f, 'w') as fh: json.dump(reg, fh, indent=2)
 "
     mkdir -p "$path/.claude"
@@ -2781,11 +2785,12 @@ PYEOF
 # PLAN — Auto-split tasks with Claude
 # ════════════════════════════════════════════════════════════════════════════
 cmd_plan() {
-    local name="" description="" model_override=""
+    local name="" description="" model_override="" harness_override=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --model|-m) model_override="$2"; shift 2 ;;
             --account|-a) shift 2 ;;
+            --harness|-H) harness_override="$2"; shift 2 ;;
             -*) shift ;;
             *)
                 if [[ -z "$name" ]]; then
@@ -2803,7 +2808,9 @@ cmd_plan() {
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
     local account; account=$(_get_field "$pj" account "$(_default_account)")
-    local acct_dir; acct_dir="$(_harness_dir "$account" "${CW_HARNESS:-$CW_HARNESS_DEFAULT}")"
+    local harness; harness=$(_resolve_harness "$account" "$name" "" "$harness_override") || return 1
+    CW_HARNESS="$harness"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
     local model="${model_override:-$(_model_for_type plan)}"
     [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
 
@@ -2843,7 +2850,7 @@ IMPORTANT: Keep the plan focused and practical. Don't over-split — 2-4 tasks i
     export CW_PROJECT="$name" CW_TASK="plan" CW_TASK_TYPE="plan" CW_ACCOUNT="$account"
     CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$account/$name/plan" CW_MODEL="$model"
     CW_PROMPT="$plan_prompt"
-    _harness_load "$CW_HARNESS_DEFAULT" || return 1
+    _harness_load "$CW_HARNESS" || return 1
     _harness_context
     _harness_launch
     unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
@@ -4619,7 +4626,7 @@ _gsd_sync() {
 # CREATE — Bootstrap a new project from a description
 # ════════════════════════════════════════════════════════════════════════════
 cmd_create() {
-    local description="" account="" team_flag=false team_prompt="" proj_name="" base_dir="" model_override=""
+    local description="" account="" team_flag=false team_prompt="" proj_name="" base_dir="" model_override="" harness_override=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -4627,6 +4634,7 @@ cmd_create() {
             --account|-a)  account="$2"; shift 2 ;;
             --name|-n)     proj_name="$2"; shift 2 ;;
             --dir|-d)      base_dir="$2"; shift 2 ;;
+            --harness|-H)  harness_override="$2"; shift 2 ;;
             --team)        team_flag=true; shift
                            if [[ $# -gt 0 && "$1" != -* && "$1" != http* ]]; then
                                team_prompt="$1"; shift
@@ -4679,9 +4687,6 @@ cmd_create() {
         fi
     fi
     [[ -d "$(_account_root "$account")" ]] || { _err "Account '$account' not found."; return 1; }
-    local acct_dir; acct_dir="$(_harness_dir "$account" "${CW_HARNESS:-$CW_HARNESS_DEFAULT}")"
-    local model="${model_override:-$(_model_for_type create)}"
-    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
 
     # ── Project name ──────────────────────────────────────────────────
     if [[ -z "$proj_name" ]]; then
@@ -4695,6 +4700,14 @@ cmd_create() {
     [[ -z "$proj_name" ]] && { _err "Project name required."; return 1; }
     # Sanitize name
     proj_name=$(echo "$proj_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
+
+    local session_meta="$CW_HOME/sessions/$proj_name/task-init/session.json"
+    local harness; harness=$(_resolve_harness "$account" "$proj_name" "$session_meta" "$harness_override") || return 1
+    CW_HARNESS="$harness"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
+    local model="${model_override:-$(_model_for_type create)}"
+    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
+    local provider="${CW_PROVIDER:-native}"
 
     # ── Create directory ──────────────────────────────────────────────
     base_dir="${base_dir:-${CW_WORKSPACE:-$HOME/workspace}}"
@@ -4791,7 +4804,6 @@ Create an agent team to build this project in parallel. Analyze the scope and sp
     local session_dir="$CW_HOME/sessions/$proj_name/task-init"
     mkdir -p "$session_dir"
 
-    local session_meta="$session_dir/session.json"
     python3 -c "
 import json
 from datetime import datetime, timezone
@@ -4800,6 +4812,9 @@ meta = {
     'account': '$account',
     'worktree': '$proj_path',
     'source': '$source', 'source_url': '$source_url',
+    'harness': '$harness',
+    'harness_session_id': '',
+    'provider': '$provider',
     'status': 'active',
     'created': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'last_opened': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -4834,9 +4849,10 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
 
     CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$account/$proj_name/init" CW_MODEL="$model"
     CW_TEAM_ENV="$team_env" CW_PROMPT="$(cat "$prompt_file")"
-    _harness_load "$CW_HARNESS_DEFAULT" || return 1
+    _harness_load "$CW_HARNESS" || return 1
     _harness_context
     _harness_launch
+    _record_harness_ref "$session_meta"
 
     unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) CREATE $proj_name account=$account" >> "$CW_SESSIONS_LOG"
