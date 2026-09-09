@@ -171,6 +171,89 @@ _get_field() {
     echo "$1" | python3 -c "import json,sys; print(json.load(sys.stdin).get('$2','$3'))" 2>/dev/null
 }
 
+# an account's identity dir — meta.json, templates/, skills/, CLAUDE.md live here
+_account_root() {
+    printf '%s' "$CW_ACCOUNTS_DIR/${1:?Usage: _account_root <account>}"
+}
+
+# claude keeps the legacy flat dir unless a claude subdir exists
+_harness_dir() {
+    local account="${1:?Usage: _harness_dir <account> <harness>}" harness="${2:?}"
+    local root; root="$(_account_root "$account")"
+    if [[ "$harness" == "claude" && ! -d "$root/claude" ]]; then
+        printf '%s' "$root"
+    else
+        printf '%s' "$root/$harness"
+    fi
+}
+
+_account_meta_get() {
+    local account="$1" harness="$2" field="$3"
+    local meta; meta="$(_account_root "$account")/meta.json"
+    [[ -f "$meta" ]] || return 0
+    python3 - "$meta" "$harness" "$field" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1]) as f: m = json.load(f)
+except Exception:
+    sys.exit(0)
+v = m.get("harnesses", {}).get(sys.argv[2], {}).get(sys.argv[3])
+print(v if v is not None else "")
+PY
+}
+
+_account_meta_set() {
+    local account="$1" harness="$2" field="$3" value="$4"
+    local meta; meta="$(_account_root "$account")/meta.json"
+    python3 - "$meta" "$harness" "$field" "$value" <<'PY'
+import json, os, sys
+p, harness, field, value = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+try:
+    with open(p) as f: m = json.load(f)
+except Exception:
+    m = {}
+m.setdefault("harnesses", {}).setdefault(harness, {})[field] = value or None
+os.makedirs(os.path.dirname(p), exist_ok=True)
+with open(p, "w") as f: json.dump(m, f, indent=2)
+PY
+}
+
+_account_default_harness() {
+    local account="$1"
+    local meta; meta="$(_account_root "$account")/meta.json"
+    local h=""
+    if [[ -f "$meta" ]]; then
+        h=$(python3 -c "
+import json
+try: print(json.load(open('$meta')).get('harness') or '')
+except Exception: print('')
+" 2>/dev/null)
+    fi
+    printf '%s' "${h:-$CW_HARNESS_DEFAULT}"
+}
+
+# resolves an account name from a flag, a project, or the default
+_resolve_account() {
+    local account="" project=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --account|-a) account="${2:?--account requires a value}"; shift 2 ;;
+            *) project="$1"; shift ;;
+        esac
+    done
+    if [[ -n "$account" ]]; then
+        [[ -d "$(_account_root "$account")" ]] || { _err "Account '$account' not found."; return 1; }
+        printf '%s' "$account"; return 0
+    fi
+    if [[ -n "$project" ]]; then
+        local pj; pj=$(_get_project "$project") || { _err "Project '$project' not found."; return 1; }
+        _get_field "$pj" account "$(_default_account)"; return 0
+    fi
+    account=$(_default_account)
+    [[ -n "$account" ]] || { _err "No account specified and no default account."; return 1; }
+    printf '%s' "$account"
+}
+
 # ════════════════════════════════════════════════════════════════════════════
 # HARNESS LAYER — the only place that spawns a coding agent
 # ════════════════════════════════════════════════════════════════════════════
@@ -268,10 +351,31 @@ _harness_extra_flags() {
     printf '%s' "$flags"
 }
 
+# puts the account instructions file where the harness looks for it
+_install_account_instructions() {
+    local account="$1" harness="$2" dir="$3"
+    [[ -n "$account" && -d "$dir" ]] || return 0
+    _harness_load "$harness" || return 0
+    harness_supports instructions_file || return 0
+    local src; src="$(_account_root "$account")/CLAUDE.md"
+    [[ -f "$src" ]] || return 0
+    local dest
+    if [[ "$harness" == "claude" ]]; then
+        dest="$dir/CLAUDE.md"
+    elif [[ "$harness" == "codex" ]]; then
+        dest="$dir/AGENTS.md"
+    else
+        return 0
+    fi
+    [[ "$src" -ef "$dest" ]] && return 0
+    ln -sf "$src" "$dest"
+}
+
 # sets the globals every driver reads
 _harness_context() {
     CW_HARNESS="${CW_HARNESS:-$CW_HARNESS_DEFAULT}"
     CW_HARNESS_DIR="${CW_HARNESS_DIR:-$CW_ACCOUNTS_DIR/${CW_ACCOUNT:-}}"
+    _install_account_instructions "${CW_ACCOUNT:-}" "$CW_HARNESS" "$CW_HARNESS_DIR"
     CW_SESSION_NAME="${CW_SESSION_NAME:-}"
     CW_SESSION_REF="${CW_SESSION_REF:-}"
     CW_PROMPT="${CW_PROMPT:-}"
@@ -424,7 +528,7 @@ with open('$CW_CONFIG', 'w') as f: f.write(text)
             for dir in "$CW_ACCOUNTS_DIR"/*/; do
                 [[ -d "$dir" ]] || continue
                 local n; n=$(basename "$dir")
-                local auth="${R}✗${NC}"; [[ -f "$dir/.claude.json" ]] && auth="${G}✓${NC}"
+                local auth="${R}✗${NC}"; [[ -f "$(_harness_dir "$n" claude)/.claude.json" ]] && auth="${G}✓${NC}"
                 echo -e "  ${C}$n${NC}  [$auth auth]"
             done; echo ""
             ;;
@@ -560,10 +664,9 @@ _project_setup_mcps() {
     fi
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local account; account=$(_get_field "$pj" account "$(_default_account)")
-    local acct_dir="$CW_ACCOUNTS_DIR/$account"
 
     # Check which MCPs are already installed (direct JSON read)
-    local settings_file="$acct_dir/settings.json"
+    local settings_file; settings_file="$(_harness_dir "$account" claude)/settings.json"
     local existing_mcps=""
     if [[ -f "$settings_file" ]]; then
         existing_mcps=$(python3 -c "
@@ -696,37 +799,6 @@ with open(sf, 'w') as f:
 # ════════════════════════════════════════════════════════════════════════════
 # MCP — Manage MCPs per account
 # ════════════════════════════════════════════════════════════════════════════
-_resolve_account_dir() {
-    # Resolve account dir from --account flag or project name
-    # Usage: _resolve_account_dir [--account <acct>] [<project>]
-    local account="" project=""
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --account|-a) account="${2:?--account requires a value}"; shift 2 ;;
-            *) project="$1"; shift ;;
-        esac
-    done
-
-    if [[ -n "$account" ]]; then
-        local dir="$CW_ACCOUNTS_DIR/$account"
-        [[ -d "$dir" ]] || { _err "Account '$account' not found."; return 1; }
-        echo "$dir"
-        return
-    fi
-
-    if [[ -n "$project" ]]; then
-        local pj; pj=$(_get_project "$project") || { _err "Project '$project' not found."; return 1; }
-        account=$(_get_field "$pj" account "$(_default_account)")
-        echo "$CW_ACCOUNTS_DIR/$account"
-        return
-    fi
-
-    # Fallback: default account
-    account=$(_default_account)
-    [[ -n "$account" ]] || { _err "No account specified and no default account."; return 1; }
-    echo "$CW_ACCOUNTS_DIR/$account"
-}
-
 cmd_mcp() {
     _harness_load "$CW_HARNESS_DEFAULT" || return 1
     if ! harness_supports mcp; then
@@ -801,18 +873,11 @@ _mcp_add() {
         return 1
     fi
 
-    # Resolve account directory
-    local acct_dir
-    if [[ -n "$account_flag" ]]; then
-        acct_dir=$(_resolve_account_dir --account "$account_flag") || return 1
-    elif [[ -n "$project_flag" ]]; then
-        acct_dir=$(_resolve_account_dir "$project_flag") || return 1
-    else
-        acct_dir=$(_resolve_account_dir) || return 1
-    fi
-    local account; account=$(basename "$acct_dir")
+    # Resolve account name
+    local account
+    account=$(_resolve_account ${account_flag:+--account "$account_flag"} ${project_flag:+"$project_flag"}) || return 1
 
-    local settings_file="$acct_dir/settings.json"
+    local settings_file; settings_file="$(_harness_dir "$account" claude)/settings.json"
 
     # Check if already installed (direct JSON read)
     if [[ -f "$settings_file" ]]; then
@@ -888,17 +953,10 @@ _mcp_remove() {
 
     [[ -n "$mcp_name" ]] || { _err "Usage: cw mcp remove <name> [--account <a> | <project>]"; return 1; }
 
-    local acct_dir
-    if [[ -n "$account_flag" ]]; then
-        acct_dir=$(_resolve_account_dir --account "$account_flag") || return 1
-    elif [[ -n "$project_flag" ]]; then
-        acct_dir=$(_resolve_account_dir "$project_flag") || return 1
-    else
-        acct_dir=$(_resolve_account_dir) || return 1
-    fi
-    local account; account=$(basename "$acct_dir")
+    local account
+    account=$(_resolve_account ${account_flag:+--account "$account_flag"} ${project_flag:+"$project_flag"}) || return 1
 
-    local settings_file="$acct_dir/settings.json"
+    local settings_file; settings_file="$(_harness_dir "$account" claude)/settings.json"
     if [[ ! -f "$settings_file" ]]; then
         _warn "No settings.json found for account '$account'."
         return 1
@@ -941,18 +999,11 @@ _mcp_list() {
         esac
     done
 
-    local acct_dir
-    if [[ -n "$account_flag" ]]; then
-        acct_dir=$(_resolve_account_dir --account "$account_flag") || return 1
-    elif [[ -n "$project_flag" ]]; then
-        acct_dir=$(_resolve_account_dir "$project_flag") || return 1
-    else
-        acct_dir=$(_resolve_account_dir) || return 1
-    fi
-    local account; account=$(basename "$acct_dir")
+    local account
+    account=$(_resolve_account ${account_flag:+--account "$account_flag"} ${project_flag:+"$project_flag"}) || return 1
 
     echo -e "\n${BOLD}MCPs for account ${Y}$account${NC}\n"
-    local settings_file="$acct_dir/settings.json"
+    local settings_file; settings_file="$(_harness_dir "$account" claude)/settings.json"
     if [[ ! -f "$settings_file" ]]; then
         _dim "  No MCPs installed."
         echo -e "\n  Add one: ${C}cw mcp add <name> --account $account -- <command> [args]${NC}"
@@ -1054,7 +1105,7 @@ cmd_open() {
     [[ -d "$path" ]] || { _err "Path does not exist: $path"; return 1; }
 
     account="${account:-$(_get_field "$pj" account "$(_default_account)")}"
-    local acct_dir="$CW_ACCOUNTS_DIR/$account"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "${CW_HARNESS:-$CW_HARNESS_DEFAULT}")"
     _log "Opening ${C}$name${NC}  account=${M}$account${NC}"
     _ensure_statusline "$acct_dir"
 
@@ -1077,8 +1128,8 @@ cmd_open() {
 # ════════════════════════════════════════════════════════════════════════════
 cmd_launch() {
     local account="${1:-$(_default_account)}"; shift || true
-    local dir="$CW_ACCOUNTS_DIR/$account"
-    [[ -d "$dir" ]] || { _err "Account '$account' does not exist."; return 1; }
+    [[ -d "$(_account_root "$account")" ]] || { _err "Account '$account' does not exist."; return 1; }
+    local dir; dir="$(_harness_dir "$account" "${CW_HARNESS:-$CW_HARNESS_DEFAULT}")"
     _log "Launching Claude (${C}$account${NC})..."
     _ensure_statusline "$dir"
     CW_ACCOUNT="$account" CW_HARNESS_DIR="$dir" CW_TASK_TYPE="launch"
@@ -1127,7 +1178,7 @@ cmd_review() {
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
     local account; account=${account_override:-$(_get_field "$pj" account "$(_default_account)")}
-    local acct_dir="$CW_ACCOUNTS_DIR/$account"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "${CW_HARNESS:-$CW_HARNESS_DEFAULT}")"
     _ensure_statusline "$acct_dir"
 
     local model="${model_override:-$(_model_for_type review)}"
@@ -1217,7 +1268,7 @@ with open('$session_meta', 'w') as f:
 "
         _log "Session created: ${C}$session_dir${NC}"
 
-        _link_account_skills "$account" "$acct_dir"
+        _link_account_skills "$account" "$(_account_root "$account")"
 
         # Create review notes
         {
@@ -1435,7 +1486,7 @@ cmd_loop() {
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
     local account; account=${account_override:-$(_get_field "$pj" account "$(_default_account)")}
-    local acct_dir="$CW_ACCOUNTS_DIR/$account"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "${CW_HARNESS:-$CW_HARNESS_DEFAULT}")"
     _ensure_statusline "$acct_dir"
 
     # ── Done: close loop session (second positional = slug) ─────────────
@@ -1543,7 +1594,7 @@ with open(os.environ['CW_L_META'], 'w') as f:
 PYEOF
         _log "Session created: ${C}$session_dir${NC}"
 
-        _link_account_skills "$account" "$acct_dir"
+        _link_account_skills "$account" "$(_account_root "$account")"
 
         # Loop notes
         {
@@ -1675,7 +1726,7 @@ cmd_work() {
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
     local account; account=${account_override:-$(_get_field "$pj" account "$(_default_account)")}
-    local acct_dir="$CW_ACCOUNTS_DIR/$account"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "${CW_HARNESS:-$CW_HARNESS_DEFAULT}")"
     _ensure_statusline "$acct_dir"
 
     local model="${model_override:-$(_model_for_type work)}"
@@ -1859,7 +1910,7 @@ $(cat "$wf_file")"
         fi
 
         # ── Account work context (init) ──────────────────────────────────
-        local acct_init_tpl="$acct_dir/templates/work_init.md"
+        local acct_init_tpl="$(_account_root "$account")/templates/work_init.md"
         if [[ -f "$acct_init_tpl" ]]; then
             local acct_ctx
             acct_ctx=$(cat "$acct_init_tpl")
@@ -1929,7 +1980,7 @@ meta = {
 with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
 "
 
-        _link_account_skills "$account" "$acct_dir"
+        _link_account_skills "$account" "$(_account_root "$account")"
 
     else
         _log "Resuming task: ${C}$name${NC} task=${Y}$task${NC}"
@@ -2008,7 +2059,7 @@ Your feature branch is: \`${current_branch:-$task}\`
 IMPORTANT: Verify you are in the worktree directory and on the correct feature branch before making any changes. If not, \`cd $wt_dir\` and \`git checkout ${current_branch:-$task}\`."
 
         # ── Account-specific resume template ─────────────────────────
-        local acct_resume_tpl="$acct_dir/templates/work_resume.md"
+        local acct_resume_tpl="$(_account_root "$account")/templates/work_resume.md"
         if [[ -f "$acct_resume_tpl" ]]; then
             local acct_resume
             acct_resume=$(cat "$acct_resume_tpl")
@@ -2412,7 +2463,7 @@ cmd_doctor() {
         for dir in "$CW_ACCOUNTS_DIR"/*/; do
             [[ -d "$dir" ]] || continue
             local n; n=$(basename "$dir")
-            if [[ -f "$dir/.claude.json" ]]; then
+            if [[ -f "$(_harness_dir "$n" claude)/.claude.json" ]]; then
                 echo -e "    ${G}✓${NC} $n — authenticated"
             else
                 echo -e "    ${Y}!${NC} $n — ${Y}not authenticated${NC} (run ${C}cw launch $n${NC} then /login)"
@@ -2667,7 +2718,7 @@ cmd_plan() {
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
     local account; account=$(_get_field "$pj" account "$(_default_account)")
-    local acct_dir="$CW_ACCOUNTS_DIR/$account"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "${CW_HARNESS:-$CW_HARNESS_DEFAULT}")"
     local model="${model_override:-$(_model_for_type plan)}"
     [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
 
@@ -2848,7 +2899,7 @@ _arcade_setup_hooks() {
             _dim "  ${C}$acct${NC} — harness has no hooks, skipping"
             continue
         fi
-        _arcade_install_hooks_for "$acct_dir/settings.json" "$hook_script"
+        _arcade_install_hooks_for "$(_harness_dir "$acct" claude)/settings.json" "$hook_script"
         _log "  ${C}$acct${NC} — hooks installed"
     done
 
@@ -2891,7 +2942,7 @@ cmd_dashboard() {
         for dir in "$CW_ACCOUNTS_DIR"/*/; do
             [[ -d "$dir" ]] || continue
             local n; n=$(basename "$dir")
-            local auth="${R}✗${NC}"; [[ -f "$dir/.claude.json" ]] && auth="${G}✓${NC}"
+            local auth="${R}✗${NC}"; [[ -f "$(_harness_dir "$n" claude)/.claude.json" ]] && auth="${G}✓${NC}"
             echo -e "  ${C}$n${NC}  [$auth]"
         done
     fi
@@ -4363,7 +4414,8 @@ for n, i in reg.items():
 
     [[ -d "$proj_path" ]] || { _err "Project path not found: $proj_path"; return 1; }
 
-    local acct_dir="$CW_ACCOUNTS_DIR/${account:-$(_default_account)}"
+    account="${account:-$(_default_account)}"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "${CW_HARNESS:-$CW_HARNESS_DEFAULT}")"
 
     # --reset: clear stack state
     if $reset_flag; then
@@ -4541,8 +4593,8 @@ cmd_create() {
             account="${accounts[$((choice - 1))]}"
         fi
     fi
-    local acct_dir="$CW_ACCOUNTS_DIR/$account"
-    [[ -d "$acct_dir" ]] || { _err "Account '$account' not found."; return 1; }
+    [[ -d "$(_account_root "$account")" ]] || { _err "Account '$account' not found."; return 1; }
+    local acct_dir; acct_dir="$(_harness_dir "$account" "${CW_HARNESS:-$CW_HARNESS_DEFAULT}")"
     local model="${model_override:-$(_model_for_type create)}"
     [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
 

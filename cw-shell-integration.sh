@@ -9,7 +9,10 @@ _cw_load_aliases() {
     [[ -d "$CW_HOME/accounts" ]] || return
     for d in "$CW_HOME/accounts"/*/; do
         [[ -d "$d" ]] || continue
-        alias "claude-$(basename "$d")"="CLAUDE_CONFIG_DIR=${d} claude"
+        local n; n="$(basename "$d")"
+        local cdir="$d"
+        [[ -d "$d/claude" ]] && cdir="$d/claude"
+        alias "claude-$n"="CLAUDE_CONFIG_DIR=${cdir} claude"
     done
 }
 _cw_load_aliases
