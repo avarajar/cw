@@ -151,6 +151,81 @@ _get_field() {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
+# HARNESS LAYER — the only place that spawns a coding agent
+# ════════════════════════════════════════════════════════════════════════════
+CW_HARNESS_DEFAULT="claude"
+
+# sources a driver and aliases its functions to the generic names
+_harness_load() {
+    local h="${1:?Usage: _harness_load <harness>}"
+    [[ "${_CW_HARNESS_LOADED:-}" == "$h" ]] && return 0
+    local candidate found="" fn
+    for candidate in "$CW_HOME/harnesses/$h.sh" \
+                     "$SCRIPT_DIR/../lib/harnesses/$h.sh" \
+                     "$SCRIPT_DIR/lib/harnesses/$h.sh"; do
+        [[ -f "$candidate" ]] && { found="$candidate"; break; }
+    done
+    if [[ -z "$found" ]]; then
+        # fail safe so a later harness never inherits the previous driver
+        for fn in supports config_env session_ref launch resume doctor login; do
+            eval "harness_${fn}() { return 1; }"
+        done
+        unset _CW_HARNESS_LOADED
+        _err "Unknown harness '$h'."
+        return 1
+    fi
+    # shellcheck disable=SC1090
+    source "$found"
+    for fn in supports config_env session_ref launch resume doctor login; do
+        if declare -F "${h}_${fn}" >/dev/null; then
+            eval "harness_${fn}() { ${h}_${fn} \"\$@\"; }"
+        else
+            eval "harness_${fn}() { return 1; }"
+        fi
+    done
+    _CW_HARNESS_LOADED="$h"
+    return 0
+}
+
+# the only place in cw that starts a harness process
+_harness_exec() {
+    env ${HARNESS_ENV[@]+"${HARNESS_ENV[@]}"} "${HARNESS_ARGV[@]}"
+}
+
+_harness_launch() {
+    HARNESS_ARGV=(); HARNESS_ENV=()
+    harness_launch || return 1
+    _harness_exec
+}
+
+# tries each resume attempt until one succeeds
+_harness_resume() {
+    local attempt=1 rc=1
+    while :; do
+        HARNESS_ARGV=(); HARNESS_ENV=()
+        harness_resume "$attempt" || break
+        _harness_exec && return 0
+        rc=$?
+        attempt=$((attempt + 1))
+    done
+    return $rc
+}
+
+# sets the globals every driver reads
+_harness_context() {
+    CW_HARNESS="${CW_HARNESS:-$CW_HARNESS_DEFAULT}"
+    CW_HARNESS_DIR="${CW_HARNESS_DIR:-$CW_ACCOUNTS_DIR/${CW_ACCOUNT:-}}"
+    CW_SESSION_NAME="${CW_SESSION_NAME:-}"
+    CW_SESSION_REF="${CW_SESSION_REF:-}"
+    CW_PROMPT="${CW_PROMPT:-}"
+    CW_MODEL="${CW_MODEL:-}"
+    CW_PROVIDER="${CW_PROVIDER:-native}"
+    CW_EXTRA_FLAGS="${CW_EXTRA_FLAGS-$CW_CLAUDE_FLAGS}"
+    CW_TEAM_ENV="${CW_TEAM_ENV:-}"
+    export CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
+}
+
+# ════════════════════════════════════════════════════════════════════════════
 # INIT
 # ════════════════════════════════════════════════════════════════════════════
 cmd_init() {
@@ -918,7 +993,11 @@ cmd_open() {
 
     cd "$path"
     _set_tab_title "$name"
-    CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS
+    CW_ACCOUNT="$account" CW_HARNESS_DIR="$acct_dir" CW_TASK_TYPE="open"
+    CW_PROJECT="$name" CW_TASK="" CW_SESSION_NAME="" CW_PROMPT="" CW_MODEL=""
+    _harness_load "$CW_HARNESS_DEFAULT" || return 1
+    _harness_context
+    _harness_launch
 
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) OPEN $name account=$account" >> "$CW_SESSIONS_LOG"
 }
@@ -935,7 +1014,15 @@ cmd_launch() {
     [[ -d "$dir" ]] || { _err "Account '$account' does not exist."; return 1; }
     _log "Launching Claude (${C}$account${NC})..."
     _ensure_statusline "$dir"
-    CLAUDE_CONFIG_DIR="$dir" claude "$@"
+    CW_ACCOUNT="$account" CW_HARNESS_DIR="$dir" CW_TASK_TYPE="launch"
+    CW_PASSTHRU_ARGV=("$@")
+    CW_EXTRA_FLAGS=""
+    _harness_load "$CW_HARNESS_DEFAULT" || return 1
+    _harness_context
+    _harness_launch
+    local rc=$?
+    unset CW_PASSTHRU_ARGV
+    return $rc
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -977,12 +1064,7 @@ cmd_review() {
     _ensure_statusline "$acct_dir"
 
     local model="${model_override:-$(_model_for_type review)}"
-    local model_args=()
-    if [[ -n "$model" ]]; then
-        model_args=("--model" "$model")
-    else
-        _use_platform_default_model "$acct_dir"
-    fi
+    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
 
     [[ -z "$pr" ]] && { _err "Missing PR. Usage: cw review $name 123"; return 1; }
 
@@ -1162,10 +1244,12 @@ If I say 'none', do not post. If I say 'edit', let me modify before posting."
         local session_name="$account/$name/review-pr-$pr"
         local prompt_file="$session_dir/recheck_prompt.txt"
         printf '%s' "$recheck_prompt" > "$prompt_file"
-        CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account" \
-        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --resume "$session_name" "$(cat "$prompt_file")" \
-            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --continue "$(cat "$prompt_file")" \
-            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$prompt_file")"
+        CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
+        CW_PROMPT="$(cat "$prompt_file")"
+        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        _harness_context
+        _harness_resume
     else
         # Build review prompt: project skill > global skill > default
         # Search order:
@@ -1250,8 +1334,12 @@ If I say 'none', do not post. If I say 'edit', let me modify the findings before
         local session_name="$account/$name/review-pr-$pr"
         local prompt_file="$session_dir/init_prompt.txt"
         printf '%s' "$review_prompt" > "$prompt_file"
-        CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account" \
-        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$prompt_file")"
+        CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
+        CW_PROMPT="$(cat "$prompt_file")"
+        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        _harness_context
+        _harness_launch
     fi
 
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) REVIEW $name pr=$pr account=$account" >> "$CW_SESSIONS_LOG"
@@ -1367,12 +1455,7 @@ PYEOF
         stored_model=$(python3 -c "import json; print(json.load(open('$session_meta')).get('model',''))" 2>/dev/null)
         [[ -n "$stored_model" ]] && model="$stored_model"
     fi
-    local model_args=()
-    if [[ -n "$model" ]]; then
-        model_args=("--model" "$model")
-    else
-        _use_platform_default_model "$acct_dir"
-    fi
+    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
 
     if $is_new; then
         _log "New loop: ${C}$name${NC} ${Y}$slug${NC} (${interval:-self-paced})"
@@ -1465,14 +1548,20 @@ PYEOF
             init_prompt="/loop $prompt"
         fi
         printf '%s' "$init_prompt" > "$session_dir/loop_prompt.txt"
-        CW_PROJECT="$name" CW_TASK="loop-$slug" CW_TASK_TYPE="loop" CW_ACCOUNT="$account" \
-        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$session_dir/loop_prompt.txt")"
+        CW_PROJECT="$name" CW_TASK="loop-$slug" CW_TASK_TYPE="loop" CW_ACCOUNT="$account"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
+        CW_PROMPT="$(cat "$session_dir/loop_prompt.txt")"
+        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        _harness_context
+        _harness_launch
     else
         local resume_prompt="Resume the loop for this session: read $notes_file for the objective and interval, then re-invoke /loop with that same objective (and interval, if any)."
-        CW_PROJECT="$name" CW_TASK="loop-$slug" CW_TASK_TYPE="loop" CW_ACCOUNT="$account" \
-        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --resume "$session_name" "$resume_prompt" \
-            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --continue "$resume_prompt" \
-            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$resume_prompt"
+        CW_PROJECT="$name" CW_TASK="loop-$slug" CW_TASK_TYPE="loop" CW_ACCOUNT="$account"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
+        CW_PROMPT="$resume_prompt"
+        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        _harness_context
+        _harness_resume
     fi
 }
 
@@ -1547,12 +1636,7 @@ cmd_work() {
     _ensure_statusline "$acct_dir"
 
     local model="${model_override:-$(_model_for_type work)}"
-    local model_args=()
-    if [[ -n "$model" ]]; then
-        model_args=("--model" "$model")
-    else
-        _use_platform_default_model "$acct_dir"
-    fi
+    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
 
     local session_dir="$CW_HOME/sessions/$name/task-$task"
     local session_meta="$session_dir/session.json"
@@ -1870,7 +1954,11 @@ After setting up the workspace, analyze the task scope and create an agent team 
 
 MANDATORY — Comment & notes style: Keep every comment to a single short line. Never write multi-line comment blocks or docstring-style explanations. This applies both to comments in code and to notes you write in TASK_NOTES.md or any task file. Comments must never reference task IDs, branch names, or GitHub/Linear issue or PR numbers — that context belongs in the PR description, not in the code. This rule is not optional; follow it in every file you touch."
         printf '%s' "$init_prompt" > "$prompt_file"
-        env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$prompt_file")"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
+        CW_TEAM_ENV="$team_env" CW_PROMPT="$(cat "$prompt_file")"
+        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        _harness_context
+        _harness_launch
     elif ! $is_new; then
         # ── Resume context (worktree + branch awareness) ─────────────
         local current_branch=""
@@ -1900,18 +1988,21 @@ $acct_resume"
         local session_name="$account/$name/$task"
 
         # Try to resume named session; fall back to --continue, then start fresh
-        env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --resume "$session_name" "$resume_msg" \
-            || env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --continue "$resume_msg" \
-            || env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$resume_msg"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
+        CW_TEAM_ENV="$team_env" CW_PROMPT="$resume_msg"
+        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        _harness_context
+        _harness_resume
     else
         local session_name="$account/$name/$task"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
+        CW_TEAM_ENV="$team_env" CW_PROMPT=""
         if $team_flag && [[ -n "$team_prompt" ]]; then
-            env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "Create an agent team for this task: $team_prompt"
-        elif $team_flag; then
-            env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name"
-        else
-            CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name"
+            CW_PROMPT="Create an agent team for this task: $team_prompt"
         fi
+        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        _harness_context
+        _harness_launch
     fi
 
     unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
@@ -2542,12 +2633,7 @@ cmd_plan() {
     local account; account=$(_get_field "$pj" account "$(_default_account)")
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
     local model="${model_override:-$(_model_for_type plan)}"
-    local model_args=()
-    if [[ -n "$model" ]]; then
-        model_args=("--model" "$model")
-    else
-        _use_platform_default_model "$acct_dir"
-    fi
+    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
 
     _log "Planning: ${C}$name${NC} — ${Y}$description${NC}"
     _dim "  Model: ${model:-claude default}"
@@ -2583,7 +2669,11 @@ IMPORTANT: Keep the plan focused and practical. Don't over-split — 2-4 tasks i
     cd "$path"
     _set_tab_title "plan: $name"
     export CW_PROJECT="$name" CW_TASK="plan" CW_TASK_TYPE="plan" CW_ACCOUNT="$account"
-    CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$account/$name/plan" "$plan_prompt"
+    CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$account/$name/plan" CW_MODEL="$model"
+    CW_PROMPT="$plan_prompt"
+    _harness_load "$CW_HARNESS_DEFAULT" || return 1
+    _harness_context
+    _harness_launch
     unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
 }
 
@@ -3958,6 +4048,9 @@ _stack_apply() {
 
     [[ ${#stacks[@]} -eq 0 ]] && return
 
+    CW_HARNESS="${CW_HARNESS:-$CW_HARNESS_DEFAULT}"
+    _harness_load "$CW_HARNESS" || return 1
+
     # Generate agent templates if needed
     _generate_stack_agents
 
@@ -3979,16 +4072,18 @@ _stack_apply() {
                 if $dry_run; then
                     _log "  ${DIM}[dry-run]${NC} Would install plugin: ${C}$plugin${NC}"
                 else
-                    # Check if plugin already installed
-                    if command -v claude &>/dev/null && claude plugin list 2>/dev/null | grep -q "$plugin"; then
+                    if ! harness_supports plugins; then
+                        _dim "  $CW_HARNESS has no plugin support — skipping $plugin"
+                        continue
+                    fi
+                    HARNESS_ENV=("CLAUDE_CONFIG_DIR=$acct_dir")
+                    HARNESS_ARGV=(claude plugin list)
+                    if _harness_exec 2>/dev/null | grep -q "$plugin"; then
                         _dim "  Plugin $plugin already installed"
                     else
                         _log "  Installing plugin: ${C}$plugin${NC}"
-                        if command -v claude &>/dev/null; then
-                            CLAUDE_CONFIG_DIR="$acct_dir" claude plugin add "$plugin" 2>/dev/null || _warn "  Could not install plugin $plugin"
-                        else
-                            _warn "  claude CLI not found — skip plugin $plugin"
-                        fi
+                        HARNESS_ARGV=(claude plugin add "$plugin")
+                        _harness_exec 2>/dev/null || _warn "  Could not install plugin $plugin"
                     fi
                 fi
             done
@@ -4398,12 +4493,7 @@ cmd_create() {
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
     [[ -d "$acct_dir" ]] || { _err "Account '$account' not found."; return 1; }
     local model="${model_override:-$(_model_for_type create)}"
-    local model_args=()
-    if [[ -n "$model" ]]; then
-        model_args=("--model" "$model")
-    else
-        _use_platform_default_model "$acct_dir"
-    fi
+    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
 
     # ── Project name ──────────────────────────────────────────────────
     if [[ -z "$proj_name" ]]; then
@@ -4547,7 +4637,11 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
     $team_flag && _log "Agent teams ${G}enabled${NC}"
     _ensure_statusline "$acct_dir"
 
-    env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$account/$proj_name/init" "$(cat "$prompt_file")"
+    CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$account/$proj_name/init" CW_MODEL="$model"
+    CW_TEAM_ENV="$team_env" CW_PROMPT="$(cat "$prompt_file")"
+    _harness_load "$CW_HARNESS_DEFAULT" || return 1
+    _harness_context
+    _harness_launch
 
     unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) CREATE $proj_name account=$account" >> "$CW_SESSIONS_LOG"
