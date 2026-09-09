@@ -26,6 +26,7 @@ setup() { setup_cw_home; }
     [ "$(call_argv 1 | sed -n 3p)" = "--name" ]
     [ "$(call_argv 1 | sed -n 4p)" = "acct/app/fix-auth" ]
     [ "$(call_argv 1 | sed -n 5p)" = "Set up the workspace:" ]
+    # call_argv only sees line 1 of a multi-line arg; match prompt content against raw call
     [[ "$(call 1)" == *"git worktree add .tasks/fix-auth"* ]]
 }
 
@@ -81,6 +82,9 @@ setup() { setup_cw_home; }
     rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
     CW_FAKE_EXIT_SEQ="1 1 0" run "$CW_BIN" review app 123
     [ "$(call_count)" -eq 3 ]
+    [ "$(call_argv 1 | sed -n 1p)" = "--resume" ]
+    [ "$(call_argv 2 | sed -n 1p)" = "--continue" ]
+    [ "$(call_argv 3 | sed -n 1p)" = "--name" ]
 }
 
 @test "loop on a new session passes the slash command as the prompt" {
@@ -95,6 +99,9 @@ setup() { setup_cw_home; }
     rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
     CW_FAKE_EXIT_SEQ="1 1 0" run "$CW_BIN" loop app "check the deploy"
     [ "$(call_count)" -eq 3 ]
+    [ "$(call_argv 1 | sed -n 1p)" = "--resume" ]
+    [ "$(call_argv 2 | sed -n 1p)" = "--continue" ]
+    [ "$(call_argv 3 | sed -n 1p)" = "--name" ]
 }
 
 @test "plan launches with the plan session name" {
