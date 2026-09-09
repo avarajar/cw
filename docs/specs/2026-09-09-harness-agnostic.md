@@ -76,7 +76,7 @@ Search order when loading harness `<h>`: `$CW_HOME/harnesses/<h>.sh`, then
 `install.sh` and `cmd_init` copy `lib/harnesses/` into `$CW_HOME/lib/harnesses/`, the same way
 `lib/dashboard` is already handled.
 
-A driver is sourced into the current shell. It defines seven functions, each prefixed with the
+A driver is sourced into the current shell. It defines eight functions, each prefixed with the
 harness name, and `_harness_load` aliases them to the generic names.
 
 ### 3.2 Functions
@@ -92,6 +92,7 @@ Every function is called with named context already exported by CW (see §3.4).
 | `<h>_session_ref` | Print the harness-native reference for the current session, or empty if the harness has none. |
 | `<h>_launch` | Populate `HARNESS_ARGV` and `HARNESS_ENV` for a fresh session. Must not spawn. |
 | `<h>_resume` | Populate `HARNESS_ARGV` and `HARNESS_ENV` for a resumed session. Must not spawn. |
+| `<h>_plugin <op> <name>` | Populate `HARNESS_ARGV` and `HARNESS_ENV` for a plugin `list` or `add`. Must not spawn. Only meaningful when `plugins` is supported. |
 
 `<h>_launch` and `<h>_resume` never exec. They build two arrays:
 

@@ -584,6 +584,12 @@ In `_stack_apply`, replace the `claude plugin` calls with a capability check. No
                     fi
 ```
 
+**Behaviour change to record, not revert:** `_harness_context` exports `CW_PROJECT`, `CW_TASK`,
+`CW_TASK_TYPE` and `CW_ACCOUNT`, so the `review` and `loop` fallback resume attempts now carry them
+where previously only the first attempt did. `hooks/scripts/review-autoclose.py` gates on
+`CW_TASK_TYPE == "review"`, so a review resumed via `--continue` now auto-closes where before it
+silently did not. This is a fix and it is intentional; it goes in the CHANGELOG under Fixed.
+
 - [ ] **Step 8: Teach `install.sh` about the new directories**
 
 Modify `install.sh` after line 95:
