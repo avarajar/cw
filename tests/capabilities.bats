@@ -25,3 +25,9 @@ setup() { setup_cw_home; }
     [ "$status" -ne 0 ]
     [ "$(echo "$output" | grep -c 'no agent teams')" -eq 1 ]
 }
+
+@test "CW_CLAUDE_FLAGS is not duplicated by the per-harness flag lookup" {
+    make_project app >/dev/null
+    CW_CLAUDE_FLAGS="--dangerously-skip-permissions" run "$CW_BIN" work app fix-auth
+    [ "$(call_argv 1 | grep -c -- '--dangerously-skip-permissions')" -eq 1 ]
+}

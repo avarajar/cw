@@ -243,7 +243,7 @@ _degrade() {
     local cap="$1" msg="$2"
     local seen="_CW_DEGRADED_${cap}"
     if [[ -z "${!seen:-}" ]]; then
-        _dim "  $msg (harness: ${CW_HARNESS:-claude})"
+        _dim "  $msg (harness: ${CW_HARNESS:-$CW_HARNESS_DEFAULT})"
         eval "$seen=1"
     fi
     return 1
@@ -253,7 +253,14 @@ _degrade() {
 _harness_extra_flags() {
     local flags="${CW_CLAUDE_FLAGS:-}"
     local per_harness_var="CW_$(echo "$CW_HARNESS" | tr '[:lower:]' '[:upper:]')_FLAGS"
-    flags="$flags ${!per_harness_var:-}"
+    if [[ "$per_harness_var" != "CW_CLAUDE_FLAGS" ]]; then
+        local per_harness_val="${!per_harness_var:-}"
+        if [[ -n "$flags" && -n "$per_harness_val" ]]; then
+            flags="$flags $per_harness_val"
+        else
+            flags="$flags$per_harness_val"
+        fi
+    fi
     if [[ "$flags" == *--dangerously-skip-permissions* ]] && ! harness_supports skip_permissions; then
         flags="${flags//--dangerously-skip-permissions/}"
         _degrade skip_permissions "Harness has no skip-permissions flag — prompts stay on" || true
