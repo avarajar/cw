@@ -355,7 +355,7 @@ _harness_extra_flags() {
 _install_account_instructions() {
     local account="$1" harness="$2" dir="$3"
     [[ -n "$account" && -d "$dir" ]] || return 0
-    _harness_load "$harness" || return 0
+    [[ "${_CW_HARNESS_LOADED:-}" == "$harness" ]] || return 0
     harness_supports instructions_file || return 0
     local src; src="$(_account_root "$account")/CLAUDE.md"
     [[ -f "$src" ]] || return 0
@@ -374,7 +374,13 @@ _install_account_instructions() {
 # sets the globals every driver reads
 _harness_context() {
     CW_HARNESS="${CW_HARNESS:-$CW_HARNESS_DEFAULT}"
-    CW_HARNESS_DIR="${CW_HARNESS_DIR:-$CW_ACCOUNTS_DIR/${CW_ACCOUNT:-}}"
+    if [[ -z "${CW_HARNESS_DIR:-}" ]]; then
+        if [[ -n "${CW_ACCOUNT:-}" ]]; then
+            CW_HARNESS_DIR="$(_harness_dir "$CW_ACCOUNT" "$CW_HARNESS")"
+        else
+            CW_HARNESS_DIR="$CW_ACCOUNTS_DIR/"
+        fi
+    fi
     _install_account_instructions "${CW_ACCOUNT:-}" "$CW_HARNESS" "$CW_HARNESS_DIR"
     CW_SESSION_NAME="${CW_SESSION_NAME:-}"
     CW_SESSION_REF="${CW_SESSION_REF:-}"

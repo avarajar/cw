@@ -24,6 +24,7 @@ setup() { setup_cw_home; }
 }
 
 @test "mcp list names the account, not the harness dir" {
+    mkdir -p "$CW_HOME/accounts/acct/claude"
     run "$CW_BIN" mcp list --account acct
     local clean; clean="$(printf '%s' "$output" | sed -E 's/\x1b\[[0-9;]*m//g')"
     [[ "$clean" == *"account acct"* ]]
@@ -56,4 +57,22 @@ setup() { setup_cw_home; }
     make_project app >/dev/null
     "$CW_BIN" work app fix-auth
     [ ! -L "$CW_HOME/accounts/acct/CLAUDE.md" ]
+}
+
+@test "a mismatched CW_HARNESS still launches through the already-loaded driver" {
+    mkdir -p "$CW_HOME/accounts/acct/codex"
+    make_project app >/dev/null
+    CW_HARNESS=codex "$CW_BIN" work app fix-auth
+    [ "$(call_count)" -eq 1 ]
+}
+
+@test "harness_context falls back to the split dir when CW_HARNESS_DIR is unset" {
+    mkdir -p "$CW_HOME/accounts/acct/claude"
+    run bash -c "
+        source '$CW_BIN'
+        CW_ACCOUNT=acct
+        _harness_context
+        printf '%s' \"\$CW_HARNESS_DIR\"
+    "
+    [ "$output" = "$CW_HOME/accounts/acct/claude" ]
 }

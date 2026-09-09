@@ -1,5 +1,5 @@
 # every launch site the driver layer replaced, extracted verbatim
-# the scanner must flag exactly the 21 command lines below
+# the scanner must flag exactly the 22 command lines below
     CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS
     CLAUDE_CONFIG_DIR="$dir" claude "$@"
         CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --resume "$session_name" "$(cat "$prompt_file")" \
@@ -21,8 +21,13 @@
                     if command -v claude &>/dev/null && claude plugin list 2>/dev/null | grep -q "$plugin"; then
                             CLAUDE_CONFIG_DIR="$acct_dir" claude plugin add "$plugin" 2>/dev/null || _warn "  Could not install plugin $plugin"
     env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$account/$proj_name/init" "$(cat "$prompt_file")"
+    claude) claude --resume "$session_name" ;;
 
 # decoys the scanner must not flag
+    case "$harness" in
+        claude) dest="$dir/CLAUDE.md" ;;
+        codex)  dest="$dir/AGENTS.md" ;;
+    esac
     echo -e "  ${Y}2.${NC} ${C}CLAUDE_CONFIG_DIR=~/.cw/accounts/work claude /login${NC}"
             echo -e "     ${BOLD}CLAUDE_CONFIG_DIR=$dir claude /login${NC}"
     # ── Claude CLI ───────────────────────────────────────────────────────

@@ -34,6 +34,9 @@ COMMAND = re.compile(
     r"[\"']?(" + "|".join(BINARIES) + r")[\"']?(?:\s|$)"
 )
 
+# a bare case label, e.g. `claude)`, with nothing else in the segment
+CASE_LABEL = re.compile(r"^[\"']?(?:" + "|".join(BINARIES) + r")[\"']?$")
+
 
 # yields executable text only, dropping comments and heredoc bodies
 def code_lines(path):
@@ -62,12 +65,29 @@ def mask_params(line):
         line = masked
 
 
+# splits text on SPLIT, keeping the delimiter before and after each segment
+def split_with_delims(pattern, text):
+    segments, delims, pos = [], [], 0
+    for m in pattern.finditer(text):
+        segments.append(text[pos:m.start()])
+        delims.append(m.group(0))
+        pos = m.end()
+    segments.append(text[pos:])
+    return segments, delims
+
+
 def hits(path):
     for n, line in code_lines(path):
-        for segment in SPLIT.split(mask_params(line)):
-            if COMMAND.match(segment):
-                yield n, line.strip()
-                break
+        segments, delims = split_with_delims(SPLIT, mask_params(line))
+        for i, segment in enumerate(segments):
+            if not COMMAND.match(segment):
+                continue
+            before = delims[i - 1] if i > 0 else None
+            after = delims[i] if i < len(delims) else None
+            if after == ")" and before != "$(" and CASE_LABEL.match(segment.strip()):
+                continue
+            yield n, line.strip()
+            break
 
 
 def main(argv):
