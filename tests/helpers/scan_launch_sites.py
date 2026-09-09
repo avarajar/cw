@@ -27,10 +27,11 @@ PREFIX_TOKEN = (
     r"|\$[A-Za-z_][A-Za-z0-9_]*)"
 )
 
+# the command word itself, with any surrounding quotes stripped before matching
 COMMAND = re.compile(
     r"^\s*(?:" + KEYWORD + r"\s+)*"
     r"(?:" + PREFIX_TOKEN + r"\s+)*"
-    r"(" + "|".join(BINARIES) + r")(?:\s|$)"
+    r"[\"']?(" + "|".join(BINARIES) + r")[\"']?(?:\s|$)"
 )
 
 

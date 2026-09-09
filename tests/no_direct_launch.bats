@@ -14,3 +14,10 @@ scan() {
     [ "$status" -eq 1 ]
     [ "${#lines[@]}" -eq 21 ]
 }
+
+@test "a quoted binary literal in command position is still flagged" {
+    local f="$BATS_TEST_TMPDIR/quoted.sh"
+    printf '%s\n' '"claude" --resume "$x"' > "$f"
+    run scan "$f"
+    [ "$status" -eq 1 ]
+}
