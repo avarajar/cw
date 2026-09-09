@@ -350,6 +350,21 @@ _harness_resume() {
     return $rc
 }
 
+# records the harness's own session reference after a successful launch
+_record_harness_ref() {
+    local session_meta="$1"
+    [[ -f "$session_meta" ]] || return 0
+    local ref; ref=$(harness_session_ref 2>/dev/null || true)
+    [[ -n "$ref" ]] || return 0
+    CW_META="$session_meta" CW_REF="$ref" python3 - <<'PY'
+import json, os
+p = os.environ['CW_META']
+with open(p) as f: meta = json.load(f)
+meta['harness_session_id'] = os.environ['CW_REF']
+with open(p, 'w') as f: json.dump(meta, f, indent=2)
+PY
+}
+
 # says once per command that a capability is missing, then returns 1
 _degrade() {
     local cap="$1" msg="$2"
@@ -1399,9 +1414,10 @@ If I say 'none', do not post. If I say 'edit', let me modify before posting."
         CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account"
         CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
         CW_PROMPT="$(cat "$prompt_file")"
-        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        _harness_load "$CW_HARNESS" || return 1
         _harness_context
         _harness_resume
+        _record_harness_ref "$session_meta"
     else
         # Build review prompt: project skill > global skill > default
         # Search order:
@@ -1489,9 +1505,10 @@ If I say 'none', do not post. If I say 'edit', let me modify the findings before
         CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account"
         CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
         CW_PROMPT="$(cat "$prompt_file")"
-        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        _harness_load "$CW_HARNESS" || return 1
         _harness_context
         _harness_launch
+        _record_harness_ref "$session_meta"
     fi
 
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) REVIEW $name pr=$pr account=$account" >> "$CW_SESSIONS_LOG"
@@ -1501,7 +1518,7 @@ If I say 'none', do not post. If I say 'edit', let me modify the findings before
 # LOOP — recurring/self-paced Claude session via /loop (no worktree)
 # ════════════════════════════════════════════════════════════════════════════
 cmd_loop() {
-    local name="" prompt="" slug="" interval="" done_flag=false list_flag=false account_override="" model_override=""
+    local name="" prompt="" slug="" interval="" done_flag=false list_flag=false account_override="" model_override="" harness_override=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --every|-e)   interval="$2"; shift 2 ;;
@@ -1510,6 +1527,7 @@ cmd_loop() {
             --list)       list_flag=true; shift ;;
             --account|-a) account_override="$2"; shift 2 ;;
             --model|-m)   model_override="$2"; shift 2 ;;
+            --harness|-H) harness_override="$2"; shift 2 ;;
             -*)           shift ;;
             *)
                 if [[ -z "$name" ]]; then
@@ -1532,8 +1550,6 @@ cmd_loop() {
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
     local account; account=${account_override:-$(_get_field "$pj" account "$(_default_account)")}
-    local acct_dir; acct_dir="$(_harness_dir "$account" "${CW_HARNESS:-$CW_HARNESS_DEFAULT}")"
-    _ensure_statusline "$acct_dir"
 
     # ── Done: close loop session (second positional = slug) ─────────────
     if $done_flag; then
@@ -1585,6 +1601,12 @@ PYEOF
     local session_meta="$session_dir/session.json"
     local notes_file="$session_dir/LOOP_NOTES.md"
 
+    local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "$harness_override") || return 1
+    CW_HARNESS="$harness"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
+    _ensure_statusline "$acct_dir"
+    local provider="${CW_PROVIDER:-native}"
+
     mkdir -p "$session_dir"
 
     local is_new=true
@@ -1616,6 +1638,7 @@ PYEOF
         # Save session metadata (env vars → python, no quote injection)
         CW_L_PROJECT="$name" CW_L_SLUG="$slug" CW_L_ACCOUNT="$account" CW_L_MODEL="$model" \
         CW_L_PROMPT="$prompt" CW_L_INTERVAL="$interval" CW_L_NOTES="$notes_file" CW_L_META="$session_meta" \
+        CW_L_HARNESS="$harness" CW_L_PROVIDER="$provider" \
         python3 - <<'PYEOF'
 import json, os
 from datetime import datetime, timezone
@@ -1630,6 +1653,9 @@ meta = {
     'loop_prompt': os.environ['CW_L_PROMPT'],
     'loop_interval': os.environ['CW_L_INTERVAL'],
     'notes': os.environ['CW_L_NOTES'],
+    'harness': os.environ['CW_L_HARNESS'],
+    'harness_session_id': '',
+    'provider': os.environ['CW_L_PROVIDER'],
     'status': 'active',
     'created': now,
     'last_opened': now,
@@ -1691,17 +1717,19 @@ PYEOF
         CW_PROJECT="$name" CW_TASK="loop-$slug" CW_TASK_TYPE="loop" CW_ACCOUNT="$account"
         CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
         CW_PROMPT="$(cat "$session_dir/loop_prompt.txt")"
-        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        _harness_load "$CW_HARNESS" || return 1
         _harness_context
         _harness_launch
+        _record_harness_ref "$session_meta"
     else
         local resume_prompt="Resume the loop for this session: read $notes_file for the objective and interval, then re-invoke /loop with that same objective (and interval, if any)."
         CW_PROJECT="$name" CW_TASK="loop-$slug" CW_TASK_TYPE="loop" CW_ACCOUNT="$account"
         CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
         CW_PROMPT="$resume_prompt"
-        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        _harness_load "$CW_HARNESS" || return 1
         _harness_context
         _harness_resume
+        _record_harness_ref "$session_meta"
     fi
 }
 
