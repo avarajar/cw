@@ -1737,7 +1737,7 @@ PYEOF
 # WORK — Feature/bugfix with worktree + persistent session
 # ════════════════════════════════════════════════════════════════════════════
 cmd_work() {
-    local name="" task="" done_flag=false list_flag=false team_flag=false team_prompt="" base_branch="" workflow="" account_override="" model_override=""
+    local name="" task="" done_flag=false list_flag=false team_flag=false team_prompt="" base_branch="" workflow="" account_override="" model_override="" harness_override=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --task|-t)   task="$2"; shift 2 ;;
@@ -1747,6 +1747,7 @@ cmd_work() {
             --workflow|-w) workflow="$2"; shift 2 ;;
             --account|-a) account_override="$2"; shift 2 ;;
             --model|-m) model_override="$2"; shift 2 ;;
+            --harness|-H) harness_override="$2"; shift 2 ;;
             --team)      team_flag=true; shift
                          # Capture optional team prompt (rest of args in quotes)
                          if [[ $# -gt 0 && "$1" != -* ]]; then
@@ -1800,11 +1801,6 @@ cmd_work() {
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
     local account; account=${account_override:-$(_get_field "$pj" account "$(_default_account)")}
-    local acct_dir; acct_dir="$(_harness_dir "$account" "${CW_HARNESS:-$CW_HARNESS_DEFAULT}")"
-    _ensure_statusline "$acct_dir"
-
-    local model="${model_override:-$(_model_for_type work)}"
-    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
 
     local session_dir="$CW_HOME/sessions/$name/task-$task"
     local session_meta="$session_dir/session.json"
@@ -1825,6 +1821,15 @@ cmd_work() {
         _space_done "$name" "$task" "task" "$path" "$wt_dir" "$session_dir"
         return
     fi
+
+    local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "$harness_override") || return 1
+    CW_HARNESS="$harness"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
+    _ensure_statusline "$acct_dir"
+
+    local model="${model_override:-$(_model_for_type work)}"
+    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
+    local provider="${CW_PROVIDER:-native}"
 
     # ── Create or resume ─────────────────────────────────────────────────
     mkdir -p "$session_dir"
@@ -2046,6 +2051,9 @@ meta = {
     'worktree': '$wt_dir', 'notes': '$notes_file',
     'source': '$task_source', 'source_url': '$task_url',
     'model': '$model',
+    'harness': '$harness',
+    'harness_session_id': '',
+    'provider': '$provider',
     'status': 'active',
     'created': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'last_opened': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -2084,7 +2092,7 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
     # ── Agent teams ────────────────────────────────────────────────────
     local team_env=""
     if $team_flag; then
-        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        _harness_load "$CW_HARNESS" || return 1
         if harness_supports agent_teams; then
             team_env="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1"
             _log "Agent teams ${G}enabled${NC}"
@@ -2117,9 +2125,10 @@ MANDATORY — Comment & notes style: Keep every comment to a single short line. 
         printf '%s' "$init_prompt" > "$prompt_file"
         CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
         CW_TEAM_ENV="$team_env" CW_PROMPT="$(cat "$prompt_file")"
-        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        _harness_load "$CW_HARNESS" || return 1
         _harness_context
         _harness_launch
+        _record_harness_ref "$session_meta"
     elif ! $is_new; then
         # ── Resume context (worktree + branch awareness) ─────────────
         local current_branch=""
@@ -2151,9 +2160,10 @@ $acct_resume"
         # Try to resume named session; fall back to --continue, then start fresh
         CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
         CW_TEAM_ENV="$team_env" CW_PROMPT="$resume_msg"
-        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        _harness_load "$CW_HARNESS" || return 1
         _harness_context
         _harness_resume
+        _record_harness_ref "$session_meta"
     else
         local session_name="$account/$name/$task"
         CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
@@ -2161,9 +2171,10 @@ $acct_resume"
         if $team_flag && [[ -n "$team_prompt" ]]; then
             CW_PROMPT="Create an agent team for this task: $team_prompt"
         fi
-        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        _harness_load "$CW_HARNESS" || return 1
         _harness_context
         _harness_launch
+        _record_harness_ref "$session_meta"
     fi
 
     unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
@@ -4805,7 +4816,7 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
 
     local team_env=""
     if $team_flag; then
-        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        _harness_load "$CW_HARNESS" || return 1
         if harness_supports agent_teams; then
             team_env="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1"
         else
