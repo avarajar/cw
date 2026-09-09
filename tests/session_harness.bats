@@ -18,6 +18,13 @@ p = sys.argv[1]
 m = json.load(open(p)); m.pop("harness", None)
 json.dump(m, open(p, "w"))
 PY
+    # give the account a non-claude default so a wrong fallback would show up
+    python3 - "$CW_HOME/accounts/acct/meta.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+m = json.load(open(p)); m["harness"] = "codex"
+json.dump(m, open(p, "w"))
+PY
     rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
     run "$CW_BIN" work app fix-auth
     [ "$(call_field 1 'env:CLAUDE_CONFIG_DIR')" = "$CW_HOME/accounts/acct" ]
