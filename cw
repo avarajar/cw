@@ -105,7 +105,7 @@ print(m.group(1) if m else '${CW_DEFAULT_MODEL:-}')
 # so Claude uses its platform default — same as /model → "Default (recommended)"
 _use_platform_default_model() {
     local settings="$1/settings.json"
-    _harness_load "$CW_HARNESS_DEFAULT" || return 0
+    _harness_load "${CW_HARNESS:-$CW_HARNESS_DEFAULT}" || return 0
     harness_supports model_flag || return 0
     [[ -f "$settings" ]] || return
     python3 -c "
@@ -123,7 +123,7 @@ _ensure_dirs() {
 
 _ensure_statusline() {
     local acct_dir="${1:?Usage: _ensure_statusline <acct_dir>}"
-    _harness_load "$CW_HARNESS_DEFAULT" || return 0
+    _harness_load "${CW_HARNESS:-$CW_HARNESS_DEFAULT}" || return 0
     harness_supports statusline || return 0
     local settings="$acct_dir/settings.json"
     local sl_script="$HOME/.claude/statusline-command.sh"
@@ -141,7 +141,7 @@ with open('$settings', 'w') as f: json.dump(s, f, indent=2)
 # symlinks account skills where the harness looks for them
 _link_account_skills() {
     local account="$1" acct_root="$2"
-    _harness_load "$CW_HARNESS_DEFAULT" || return 0
+    _harness_load "${CW_HARNESS:-$CW_HARNESS_DEFAULT}" || return 0
     harness_supports skills || return 0
     local skills_dir="$acct_root/skills"
     [[ -d "$skills_dir" ]] || return 0
@@ -230,6 +230,35 @@ except Exception: print('')
 " 2>/dev/null)
     fi
     printf '%s' "${h:-$CW_HARNESS_DEFAULT}"
+}
+
+# resolves the harness for a command, refusing an override that fights a session
+_resolve_harness() {
+    local account="$1" project="$2" session_meta="$3" override="$4"
+    local recorded=""
+    if [[ -f "$session_meta" ]]; then
+        recorded=$(python3 -c "
+import json
+try: print(json.load(open('$session_meta')).get('harness') or '')
+except Exception: print('')
+" 2>/dev/null)
+        [[ -z "$recorded" ]] && recorded="$CW_HARNESS_DEFAULT"
+    fi
+    if [[ -n "$recorded" ]]; then
+        if [[ -n "$override" && "$override" != "$recorded" ]]; then
+            _err "Session was created with $recorded. Refusing to resume it with $override."
+            _err "Close it first, then create a new one with the harness you want."
+            return 1
+        fi
+        printf '%s' "$recorded"; return 0
+    fi
+    if [[ -n "$override" ]]; then printf '%s' "$override"; return 0; fi
+    local pj proj_harness=""
+    if [[ -n "$project" ]] && pj=$(_get_project "$project" 2>/dev/null); then
+        proj_harness=$(_get_field "$pj" harness "")
+    fi
+    if [[ -n "$proj_harness" ]]; then printf '%s' "$proj_harness"; return 0; fi
+    _account_default_harness "$account"
 }
 
 # resolves an account name from a flag, a project, or the default
@@ -1098,10 +1127,11 @@ print()
 # ════════════════════════════════════════════════════════════════════════════
 cmd_open() {
     local name="${1:?Usage: cw open <project> [--mode X] [--account X] [--context X]}"; shift
-    local account="" context=""
+    local account="" context="" harness_override=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --account|-a) account="$2"; shift 2 ;;
+            --harness|-H) harness_override="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -1111,7 +1141,9 @@ cmd_open() {
     [[ -d "$path" ]] || { _err "Path does not exist: $path"; return 1; }
 
     account="${account:-$(_get_field "$pj" account "$(_default_account)")}"
-    local acct_dir; acct_dir="$(_harness_dir "$account" "${CW_HARNESS:-$CW_HARNESS_DEFAULT}")"
+    local harness; harness=$(_resolve_harness "$account" "$name" "" "$harness_override") || return 1
+    CW_HARNESS="$harness"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
     _log "Opening ${C}$name${NC}  account=${M}$account${NC}"
     _ensure_statusline "$acct_dir"
 
@@ -1119,7 +1151,7 @@ cmd_open() {
     _set_tab_title "$name"
     CW_ACCOUNT="$account" CW_HARNESS_DIR="$acct_dir" CW_TASK_TYPE="open"
     CW_PROJECT="$name" CW_TASK="" CW_SESSION_NAME="" CW_PROMPT="" CW_MODEL=""
-    _harness_load "$CW_HARNESS_DEFAULT" || return 1
+    _harness_load "$CW_HARNESS" || return 1
     _harness_context
     _harness_launch
 
@@ -1153,7 +1185,7 @@ cmd_launch() {
 # REVIEW — PR review with persistent session (no worktree)
 # ════════════════════════════════════════════════════════════════════════════
 cmd_review() {
-    local name="" pr="" done_flag=false cont_flag=false list_flag=false account_override="" model_override=""
+    local name="" pr="" done_flag=false cont_flag=false list_flag=false account_override="" model_override="" harness_override=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --pr)      pr="$2"; shift 2 ;;
@@ -1162,6 +1194,7 @@ cmd_review() {
             --list)    list_flag=true; shift ;;
             --account|-a) account_override="$2"; shift 2 ;;
             --model|-m) model_override="$2"; shift 2 ;;
+            --harness|-H) harness_override="$2"; shift 2 ;;
             -*)        shift ;;
             *)         
                 if [[ -z "$name" ]]; then
@@ -1184,11 +1217,6 @@ cmd_review() {
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
     local account; account=${account_override:-$(_get_field "$pj" account "$(_default_account)")}
-    local acct_dir; acct_dir="$(_harness_dir "$account" "${CW_HARNESS:-$CW_HARNESS_DEFAULT}")"
-    _ensure_statusline "$acct_dir"
-
-    local model="${model_override:-$(_model_for_type review)}"
-    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
 
     [[ -z "$pr" ]] && { _err "Missing PR. Usage: cw review $name 123"; return 1; }
 
@@ -1225,6 +1253,15 @@ with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
         echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) DONE $name review=pr-$pr" >> "$CW_SESSIONS_LOG"
         return
     fi
+
+    local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "$harness_override") || return 1
+    CW_HARNESS="$harness"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
+    _ensure_statusline "$acct_dir"
+
+    local model="${model_override:-$(_model_for_type review)}"
+    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
+    local provider="${CW_PROVIDER:-native}"
 
     # ── Create or resume review ──────────────────────────────────────────
     mkdir -p "$session_dir"
@@ -1264,6 +1301,9 @@ meta = {
     'account': '$account',
     'model': '$model',
     'notes': '$notes_file',
+    'harness': '$harness',
+    'harness_session_id': '',
+    'provider': '$provider',
     'status': 'active',
     'created': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'last_opened': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
