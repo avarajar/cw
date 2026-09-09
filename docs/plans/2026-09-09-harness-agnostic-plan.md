@@ -79,7 +79,8 @@ The brief asks for the refactor as Task 1. It is split in two here for one reaso
 
 **Interfaces:**
 - Consumes: nothing
-- Produces: `setup_cw_home()`, `make_project <name>`, `fake_log`, `assert_launch_argv`, `assert_launch_cwd`, `assert_launch_env` — used by every later task's tests. `tests/fakes/claude` writes one record per invocation to `$CW_FAKE_LOG`.
+- Produces: `setup_cw_home()`, `make_project <name>`, `call <n>` (raw record), `call_count`, `call_argv <n>`, `call_field <n> <key>`, `set_project_account <project> <account>`, `mode_of <file>` — used by every later task's tests. `tests/fakes/claude` writes one record per invocation to `$CW_FAKE_LOG`.
+- **`call_argv` truncates a multi-line argv element to its first line**, because it selects lines starting with `arg=`. Any assertion on content inside a prompt must use `call <n>` and a substring match.
 
 - [ ] **Step 1: Vendor bats**
 
