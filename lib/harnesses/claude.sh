@@ -16,6 +16,18 @@ claude_session_ref() {
     printf '%s' ""
 }
 
+# builds argv for a plugin subcommand without spawning it
+claude_plugin() {
+    local op="${1:-}" plugin="${2:-}"
+    _claude_base_env
+    case "$op" in
+        list) HARNESS_ARGV=(claude plugin list) ;;
+        add)  HARNESS_ARGV=(claude plugin add "$plugin") ;;
+        *)    return 1 ;;
+    esac
+    return 0
+}
+
 # builds the common prefix shared by launch and resume
 _claude_base_argv() {
     HARNESS_ARGV=(claude)

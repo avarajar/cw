@@ -167,7 +167,7 @@ _harness_load() {
     done
     if [[ -z "$found" ]]; then
         # fail safe so a later harness never inherits the previous driver
-        for fn in supports config_env session_ref launch resume doctor login; do
+        for fn in supports config_env session_ref launch resume plugin doctor login; do
             eval "harness_${fn}() { return 1; }"
         done
         unset _CW_HARNESS_LOADED
@@ -176,7 +176,7 @@ _harness_load() {
     fi
     # shellcheck disable=SC1090
     source "$found"
-    for fn in supports config_env session_ref launch resume doctor login; do
+    for fn in supports config_env session_ref launch resume plugin doctor login; do
         if declare -F "${h}_${fn}" >/dev/null; then
             eval "harness_${fn}() { ${h}_${fn} \"\$@\"; }"
         else
@@ -190,6 +190,12 @@ _harness_load() {
 # the only place in cw that starts a harness process
 _harness_exec() {
     env ${HARNESS_ENV[@]+"${HARNESS_ENV[@]}"} "${HARNESS_ARGV[@]}"
+}
+
+# true when the binary the driver put in HARNESS_ARGV is on PATH
+_harness_available() {
+    [[ ${#HARNESS_ARGV[@]} -gt 0 ]] || return 1
+    command -v "${HARNESS_ARGV[0]}" >/dev/null 2>&1
 }
 
 _harness_launch() {
@@ -4076,14 +4082,24 @@ _stack_apply() {
                         _dim "  $CW_HARNESS has no plugin support — skipping $plugin"
                         continue
                     fi
-                    HARNESS_ENV=("CLAUDE_CONFIG_DIR=$acct_dir")
-                    HARNESS_ARGV=(claude plugin list)
+                    CW_HARNESS_DIR="$acct_dir"
+                    HARNESS_ARGV=(); HARNESS_ENV=()
+                    if ! harness_plugin list; then
+                        _warn "  Could not list plugins for $CW_HARNESS — skip $plugin"
+                        continue
+                    fi
+                    if ! _harness_available; then
+                        _warn "  $CW_HARNESS not installed — skip plugin $plugin"
+                        continue
+                    fi
                     if _harness_exec 2>/dev/null | grep -q "$plugin"; then
                         _dim "  Plugin $plugin already installed"
                     else
                         _log "  Installing plugin: ${C}$plugin${NC}"
-                        HARNESS_ARGV=(claude plugin add "$plugin")
-                        _harness_exec 2>/dev/null || _warn "  Could not install plugin $plugin"
+                        HARNESS_ARGV=(); HARNESS_ENV=()
+                        harness_plugin add "$plugin" \
+                            && _harness_exec 2>/dev/null \
+                            || _warn "  Could not install plugin $plugin"
                     fi
                 fi
             done
