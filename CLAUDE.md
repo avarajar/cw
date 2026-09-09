@@ -77,6 +77,7 @@ chmod +x cw && ./cw help
 ## Do NOT
 
 - Add external dependencies (no jq, no node, keep it pure bash + python3)
-- Break the single-file architecture of the `cw` script
+- Keep command logic in the single `cw` script; harness drivers live in `lib/harnesses/<name>.sh`
+  and context fetchers in `lib/context/<source>.sh`
 - Modify session/config files outside of `~/.cw/`
 - Commit `.tasks/`, `.reviews/`, or `*_NOTES.md` (excluded via `.git/info/exclude`)

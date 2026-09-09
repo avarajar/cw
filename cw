@@ -105,6 +105,8 @@ print(m.group(1) if m else '${CW_DEFAULT_MODEL:-}')
 # so Claude uses its platform default — same as /model → "Default (recommended)"
 _use_platform_default_model() {
     local settings="$1/settings.json"
+    _harness_load "$CW_HARNESS_DEFAULT" || return 0
+    harness_supports model_flag || return 0
     [[ -f "$settings" ]] || return
     python3 -c "
 import json
@@ -121,6 +123,8 @@ _ensure_dirs() {
 
 _ensure_statusline() {
     local acct_dir="${1:?Usage: _ensure_statusline <acct_dir>}"
+    _harness_load "$CW_HARNESS_DEFAULT" || return 0
+    harness_supports statusline || return 0
     local settings="$acct_dir/settings.json"
     local sl_script="$HOME/.claude/statusline-command.sh"
     [[ -f "$sl_script" ]] || return 0
@@ -132,6 +136,23 @@ if 'statusLine' in s: sys.exit(0)
 s['statusLine'] = {'type': 'command', 'command': 'bash $sl_script'}
 with open('$settings', 'w') as f: json.dump(s, f, indent=2)
 "
+}
+
+# symlinks account skills where the harness looks for them
+_link_account_skills() {
+    local account="$1" acct_root="$2"
+    _harness_load "$CW_HARNESS_DEFAULT" || return 0
+    harness_supports skills || return 0
+    local skills_dir="$acct_root/skills"
+    [[ -d "$skills_dir" ]] || return 0
+    local skill_dir skill_name target
+    for skill_dir in "$skills_dir"/*/; do
+        [[ -d "$skill_dir" ]] || continue
+        skill_name=$(basename "$skill_dir")
+        case "$skill_name" in acct--*) continue ;; esac
+        target="$HOME/.claude/skills/acct--${account}--${skill_name}"
+        [[ -e "$target" ]] || ln -sf "$skill_dir" "$target"
+    done
 }
 
 _get_project() {
@@ -217,6 +238,29 @@ _harness_resume() {
     return $rc
 }
 
+# says once per command that a capability is missing, then returns 1
+_degrade() {
+    local cap="$1" msg="$2"
+    local seen="_CW_DEGRADED_${cap}"
+    if [[ -z "${!seen:-}" ]]; then
+        _dim "  $msg (harness: ${CW_HARNESS:-claude})"
+        eval "$seen=1"
+    fi
+    return 1
+}
+
+# translates the skip-permissions request to whatever the harness calls it
+_harness_extra_flags() {
+    local flags="${CW_CLAUDE_FLAGS:-}"
+    local per_harness_var="CW_$(echo "$CW_HARNESS" | tr '[:lower:]' '[:upper:]')_FLAGS"
+    flags="$flags ${!per_harness_var:-}"
+    if [[ "$flags" == *--dangerously-skip-permissions* ]] && ! harness_supports skip_permissions; then
+        flags="${flags//--dangerously-skip-permissions/}"
+        _degrade skip_permissions "Harness has no skip-permissions flag — prompts stay on" || true
+    fi
+    printf '%s' "$flags"
+}
+
 # sets the globals every driver reads
 _harness_context() {
     CW_HARNESS="${CW_HARNESS:-$CW_HARNESS_DEFAULT}"
@@ -226,7 +270,7 @@ _harness_context() {
     CW_PROMPT="${CW_PROMPT:-}"
     CW_MODEL="${CW_MODEL:-}"
     CW_PROVIDER="${CW_PROVIDER:-native}"
-    CW_EXTRA_FLAGS="${CW_EXTRA_FLAGS-$CW_CLAUDE_FLAGS}"
+    CW_EXTRA_FLAGS="${CW_EXTRA_FLAGS-$(_harness_extra_flags)}"
     CW_TEAM_ENV="${CW_TEAM_ENV:-}"
     export CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
 }
@@ -502,6 +546,11 @@ _project_scaffold() {
 
 _project_setup_mcps() {
     local name="${1:?Usage: cw project setup-mcps <name>}"
+    _harness_load "$CW_HARNESS_DEFAULT" || return 1
+    if ! harness_supports mcp; then
+        _err "Harness '${CW_HARNESS:-$CW_HARNESS_DEFAULT}' has no MCP support that cw can configure."
+        return 1
+    fi
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local account; account=$(_get_field "$pj" account "$(_default_account)")
     local acct_dir="$CW_ACCOUNTS_DIR/$account"
@@ -672,6 +721,11 @@ _resolve_account_dir() {
 }
 
 cmd_mcp() {
+    _harness_load "$CW_HARNESS_DEFAULT" || return 1
+    if ! harness_supports mcp; then
+        _err "Harness '${CW_HARNESS:-$CW_HARNESS_DEFAULT}' has no MCP support that cw can configure."
+        return 1
+    fi
     local sub="${1:-list}"; shift || true
     case "$sub" in
         add)    _mcp_add "$@" ;;
@@ -1156,19 +1210,7 @@ with open('$session_meta', 'w') as f:
 "
         _log "Session created: ${C}$session_dir${NC}"
 
-        # ── Account skills: symlink into ~/.claude/skills/ for discovery ──
-        local acct_skills_dir="$acct_dir/skills"
-        if [[ -d "$acct_skills_dir" ]]; then
-            for skill_dir in "$acct_skills_dir"/*/; do
-                [[ -d "$skill_dir" ]] || continue
-                local skill_name
-                skill_name=$(basename "$skill_dir")
-                # Skip already-prefixed entries to prevent recursive prefix accumulation
-                case "$skill_name" in acct--*) continue ;; esac
-                local target="$HOME/.claude/skills/acct--${account}--${skill_name}"
-                [[ -e "$target" ]] || ln -sf "$skill_dir" "$target"
-            done
-        fi
+        _link_account_skills "$account" "$acct_dir"
 
         # Create review notes
         {
@@ -1494,19 +1536,7 @@ with open(os.environ['CW_L_META'], 'w') as f:
 PYEOF
         _log "Session created: ${C}$session_dir${NC}"
 
-        # ── Account skills: symlink into ~/.claude/skills/ for discovery ──
-        local acct_skills_dir="$acct_dir/skills"
-        if [[ -d "$acct_skills_dir" ]]; then
-            for skill_dir in "$acct_skills_dir"/*/; do
-                [[ -d "$skill_dir" ]] || continue
-                local skill_name
-                skill_name=$(basename "$skill_dir")
-                # Skip already-prefixed entries to prevent recursive prefix accumulation
-                case "$skill_name" in acct--*) continue ;; esac
-                local target="$HOME/.claude/skills/acct--${account}--${skill_name}"
-                [[ -e "$target" ]] || ln -sf "$skill_dir" "$target"
-            done
-        fi
+        _link_account_skills "$account" "$acct_dir"
 
         # Loop notes
         {
@@ -1892,19 +1922,7 @@ meta = {
 with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
 "
 
-        # ── Account skills: symlink into ~/.claude/skills/ for discovery ──
-        local acct_skills_dir="$acct_dir/skills"
-        if [[ -d "$acct_skills_dir" ]]; then
-            for skill_dir in "$acct_skills_dir"/*/; do
-                [[ -d "$skill_dir" ]] || continue
-                local skill_name
-                skill_name=$(basename "$skill_dir")
-                # Skip already-prefixed entries to prevent recursive prefix accumulation
-                case "$skill_name" in acct--*) continue ;; esac
-                local target="$HOME/.claude/skills/acct--${account}--${skill_name}"
-                [[ -e "$target" ]] || ln -sf "$skill_dir" "$target"
-            done
-        fi
+        _link_account_skills "$account" "$acct_dir"
 
     else
         _log "Resuming task: ${C}$name${NC} task=${Y}$task${NC}"
@@ -1934,8 +1952,13 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
     # ── Agent teams ────────────────────────────────────────────────────
     local team_env=""
     if $team_flag; then
-        team_env="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1"
-        _log "Agent teams ${G}enabled${NC}"
+        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        if harness_supports agent_teams; then
+            team_env="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1"
+            _log "Agent teams ${G}enabled${NC}"
+        else
+            _degrade agent_teams "Agent teams not supported — running without a team" || true
+        fi
     fi
 
     if $is_new && [[ -n "$init_prompt" ]]; then
@@ -2810,9 +2833,14 @@ _arcade_setup_hooks() {
 
     _log "Setting up live activity hooks..."
 
+    _harness_load "$CW_HARNESS_DEFAULT" || return 1
     for acct_dir in "$CW_ACCOUNTS_DIR"/*/; do
         [[ -d "$acct_dir" ]] || continue
         local acct; acct=$(basename "$acct_dir")
+        if ! harness_supports hooks; then
+            _dim "  ${C}$acct${NC} — harness has no hooks, skipping"
+            continue
+        fi
         _arcade_install_hooks_for "$acct_dir/settings.json" "$hook_script"
         _log "  ${C}$acct${NC} — hooks installed"
     done
@@ -4643,14 +4671,21 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
     export CW_PROJECT="$proj_name" CW_TASK="init" CW_TASK_TYPE="task" CW_ACCOUNT="$account"
 
     local team_env=""
-    $team_flag && team_env="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1"
+    if $team_flag; then
+        _harness_load "$CW_HARNESS_DEFAULT" || return 1
+        if harness_supports agent_teams; then
+            team_env="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1"
+        else
+            _degrade agent_teams "Agent teams not supported — running without a team" || true
+        fi
+    fi
 
     local prompt_file="$session_dir/init_prompt.txt"
     printf '%s' "$init_prompt" > "$prompt_file"
 
     _log "Launching Claude..."
     _dim "  Model: ${model:-claude default}"
-    $team_flag && _log "Agent teams ${G}enabled${NC}"
+    [[ -n "$team_env" ]] && _log "Agent teams ${G}enabled${NC}"
     _ensure_statusline "$acct_dir"
 
     CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$account/$proj_name/init" CW_MODEL="$model"
