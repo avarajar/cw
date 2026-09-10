@@ -2986,7 +2986,7 @@ _arcade_setup_hooks() {
 
     _log "Setting up live activity hooks..."
 
-    _harness_load "$CW_HARNESS_DEFAULT" || return 1
+    _harness_load "${_CW_HARNESS_ENV:-$CW_HARNESS_DEFAULT}" || return 1
     for acct_dir in "$CW_ACCOUNTS_DIR"/*/; do
         [[ -d "$acct_dir" ]] || continue
         local acct; acct=$(basename "$acct_dir")

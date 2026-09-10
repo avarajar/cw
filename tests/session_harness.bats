@@ -126,6 +126,12 @@ PY
     [[ "$output" == *"Unknown harness 'codex'"* ]]
 }
 
+@test "cw arcade --setup fails cleanly when CW_HARNESS names a harness with no driver" {
+    run bash -c "CW_HARNESS=codex '$CW_BIN' arcade --setup"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Unknown harness 'codex'"* ]]
+}
+
 @test "a closed task session can be reopened with a different harness" {
     make_project app >/dev/null
     "$CW_BIN" work app fix-auth
