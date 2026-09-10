@@ -26,12 +26,13 @@ PY
 }
 
 @test "codex resume uses resume --last from the working directory" {
-    make_project app >/dev/null
+    local path; path="$(make_project app)"
     "$CW_BIN" work app fix-auth
     rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
     run "$CW_BIN" work app fix-auth
     [ "$(call_argv 1 | sed -n 1p)" = "resume" ]
     [ "$(call_argv 1 | sed -n 2p)" = "--last" ]
+    [ "$(call_field 1 cwd)" = "$path" ]
 }
 
 @test "codex resume falls back to a recorded session id" {
