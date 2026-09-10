@@ -31,6 +31,13 @@ setup() { setup_cw_home; }
     [[ "$clean" != *"account claude"* ]]
 }
 
+@test "_mcp_peek_account fails cleanly when --account has no value" {
+    run bash -c "source '$CW_BIN'; _mcp_peek_account --account"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--account requires a value"* ]]
+    [[ "$output" != *"unbound variable"* ]]
+}
+
 @test "account meta round-trips a per-harness model" {
     bash -c "source '$CW_BIN'; _account_meta_set acct codex model gpt-5-codex"
     run bash -c "source '$CW_BIN'; _account_meta_get acct codex model"

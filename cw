@@ -875,7 +875,7 @@ _mcp_peek_account() {
     local account_flag="" positional=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --account|-a) account_flag="$2"; shift 2 ;;
+            --account|-a) account_flag="${2:?--account requires a value}"; shift 2 ;;
             --transport|-t) shift 2 ;;
             --) shift; break ;;
             -*) shift ;;
