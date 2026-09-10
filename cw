@@ -420,7 +420,7 @@ _install_account_instructions() {
     if [[ "$harness" == "claude" ]]; then
         dest="$dir/CLAUDE.md"
     elif [[ "$harness" == "codex" ]]; then
-        dest="$dir/AGENTS.md"
+        dest="$dir/AGENTS.md" # unverified: AGENTS.md as codex's user-level instructions file
     else
         return 0
     fi
@@ -447,6 +447,13 @@ _harness_context() {
     CW_EXTRA_FLAGS="${CW_EXTRA_FLAGS-$(_harness_extra_flags)}"
     CW_TEAM_ENV="${CW_TEAM_ENV:-}"
     export CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
+}
+
+# reads KEY=VALUE lines from a 600 env file for the harness process only
+_harness_env_file() {
+    local f="$1"
+    [[ -f "$f" ]] || return 0
+    grep -E '^[A-Z_][A-Z0-9_]*=' "$f" | tr '\n' ' '
 }
 
 # ════════════════════════════════════════════════════════════════════════════
