@@ -223,3 +223,15 @@ FAKE
     [ ! -e "$CW_HOME/accounts/acct/env" ]
     [ ! -d "$CW_HOME/accounts/acct/claude" ]
 }
+
+@test "login's exit status is the child's, even if the scraper stage fails on its own" {
+    # shadows _login_scrape after sourcing, to prove PIPESTATUS[0] (not \$?)
+    # is what _account_login reports — pipefail would report the scraper's
+    # own failure here if the code used \$? instead
+    run bash -c "
+        source '$CW_BIN'
+        _login_scrape() { cat >/dev/null; return 1; }
+        _account_login acct --harness codex --no-browser
+    "
+    [ "$status" -eq 0 ]
+}
