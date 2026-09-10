@@ -1,6 +1,7 @@
 # shared setup for every bats file
 setup_cw_home() {
     unset CLAUDE_CONFIG_DIR CODEX_HOME PI_CODING_AGENT_DIR OPENCODE_DATA_DIR CW_HARNESS
+    unset CW_CLAUDE_FLAGS CW_CODEX_FLAGS CW_MODEL CW_PROMPT CW_EXTRA_FLAGS CW_SESSION_REF
     export HOME="$BATS_TEST_TMPDIR/home"
     export CW_HOME="$BATS_TEST_TMPDIR/cw"
     export CW_FAKE_LOG="$BATS_TEST_TMPDIR/calls.log"
