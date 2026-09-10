@@ -201,3 +201,16 @@ except subprocess.TimeoutExpired:
     [ "$status" -ne 0 ]
     [ ! -d "$CW_HOME/accounts/acct/pi" ]
 }
+
+@test "an unterminated final line from the harness is not silently dropped" {
+    cat > "$BATS_TEST_TMPDIR/fakes/codex" <<'FAKE'
+#!/usr/bin/env bash
+echo "Open this URL to continue:"
+printf 'Paste the code: '
+exit 0
+FAKE
+    chmod +x "$BATS_TEST_TMPDIR/fakes/codex"
+    run "$CW_BIN" account login acct --harness codex --no-browser
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Paste the code: "* ]]
+}

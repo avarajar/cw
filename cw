@@ -565,7 +565,7 @@ _harness_env_file() {
 # echoes the child's output through and emits the first url and code it sees
 _login_scrape() {
     local url_seen=false code_seen=false line
-    while IFS= read -r line; do
+    while IFS= read -r line || [[ -n "$line" ]]; do
         printf '%s\n' "$line"
         if ! $url_seen && [[ "$line" =~ (https?://[^[:space:]\"\'\)]+) ]]; then
             printf 'CW_LOGIN_URL=%s\n' "${BASH_REMATCH[1]}"
