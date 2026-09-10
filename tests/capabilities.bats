@@ -31,3 +31,26 @@ setup() { setup_cw_home; }
     CW_CLAUDE_FLAGS="--dangerously-skip-permissions" run "$CW_BIN" work app fix-auth
     [ "$(call_argv 1 | grep -c -- '--dangerously-skip-permissions')" -eq 1 ]
 }
+
+# a driver that falsely claims agent_teams never touches argv (only claude
+# reads CW_TEAM_ENV), so this is invisible to every driver-level argv test.
+# The only place the claim is user-visible is cw's own --team message.
+@test "a harness that doesn't support agent teams never claims they're enabled" {
+    make_project app >/dev/null
+    local h
+    for h in codex pi opencode; do
+        mkdir -p "$CW_HOME/accounts/acct/$h"
+        python3 - "$CW_HOME/accounts/acct/meta.json" "$h" <<'PY'
+import json, sys
+p, h = sys.argv[1], sys.argv[2]
+m = json.load(open(p)); m["harness"] = h
+json.dump(m, open(p, "w"))
+PY
+        rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
+        run "$CW_BIN" work app "team-$h" --team
+        [[ "$output" == *"Agent teams not supported — running without a team"* ]] \
+            || { echo "$h: missing the degrade notice: $output"; return 1; }
+        [[ "$output" != *"Agent teams enabled"* ]] \
+            || { echo "$h: falsely claimed agent teams are enabled: $output"; return 1; }
+    done
+}
