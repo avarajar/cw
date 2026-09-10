@@ -68,6 +68,41 @@ PY
     [ "$(call_count)" -eq 0 ]
 }
 
+@test "the CW_HARNESS env var routes like --harness would" {
+    make_project app >/dev/null
+    python3 - "$CW_HOME/accounts/acct/meta.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+m = json.load(open(p)); m["harness"] = "codex"
+json.dump(m, open(p, "w"))
+PY
+    run bash -c "CW_HARNESS=claude '$CW_BIN' work app fix-auth"
+    [ "$status" -eq 0 ]
+    run grep -q '"harness": "claude"' "$CW_HOME/sessions/app/task-fix-auth/session.json"
+    [ "$status" -eq 0 ]
+}
+
+@test "--harness beats the CW_HARNESS env var when both are set" {
+    make_project app >/dev/null
+    run bash -c "CW_HARNESS=codex '$CW_BIN' work app fix-auth --harness claude"
+    [ "$status" -eq 0 ]
+    run grep -q '"harness": "claude"' "$CW_HOME/sessions/app/task-fix-auth/session.json"
+    [ "$status" -eq 0 ]
+}
+
+@test "cw launch fails cleanly when CW_HARNESS names a harness with no driver" {
+    run bash -c "CW_HARNESS=codex '$CW_BIN' launch acct"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Unknown harness 'codex'"* ]]
+    [ "$(call_count)" -eq 0 ]
+}
+
+@test "cw mcp fails cleanly when CW_HARNESS names a harness with no driver" {
+    run bash -c "CW_HARNESS=codex '$CW_BIN' mcp list"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Unknown harness 'codex'"* ]]
+}
+
 @test "a closed task session can be reopened with a different harness" {
     make_project app >/dev/null
     "$CW_BIN" work app fix-auth

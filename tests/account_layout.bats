@@ -59,11 +59,13 @@ setup() { setup_cw_home; }
     [ ! -L "$CW_HOME/accounts/acct/CLAUDE.md" ]
 }
 
-@test "a mismatched CW_HARNESS still launches through the already-loaded driver" {
+@test "a CW_HARNESS env var naming a harness with no driver fails cleanly" {
     mkdir -p "$CW_HOME/accounts/acct/codex"
     make_project app >/dev/null
-    CW_HARNESS=codex "$CW_BIN" work app fix-auth
-    [ "$(call_count)" -eq 1 ]
+    run bash -c "CW_HARNESS=codex '$CW_BIN' work app fix-auth"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Unknown harness 'codex'"* ]]
+    [ "$(call_count)" -eq 0 ]
 }
 
 @test "harness_context falls back to the split dir when CW_HARNESS_DIR is unset" {

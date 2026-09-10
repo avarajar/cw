@@ -287,6 +287,8 @@ _resolve_account() {
 # HARNESS LAYER — the only place that spawns a coding agent
 # ════════════════════════════════════════════════════════════════════════════
 CW_HARNESS_DEFAULT="claude"
+# the user's CW_HARNESS env var, captured once in main before CW_HARNESS becomes the resolved value
+_CW_HARNESS_ENV=""
 
 # sources a driver and aliases its functions to the generic names
 _harness_load() {
@@ -711,9 +713,9 @@ _project_scaffold() {
 
 _project_setup_mcps() {
     local name="${1:?Usage: cw project setup-mcps <name>}"
-    _harness_load "$CW_HARNESS_DEFAULT" || return 1
+    _harness_load "${_CW_HARNESS_ENV:-$CW_HARNESS_DEFAULT}" || return 1
     if ! harness_supports mcp; then
-        _err "Harness '${CW_HARNESS:-$CW_HARNESS_DEFAULT}' has no MCP support that cw can configure."
+        _err "Harness '${_CW_HARNESS_ENV:-$CW_HARNESS_DEFAULT}' has no MCP support that cw can configure."
         return 1
     fi
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
@@ -854,9 +856,9 @@ with open(sf, 'w') as f:
 # MCP — Manage MCPs per account
 # ════════════════════════════════════════════════════════════════════════════
 cmd_mcp() {
-    _harness_load "$CW_HARNESS_DEFAULT" || return 1
+    _harness_load "${_CW_HARNESS_ENV:-$CW_HARNESS_DEFAULT}" || return 1
     if ! harness_supports mcp; then
-        _err "Harness '${CW_HARNESS:-$CW_HARNESS_DEFAULT}' has no MCP support that cw can configure."
+        _err "Harness '${_CW_HARNESS_ENV:-$CW_HARNESS_DEFAULT}' has no MCP support that cw can configure."
         return 1
     fi
     local sub="${1:-list}"; shift || true
@@ -1160,7 +1162,7 @@ cmd_open() {
     [[ -d "$path" ]] || { _err "Path does not exist: $path"; return 1; }
 
     account="${account:-$(_get_field "$pj" account "$(_default_account)")}"
-    local harness; harness=$(_resolve_harness "$account" "$name" "" "$harness_override") || return 1
+    local harness; harness=$(_resolve_harness "$account" "$name" "" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
     CW_HARNESS="$harness"
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
     _log "Opening ${C}$name${NC}  account=${M}$account${NC}"
@@ -1186,13 +1188,14 @@ cmd_open() {
 cmd_launch() {
     local account="${1:-$(_default_account)}"; shift || true
     [[ -d "$(_account_root "$account")" ]] || { _err "Account '$account' does not exist."; return 1; }
-    local dir; dir="$(_harness_dir "$account" "${CW_HARNESS:-$CW_HARNESS_DEFAULT}")"
+    CW_HARNESS="${_CW_HARNESS_ENV:-$CW_HARNESS_DEFAULT}"
+    local dir; dir="$(_harness_dir "$account" "$CW_HARNESS")"
     _log "Launching Claude (${C}$account${NC})..."
     _ensure_statusline "$dir"
     CW_ACCOUNT="$account" CW_HARNESS_DIR="$dir" CW_TASK_TYPE="launch"
     CW_PASSTHRU_ARGV=("$@")
     CW_EXTRA_FLAGS=""
-    _harness_load "$CW_HARNESS_DEFAULT" || return 1
+    _harness_load "$CW_HARNESS" || return 1
     _harness_context
     _harness_launch
     local rc=$?
@@ -1288,7 +1291,7 @@ with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
         fi
     fi
 
-    local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "$harness_override") || return 1
+    local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
     CW_HARNESS="$harness"
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
     _ensure_statusline "$acct_dir"
@@ -1621,7 +1624,7 @@ PYEOF
         fi
     fi
 
-    local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "$harness_override") || return 1
+    local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
     CW_HARNESS="$harness"
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
     _ensure_statusline "$acct_dir"
@@ -1843,7 +1846,7 @@ cmd_work() {
         fi
     fi
 
-    local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "$harness_override") || return 1
+    local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
     CW_HARNESS="$harness"
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
     _ensure_statusline "$acct_dir"
@@ -2811,7 +2814,7 @@ cmd_plan() {
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
     local account; account=$(_get_field "$pj" account "$(_default_account)")
-    local harness; harness=$(_resolve_harness "$account" "$name" "" "$harness_override") || return 1
+    local harness; harness=$(_resolve_harness "$account" "$name" "" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
     CW_HARNESS="$harness"
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
     local model="${model_override:-$(_model_for_type plan)}"
@@ -4705,7 +4708,7 @@ cmd_create() {
     proj_name=$(echo "$proj_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
 
     local session_meta="$CW_HOME/sessions/$proj_name/task-init/session.json"
-    local harness; harness=$(_resolve_harness "$account" "$proj_name" "$session_meta" "$harness_override") || return 1
+    local harness; harness=$(_resolve_harness "$account" "$proj_name" "$session_meta" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
     CW_HARNESS="$harness"
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
     local model="${model_override:-$(_model_for_type create)}"
@@ -4992,6 +4995,8 @@ EOF
 main() {
     # Parse global flags before command
     _CW_SKIP_PERMS="false"
+    # capture the caller's CW_HARNESS before any command starts resolving it
+    _CW_HARNESS_ENV="${CW_HARNESS:-}"
     local args=()
     for arg in "$@"; do
         case "$arg" in
