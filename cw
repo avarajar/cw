@@ -555,6 +555,73 @@ _harness_env_file() {
     grep -E '^[A-Z_][A-Z0-9_]*=' "$f"
 }
 
+# echoes the child's output through and emits the first url and code it sees
+_login_scrape() {
+    local url_seen=false code_seen=false line
+    while IFS= read -r line; do
+        printf '%s\n' "$line"
+        if ! $url_seen && [[ "$line" =~ (https?://[^[:space:]\"\'\)]+) ]]; then
+            printf 'CW_LOGIN_URL=%s\n' "${BASH_REMATCH[1]}"
+            url_seen=true
+        fi
+        if ! $code_seen && [[ "$line" =~ ([A-Z0-9]{4}-[A-Z0-9]{4}) ]]; then
+            printf 'CW_LOGIN_CODE=%s\n' "${BASH_REMATCH[1]}"
+            code_seen=true
+        fi
+    done
+}
+
+# names the env var each harness reads its key from
+# unverified: pi and opencode key var names, no driver exists yet to confirm against
+_harness_api_key_var() {
+    case "$1" in
+        codex)    printf 'CODEX_API_KEY' ;;
+        claude)   printf 'ANTHROPIC_AUTH_TOKEN' ;;
+        pi)       printf 'PI_API_KEY' ;;
+        opencode) printf 'OPENCODE_API_KEY' ;;
+        *)        printf 'API_KEY' ;;
+    esac
+}
+
+# authenticates an account against a harness, headless or via a stdin api key
+_account_login() {
+    local account="${1:?Usage: cw account login <account> --harness <h>}"; shift
+    local harness="" no_browser="" api_key_stdin=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --harness|-H)   harness="$2"; shift 2 ;;
+            --no-browser)   no_browser=1; shift ;;
+            --with-api-key) api_key_stdin=1; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    [[ -d "$(_account_root "$account")" ]] || { _err "Account '$account' not found."; return 1; }
+    harness="${harness:-$(_account_default_harness "$account")}"
+
+    local dir; dir="$(_harness_dir "$account" "$harness")"
+    mkdir -p "$dir"
+
+    CW_HARNESS="$harness" CW_HARNESS_DIR="$dir"
+    _harness_load "$harness" || return 1
+
+    if [[ -n "$api_key_stdin" ]]; then
+        local key; IFS= read -r key
+        [[ -n "$key" ]] || { _err "No API key on stdin."; return 1; }
+        local envf="$dir/env"
+        ( umask 077; printf '%s\n' "$(_harness_api_key_var "$harness")=$key" > "$envf" )
+        chmod 600 "$envf"
+        _log "API key stored for ${C}$account${NC}/${Y}$harness${NC}"
+        CW_LOGIN_API_KEY_STDIN=1
+        printf '%s\n' "$key" | { harness_login && _harness_exec >/dev/null 2>&1; } || true
+        return 0
+    fi
+
+    CW_LOGIN_NO_BROWSER="$no_browser"
+    harness_login || { _err "Harness '$harness' has no login flow cw can drive."; return 1; }
+    _harness_exec 2>&1 | _login_scrape
+    return "${PIPESTATUS[0]}"
+}
+
 # ════════════════════════════════════════════════════════════════════════════
 # INIT
 # ════════════════════════════════════════════════════════════════════════════
@@ -636,7 +703,7 @@ YAML
     echo ""
     echo -e "  ${BOLD}Next steps:${NC}"
     echo -e "  ${Y}1.${NC} ${C}cw account add work${NC}              — Create account"
-    echo -e "  ${Y}2.${NC} ${C}CLAUDE_CONFIG_DIR=~/.cw/accounts/work claude /login${NC}"
+    echo -e "  ${Y}2.${NC} ${C}cw account login work --harness claude${NC}"
     echo -e "                                        — Authenticate"
     echo -e "  ${Y}3.${NC} ${C}cw project register --account work${NC}"
     echo -e "                                        — Register project (from project dir)"
@@ -683,7 +750,7 @@ with open('$CW_CONFIG', 'w') as f: f.write(text)
             echo ""
             echo -e "  ${BOLD}Next steps:${NC}"
             echo -e "  ${Y}1.${NC} Authenticate this account:"
-            echo -e "     ${BOLD}CLAUDE_CONFIG_DIR=$dir claude /login${NC}"
+            echo -e "     ${BOLD}cw account login $name --harness claude${NC}"
             echo ""
             echo -e "  ${Y}2.${NC} Register a project:"
             echo -e "     ${C}cw project register <path> --account $name${NC}"
@@ -706,7 +773,10 @@ with open('$CW_CONFIG', 'w') as f: f.write(text)
             read -rp "Delete account '$name'? [y/N] " c
             [[ "$c" =~ ^[yY]$ ]] && rm -rf "$CW_ACCOUNTS_DIR/$name" && _log "Removed."
             ;;
-        *) _err "Subcommands: add | list | remove" ;;
+        login)
+            _account_login "$@"
+            ;;
+        *) _err "Subcommands: add | list | remove | login" ;;
     esac
 }
 
@@ -5097,6 +5167,9 @@ ${BOLD}SETUP${NC}
   account add <name>                  Create account profile
   account list                        List accounts
   account remove <name>               Remove account
+  account login <name> --harness <h>  Authenticate an account
+    --no-browser                      Headless / device-code login
+    --with-api-key -                  Read an api key from stdin
   project register [path] [opts]       Register project (path defaults to cwd)
     --account, -a <account>
     --type, -t <type>                 fullstack | api | knowledge | infra | agents

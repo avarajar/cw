@@ -81,3 +81,10 @@ claude_doctor() {
     fi
     printf '{"harness":"claude","status":"%s","detail":%s}\n' "$status" "$detail"
 }
+
+# unverified: no confirmed --no-browser/device-code flag or api-key import path for claude
+claude_login() {
+    HARNESS_ENV=("CLAUDE_CONFIG_DIR=$CW_HARNESS_DIR")
+    HARNESS_ARGV=(claude /login)
+    return 0
+}
