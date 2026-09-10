@@ -134,6 +134,21 @@ PY
     [[ "$clean" == *"[✓ auth]"* ]]
 }
 
+@test "cw doctor tells an account with an uninstalled harness to install it, not log in" {
+    python3 - "$CW_HOME/accounts/acct/meta.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+m = json.load(open(p)); m["harness"] = "codex"
+json.dump(m, open(p, "w"))
+PY
+    mkdir -p "$CW_HOME/accounts/acct/codex"
+    touch "$CW_HOME/accounts/acct/codex/auth.json"
+    run env PATH="${PATH#*:}" "$CW_BIN" doctor
+    local clean; clean="$(printf '%s' "$output" | sed -E 's/\x1b\[[0-9;]*m//g')"
+    [[ "$clean" == *"codex not installed"* ]]
+    [[ "$clean" != *"not authenticated"* ]]
+}
+
 @test "harness_context falls back to the split dir when CW_HARNESS_DIR is unset" {
     mkdir -p "$CW_HOME/accounts/acct/claude"
     run bash -c "

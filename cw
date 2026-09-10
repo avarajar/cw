@@ -232,18 +232,24 @@ except Exception: print('')
     printf '%s' "${h:-$CW_HARNESS_DEFAULT}"
 }
 
-# true when the account's default harness driver reports it connected
-_account_authenticated() {
+# prints the account's default-harness doctor status, or "error" with no driver
+_account_harness_status() {
     local account="$1" h dir status
     h="$(_account_default_harness "$account")"
     dir="$(_harness_dir "$account" "$h")"
-    _harness_load "$h" >/dev/null 2>&1 || return 1
+    if ! _harness_load "$h" >/dev/null 2>&1; then
+        printf 'error'; return 0
+    fi
     status=$(CW_HARNESS_DIR="$dir" harness_doctor 2>/dev/null | python3 -c "
 import json, sys
 try: print(json.load(sys.stdin).get('status', ''))
 except Exception: print('')
 " 2>/dev/null)
-    [[ "$status" == "connected" ]]
+    printf '%s' "${status:-error}"
+}
+
+_account_authenticated() {
+    [[ "$(_account_harness_status "$1")" == "connected" ]]
 }
 
 # resolves the harness for a command, refusing an override that fights a session
@@ -2714,8 +2720,13 @@ cmd_doctor() {
         for dir in "$CW_ACCOUNTS_DIR"/*/; do
             [[ -d "$dir" ]] || continue
             local n; n=$(basename "$dir")
-            if _account_authenticated "$n"; then
+            local hstatus; hstatus="$(_account_harness_status "$n")"
+            if [[ "$hstatus" == "connected" ]]; then
                 echo -e "    ${G}✓${NC} $n — authenticated"
+            elif [[ "$hstatus" == "not_installed" ]]; then
+                local nh; nh="$(_account_default_harness "$n")"
+                echo -e "    ${Y}!${NC} $n — ${Y}$nh not installed${NC} (install the $nh CLI first)"
+                warnings=$((warnings+1))
             else
                 echo -e "    ${Y}!${NC} $n — ${Y}not authenticated${NC} (run ${C}cw launch $n${NC} then /login)"
                 warnings=$((warnings+1))
