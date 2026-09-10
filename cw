@@ -422,6 +422,8 @@ _harness_load() {
 # exports env vars and execs in a subshell so a secret never sits in argv
 _harness_exec() {
     (
+        # cw-only context-fetch credentials must never reach the harness
+        unset LINEAR_API_KEY NOTION_TOKEN
         local kv
         for kv in ${HARNESS_ENV[@]+"${HARNESS_ENV[@]}"}; do
             export "$kv"
@@ -2090,14 +2092,19 @@ PYEOF
 }
 
 # replaces the Context section of a notes file with fetched markdown
+# body goes through a temp file, never an env var, so a large body can't hit E2BIG
 _context_write_notes() {
     local notes="$1" body="$2"
     [[ -f "$notes" ]] || return 0
-    CW_NOTES="$notes" CW_BODY="$body" python3 - <<'PY'
+    local tmp; tmp=$(mktemp) || return 1
+    printf '%s' "$body" > "$tmp" || { rm -f "$tmp"; return 1; }
+    CW_NOTES="$notes" CW_BODY_FILE="$tmp" python3 - <<'PY'
 import os, re
 p = os.environ["CW_NOTES"]
 with open(p) as f: text = f.read()
-body = os.environ["CW_BODY"]
+with open(os.environ["CW_BODY_FILE"]) as f: body = f.read()
+# demote a bare "## " line so fetched text can never forge a sibling section
+body = re.sub(r"(?m)^##(?=\s|$)", "###", body)
 block = "## Context\n" + body + "\n"
 if "## Context" in text:
     text = re.sub(r"## Context\n.*?(?=\n## |\Z)", lambda _m: block, text, count=1, flags=re.S)
@@ -2105,10 +2112,12 @@ else:
     text += "\n" + block
 with open(p, "w") as f: f.write(text)
 PY
+    local rc=$?
+    rm -f "$tmp"
+    return $rc
 }
 
-# fetches issue/page context for a task URL and writes it into the notes file
-# returns 0 when context was fetched and written, 1 otherwise
+# fetches context for a task URL, writes it into notes, returns 0 on success
 _context_fetch_for_task() {
     local src="$1" url="$2" notes="$3"
     [[ -n "$src" && "$src" != "url" ]] || return 1
@@ -2129,7 +2138,7 @@ _context_fetch_for_task() {
     local fetched
     fetched=$("context_fetch_$src" "$url" 2>/dev/null) || fetched=""
     [[ -n "$fetched" ]] || return 1
-    _context_write_notes "$notes" "$fetched"
+    _context_write_notes "$notes" "$fetched" || return 1
     _dim "  Fetched context from $src"
     return 0
 }
@@ -2497,9 +2506,6 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
     _set_tab_title "$task - $name"
 
     export CW_PROJECT="$name" CW_TASK="$task" CW_TASK_TYPE="task" CW_ACCOUNT="$account"
-
-    # context-fetch credentials are cw-only — never let them reach the harness process
-    unset LINEAR_API_KEY NOTION_TOKEN
 
     # ── Agent teams ────────────────────────────────────────────────────
     local team_env=""
