@@ -303,11 +303,7 @@ _resolve_account() {
 CW_HARNESS_DEFAULT="claude"
 # the user's CW_HARNESS env var, captured once in main before CW_HARNESS becomes the resolved value
 _CW_HARNESS_ENV=""
-# built one word at a time so the launch-site scanner never sees them together
-CW_HARNESS_ALL="claude"
-CW_HARNESS_ALL+=" codex"
-CW_HARNESS_ALL+=" pi"
-CW_HARNESS_ALL+=" opencode"
+CW_HARNESS_ALL="claude codex pi opencode"
 
 # json-encodes a single string argument
 _json_str() {

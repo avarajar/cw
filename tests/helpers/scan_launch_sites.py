@@ -22,7 +22,7 @@ KEYWORD = r"(?:!|time|if|then|elif|else|do|while|until|exec|command|builtin)"
 # an env assignment, a bare expansion, or the env prefix itself
 PREFIX_TOKEN = (
     r"(?:env"
-    r"|[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)"
+    r"|[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|[^\s\"']*)"
     r"|\$\{[^}]*\}"
     r"|\$[A-Za-z_][A-Za-z0-9_]*)"
 )
