@@ -3,6 +3,7 @@ setup_cw_home() {
     unset CLAUDE_CONFIG_DIR CODEX_HOME PI_CODING_AGENT_DIR OPENCODE_DATA_DIR CW_HARNESS
     unset CW_CLAUDE_FLAGS CW_CODEX_FLAGS CW_MODEL CW_PROMPT CW_EXTRA_FLAGS CW_SESSION_REF
     unset OLLAMA_HOST CW_PROVIDER
+    unset LINEAR_API_KEY NOTION_TOKEN CW_LINEAR_API CW_NOTION_API
     export HOME="$BATS_TEST_TMPDIR/home"
     export CW_HOME="$BATS_TEST_TMPDIR/cw"
     export CW_FAKE_LOG="$BATS_TEST_TMPDIR/calls.log"
@@ -111,4 +112,56 @@ stop_ollama_stub() {
 # a port nothing is listening on, for a deterministic loopback connection refusal
 free_local_port() {
     python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'
+}
+
+# starts a local HTTP stub that answers every GET/POST with the given status and body
+# call directly (not via $(...) — that would background the server inside a lost subshell)
+# sets CTX_STUB_URL for the caller to point a fetcher's api-url override at
+start_context_stub() {
+    local status="$1" body="$2"
+    local port
+    port=$(free_local_port)
+    python3 - "$port" "$status" "$body" > "$BATS_TEST_TMPDIR/context-stub.log" 2>&1 <<'PY' &
+import http.server, sys
+port, status, body = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3].encode()
+class H(http.server.BaseHTTPRequestHandler):
+    def _reply(self):
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(body)
+    def do_GET(self):
+        self._reply()
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get('Content-Length', 0)))
+        self._reply()
+    def log_message(self, *a):
+        pass
+http.server.HTTPServer(('127.0.0.1', port), H).serve_forever()
+PY
+    CTX_STUB_PID=$!
+    export CTX_STUB_PID
+    CTX_STUB_URL="http://127.0.0.1:$port"
+    export CTX_STUB_URL
+    local i
+    for i in $(seq 1 50); do
+        python3 -c "
+import socket
+s = socket.socket()
+s.settimeout(0.2)
+try:
+    s.connect(('127.0.0.1', $port))
+except OSError:
+    raise SystemExit(1)
+s.close()
+" 2>/dev/null && return 0
+        sleep 0.05
+    done
+    return 1
+}
+
+stop_context_stub() {
+    [[ -n "${CTX_STUB_PID:-}" ]] && kill "$CTX_STUB_PID" 2>/dev/null
+    wait "$CTX_STUB_PID" 2>/dev/null || true
+    unset CTX_STUB_PID CTX_STUB_URL
 }

@@ -2089,6 +2089,51 @@ PYEOF
     fi
 }
 
+# replaces the Context section of a notes file with fetched markdown
+_context_write_notes() {
+    local notes="$1" body="$2"
+    [[ -f "$notes" ]] || return 0
+    CW_NOTES="$notes" CW_BODY="$body" python3 - <<'PY'
+import os, re
+p = os.environ["CW_NOTES"]
+with open(p) as f: text = f.read()
+body = os.environ["CW_BODY"]
+block = "## Context\n" + body + "\n"
+if "## Context" in text:
+    text = re.sub(r"## Context\n.*?(?=\n## |\Z)", lambda _m: block, text, count=1, flags=re.S)
+else:
+    text += "\n" + block
+with open(p, "w") as f: f.write(text)
+PY
+}
+
+# fetches issue/page context for a task URL and writes it into the notes file
+# returns 0 when context was fetched and written, 1 otherwise
+_context_fetch_for_task() {
+    local src="$1" url="$2" notes="$3"
+    [[ -n "$src" && "$src" != "url" ]] || return 1
+    local candidate ctx_lib=""
+    for candidate in "$CW_HOME/context/$src.sh" \
+                     "$SCRIPT_DIR/../lib/context/$src.sh" \
+                     "$SCRIPT_DIR/lib/context/$src.sh" \
+                     "$CW_HOME/lib/context/$src.sh"; do
+        [[ -f "$candidate" ]] && { ctx_lib="$candidate"; break; }
+    done
+    [[ -n "$ctx_lib" ]] || return 1
+    # shellcheck disable=SC1090
+    source "$ctx_lib"
+    if ! "context_credential_$src"; then
+        _dim "  No $src credential — the agent will fetch it instead"
+        return 1
+    fi
+    local fetched
+    fetched=$("context_fetch_$src" "$url" 2>/dev/null) || fetched=""
+    [[ -n "$fetched" ]] || return 1
+    _context_write_notes "$notes" "$fetched"
+    _dim "  Fetched context from $src"
+    return 0
+}
+
 # ════════════════════════════════════════════════════════════════════════════
 # WORK — Feature/bugfix with worktree + persistent session
 # ════════════════════════════════════════════════════════════════════════════
@@ -2208,8 +2253,53 @@ cmd_work() {
         _log "New task: ${C}$name${NC} task=${Y}$task${NC}"
         _dim "  Model: ${model:-claude default}"
 
+        # Create notes file in session dir (skip if Forge already pre-wrote one with description)
+        if [[ ! -f "$notes_file" ]]; then
+            {
+                echo "# Task: $task"
+                echo "**Project:** $name"
+                echo "**Created:** $(date +%Y-%m-%d)"
+                if [[ -n "$task_url" ]]; then
+                    echo "**Source:** $task_url"
+                fi
+                echo ""
+                echo "## Context"
+                echo "<!-- Claude fills this after fetching from source -->"
+                echo ""
+                echo "## Objective"
+                echo "<!-- Describe what needs to be done -->"
+                echo ""
+                echo "## Decisions"
+                echo "<!-- Claude and you log important decisions here -->"
+                echo ""
+                echo "## Status"
+                echo "- [ ] Pending"
+                echo ""
+                echo "## Notes"
+                echo "<!-- Findings, context, references -->"
+            } > "$notes_file"
+        fi
+
+        # ── Fetch external context before the init prompt is built ────────
+        local context_fetched=false
+        _context_fetch_for_task "$task_source" "$task_url" "$notes_file" && context_fetched=true
+
         # Build initial prompt for Claude based on source
         local init_prompt=""
+        # step N text + the following step's number, or "" when context was already fetched
+        local _fill_linear="" _fill_notion="" _fill_issue="" _fill_pr="" _after_fill=7 _after_fill_pr=8
+        if ! $context_fetched; then
+            _fill_linear="
+7. Fill in the TASK_NOTES.md Context section with the issue details (title, description, acceptance criteria, priority). If there are comments, include a summary of relevant decisions or clarifications."
+            _fill_notion="
+7. Fill in the TASK_NOTES.md Context section with the page content."
+            _fill_issue="
+7. Fill in the TASK_NOTES.md Context section with the issue details."
+            _fill_pr="
+8. Fill in the TASK_NOTES.md Context section with the PR details."
+            _after_fill=8
+            _after_fill_pr=9
+        fi
         if [[ "$task_source" == "linear" ]]; then
             init_prompt="Fetch Linear issue $task using the Linear MCP (get_issue tool). Also fetch the issue comments (list_comments tool) to check for discussion, decisions, or additional context.
 
@@ -2221,9 +2311,8 @@ Set up the workspace using the Linear branch name:
 3. Create a worktree using the Linear branch name: git worktree add .tasks/$task -b <linear_branch_name> $base_branch
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
-6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
-7. Fill in the TASK_NOTES.md Context section with the issue details (title, description, acceptance criteria, priority). If there are comments, include a summary of relevant decisions or clarifications.
-8. Then start working from the .tasks/$task/ directory.
+6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude$_fill_linear
+$_after_fill. Then start working from the .tasks/$task/ directory.
 
 Source URL: $task_url"
         elif [[ "$task_source" == "notion" ]]; then
@@ -2234,9 +2323,8 @@ Then:
 3. Create a worktree from $base_branch: git worktree add .tasks/$task -b task/$task $base_branch
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
-6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
-7. Fill in the TASK_NOTES.md Context section with the page content.
-8. Then start working from the .tasks/$task/ directory."
+6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude$_fill_notion
+$_after_fill. Then start working from the .tasks/$task/ directory."
         elif [[ "$task_source" == "github" ]] && [[ "$task_url" == *"/pull/"* ]]; then
             local _pr_num
             _pr_num=$(echo "$task_url" | grep -oE '[0-9]+$')
@@ -2248,9 +2336,8 @@ Then:
    IMPORTANT: Use \`origin/<pr_branch>\` as the start point, NOT $base_branch — you need the PR's actual commits.
 5. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 6. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
-7. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
-8. Fill in the TASK_NOTES.md Context section with the PR details.
-9. Then start working from the .tasks/$task/ directory."
+7. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude$_fill_pr
+$_after_fill_pr. Then start working from the .tasks/$task/ directory."
         elif [[ "$task_source" == "github" ]]; then
             init_prompt="Fetch this GitHub issue using gh or the GitHub MCP: $task_url
 Then:
@@ -2259,9 +2346,8 @@ Then:
 3. Create a worktree from $base_branch: git worktree add .tasks/$task -b task/$task $base_branch
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
-6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
-7. Fill in the TASK_NOTES.md Context section with the issue details.
-8. Then start working from the .tasks/$task/ directory."
+6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude$_fill_issue
+$_after_fill. Then start working from the .tasks/$task/ directory."
         else
             # No URL — just a branch/task name
             # Check if Forge pre-wrote a description in TASK_NOTES.md
@@ -2352,33 +2438,6 @@ $acct_ctx"
             _dim "  Account context: $account"
         fi
 
-        # Create notes file in session dir (skip if Forge already pre-wrote one with description)
-        if [[ ! -f "$notes_file" ]]; then
-            {
-                echo "# Task: $task"
-                echo "**Project:** $name"
-                echo "**Created:** $(date +%Y-%m-%d)"
-                if [[ -n "$task_url" ]]; then
-                    echo "**Source:** $task_url"
-                fi
-                echo ""
-                echo "## Context"
-                echo "<!-- Claude fills this after fetching from source -->"
-                echo ""
-                echo "## Objective"
-                echo "<!-- Describe what needs to be done -->"
-                echo ""
-                echo "## Decisions"
-                echo "<!-- Claude and you log important decisions here -->"
-                echo ""
-                echo "## Status"
-                echo "- [ ] Pending"
-                echo ""
-                echo "## Notes"
-                echo "<!-- Findings, context, references -->"
-            } > "$notes_file"
-        fi
-
         # Exclude .tasks from git (but DON'T pre-create the task dir — worktree needs it empty)
         mkdir -p "$path/.tasks"
         local proj_git_dir
@@ -2438,6 +2497,9 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
     _set_tab_title "$task - $name"
 
     export CW_PROJECT="$name" CW_TASK="$task" CW_TASK_TYPE="task" CW_ACCOUNT="$account"
+
+    # context-fetch credentials are cw-only — never let them reach the harness process
+    unset LINEAR_API_KEY NOTION_TOKEN
 
     # ── Agent teams ────────────────────────────────────────────────────
     local team_env=""
