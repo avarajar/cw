@@ -35,3 +35,9 @@ scan() {
     run scan "$f"
     [ "$status" -eq 1 ]
 }
+
+@test "the version probe in _harness_inventory_json goes through _harness_exec" {
+    run bash -c "sed -n '/^_harness_inventory_json/,/^}/p' '$BATS_TEST_DIRNAME/../cw'"
+    [[ "$output" == *"_harness_exec"* ]]
+    [[ "$output" != *'$("$h" --version'* ]]
+}

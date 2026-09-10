@@ -407,7 +407,8 @@ _harness_inventory_json() {
         first=false
         src="builtin"; [[ -f "$CW_HOME/harnesses/$h.sh" ]] && src="user"
         if path=$(command -v "$h" 2>/dev/null); then
-            ver=$("$h" --version 2>/dev/null | head -1 | tr -d '\n')
+            HARNESS_ARGV=("$h" --version); HARNESS_ENV=()
+            ver=$(_harness_exec 2>/dev/null | head -1 | tr -d '\n')
             printf '{"name":"%s","installed":true,"path":%s,"version":%s,"source":"%s"}' \
                 "$h" "$(_json_str "$path")" "$(_json_str "$ver")" "$src"
         else
