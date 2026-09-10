@@ -272,12 +272,14 @@ _resolve_provider() {
 
 # true when the ollama HTTP endpoint answers, false otherwise — never hangs
 _ollama_reachable() {
-    python3 -c "
-import urllib.request, sys
+    python3 - <<'PY' 2>/dev/null
+import os, urllib.request, sys
+host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 try:
-    urllib.request.urlopen('${OLLAMA_HOST:-http://localhost:11434}/api/tags', timeout=1)
-except Exception: sys.exit(1)
-" 2>/dev/null
+    urllib.request.urlopen(host + "/api/tags", timeout=1)
+except Exception:
+    sys.exit(1)
+PY
 }
 
 # true when the named model is already pulled into the local ollama daemon
@@ -301,6 +303,9 @@ _account_harness_status() {
     local account="$1" h dir status
     h="$(_account_default_harness "$account")"
     dir="$(_harness_dir "$account" "$h")"
+    if [[ "$(_provider_kind "$(_account_meta_get "$account" "$h" provider)")" == "local" ]]; then
+        printf 'local'; return 0
+    fi
     if ! _harness_load "$h" >/dev/null 2>&1; then
         printf 'error'; return 0
     fi
@@ -313,7 +318,8 @@ except Exception: print('')
 }
 
 _account_authenticated() {
-    [[ "$(_account_harness_status "$1")" == "connected" ]]
+    local status; status="$(_account_harness_status "$1")"
+    [[ "$status" == "connected" || "$status" == "local" ]]
 }
 
 # resolves the harness for a command, refusing an override that fights a session
@@ -822,10 +828,16 @@ cmd_account() {
             local harness="" provider="" model=""
             while [[ $# -gt 0 ]]; do
                 case "$1" in
-                    --harness|-H) harness="$2"; shift 2 ;;
-                    --provider|-p) provider="$2"; shift 2 ;;
-                    --model|-m)   model="$2"; shift 2 ;;
-                    *) shift ;;
+                    --harness|-H)
+                        [[ $# -ge 2 ]] || { _err "--harness requires a value"; return 1; }
+                        harness="$2"; shift 2 ;;
+                    --provider|-p)
+                        [[ $# -ge 2 ]] || { _err "--provider requires a value"; return 1; }
+                        provider="$2"; shift 2 ;;
+                    --model|-m)
+                        [[ $# -ge 2 ]] || { _err "--model requires a value"; return 1; }
+                        model="$2"; shift 2 ;;
+                    *) _err "Unknown flag: $1"; return 1 ;;
                 esac
             done
             local dir; dir="$(_account_root "$name")"
@@ -1507,10 +1519,14 @@ cmd_open() {
     _log "Opening ${C}$name${NC}  account=${M}$account${NC}"
     _ensure_statusline "$acct_dir"
 
+    local model; model="$(_resolve_model "$account" "$harness" open "" "")"
+    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
+    local provider; provider="$(_resolve_provider "$account" "$harness")"
+
     cd "$path"
     _set_tab_title "$name"
     CW_ACCOUNT="$account" CW_HARNESS_DIR="$acct_dir" CW_TASK_TYPE="open"
-    CW_PROJECT="$name" CW_TASK="" CW_SESSION_NAME="" CW_PROMPT="" CW_MODEL=""
+    CW_PROJECT="$name" CW_TASK="" CW_SESSION_NAME="" CW_PROMPT="" CW_MODEL="$model" CW_PROVIDER="$provider"
     _harness_load "$CW_HARNESS" || return 1
     _harness_context
     _harness_launch
@@ -1531,7 +1547,10 @@ cmd_launch() {
     local dir; dir="$(_harness_dir "$account" "$CW_HARNESS")"
     _log "Launching Claude (${C}$account${NC})..."
     _ensure_statusline "$dir"
-    CW_ACCOUNT="$account" CW_HARNESS_DIR="$dir" CW_TASK_TYPE="launch"
+    local model; model="$(_resolve_model "$account" "$CW_HARNESS" launch "" "")"
+    [[ -n "$model" ]] || _use_platform_default_model "$dir"
+    local provider; provider="$(_resolve_provider "$account" "$CW_HARNESS")"
+    CW_ACCOUNT="$account" CW_HARNESS_DIR="$dir" CW_TASK_TYPE="launch" CW_MODEL="$model" CW_PROVIDER="$provider"
     CW_PASSTHRU_ARGV=("$@")
     CW_EXTRA_FLAGS=""
     _harness_load "$CW_HARNESS" || return 1
@@ -2897,6 +2916,8 @@ cmd_doctor() {
             local hstatus; hstatus="$(_account_harness_status "$n")"
             if [[ "$hstatus" == "connected" ]]; then
                 echo -e "    ${G}✓${NC} $n — authenticated"
+            elif [[ "$hstatus" == "local" ]]; then
+                echo -e "    ${G}✓${NC} $n — local (no login needed)"
             elif [[ "$hstatus" == "not_installed" ]]; then
                 local nh; nh="$(_account_default_harness "$n")"
                 echo -e "    ${Y}!${NC} $n — ${Y}$nh not installed${NC} (install the $nh CLI first)"
