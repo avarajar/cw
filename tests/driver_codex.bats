@@ -49,6 +49,21 @@ PY
     [ "$(call_argv 2 | sed -n 2p)" = "abc-123" ]
 }
 
+@test "codex review resume falls back to a recorded session id" {
+    make_project app >/dev/null
+    "$CW_BIN" review app 123
+    python3 - "$CW_HOME/sessions/app/review-pr-123/session.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+m = json.load(open(p)); m["harness_session_id"] = "review-abc-123"
+json.dump(m, open(p, "w"))
+PY
+    rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
+    CW_FAKE_EXIT_SEQ="1 0" run "$CW_BIN" review app 123
+    [ "$(call_count)" -eq 2 ]
+    [ "$(call_argv 2 | sed -n 2p)" = "review-abc-123" ]
+}
+
 @test "codex degrades agent teams instead of failing" {
     make_project app >/dev/null
     run "$CW_BIN" work app big --team
