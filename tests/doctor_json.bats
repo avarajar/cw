@@ -31,6 +31,7 @@ print(\"ok\")'"
 }
 
 @test "doctor --json reports the layout of a legacy account" {
+    echo '{}' > "$CW_HOME/accounts/acct/.claude.json"
     run bash -c "'$CW_BIN' doctor --json | python3 -c '
 import json, sys
 d = json.load(sys.stdin)

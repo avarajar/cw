@@ -187,6 +187,58 @@ _harness_dir() {
     fi
 }
 
+# root entries cw owns — a harness migration never moves these
+CW_ACCOUNT_OWNED="meta.json CLAUDE.md templates skills"
+
+# lists a dir into CW_ACCOUNT_ENTRIES, dotfiles included, empty dir tolerated
+_account_scan_dir() {
+    local dir="$1" undo_dot=false undo_null=false
+    CW_ACCOUNT_ENTRIES=()
+    [[ -d "$dir" ]] || return 0
+    shopt -q dotglob || undo_dot=true
+    shopt -q nullglob || undo_null=true
+    shopt -s dotglob nullglob
+    local e
+    for e in "$dir"/*; do
+        CW_ACCOUNT_ENTRIES+=("$e")
+    done
+    $undo_dot && shopt -u dotglob
+    $undo_null && shopt -u nullglob
+    return 0
+}
+
+# true when a root entry belongs to cw itself or to a harness of its own
+_account_entry_owned() {
+    local base="$1" keep
+    for keep in $CW_ACCOUNT_OWNED $CW_HARNESS_ALL; do
+        [[ "$base" == "$keep" ]] && return 0
+    done
+    return 1
+}
+
+# collects the root entries a claude migration would move, into CW_ACCOUNT_ENTRIES
+_account_claude_entries() {
+    local root="$1" e keep=()
+    _account_scan_dir "$root"
+    for e in ${CW_ACCOUNT_ENTRIES[@]+"${CW_ACCOUNT_ENTRIES[@]}"}; do
+        _account_entry_owned "$(basename "$e")" && continue
+        keep+=("$e")
+    done
+    CW_ACCOUNT_ENTRIES=(${keep[@]+"${keep[@]}"})
+}
+
+# split when a claude subdir exists, legacy when claude state sits at the root, else none
+_account_layout() {
+    local root; root="$(_account_root "$1")"
+    [[ -d "$root/claude" ]] && { printf 'split'; return 0; }
+    _account_claude_entries "$root"
+    if [[ ${#CW_ACCOUNT_ENTRIES[@]} -gt 0 ]]; then
+        printf 'legacy'
+    else
+        printf 'none'
+    fi
+}
+
 _account_meta_get() {
     local account="$1" harness="$2" field="$3"
     local meta; meta="$(_account_root "$account")/meta.json"
@@ -511,7 +563,7 @@ _doctor_matrix_json() {
     for root in "$CW_ACCOUNTS_DIR"/*/; do
         [[ -d "$root" ]] || continue
         account=$(basename "$root")
-        layout="legacy"; [[ -d "$root/claude" ]] && layout="split"
+        layout="$(_account_layout "$account")"
         $first_a || printf ','
         first_a=false
         printf '{"name":%s,"root":%s,"layout":"%s","default_harness":%s,"harnesses":[' \
