@@ -316,3 +316,56 @@ print(\"ok\")'"
     run "$CW_BIN" account bogus
     [[ "$output" == *"migrate"* ]]
 }
+
+@test "a failed first move leaves no claude dir behind" {
+    local root="$CW_HOME/accounts/solo"
+    mkdir -p "$root/.blocked"
+    echo '{"name":"solo"}' > "$root/meta.json"
+    echo '{"oauth":"token"}' > "$root/.claude.json"
+    echo 'keep me' > "$root/.blocked/state.json"
+    chmod 555 "$root/.blocked"
+    run "$CW_BIN" account migrate solo
+    [ "$status" -ne 0 ]
+    [ ! -d "$root/claude" ]
+    [ -f "$root/.claude.json" ]
+    chmod 755 "$root/.blocked"
+    run bash -c "source '$CW_BIN'; _harness_dir solo claude"
+    [ "$output" = "$root" ]
+}
+
+@test "migrate fails loudly when a move silently leaves a file at the root" {
+    run bash -c "
+        source '$CW_BIN'
+        mv() { [[ \"\$1\" == *'.claude.json' ]] && return 0; command mv \"\$@\"; }
+        _account_migrate acct
+    "
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Migration incomplete"* ]]
+    [[ "$output" == *".claude.json"* ]]
+    [[ "$output" != *"migrated to the split layout"* ]]
+}
+
+@test "undo keeps a self-pointing link whose target is gone" {
+    local root="$CW_HOME/accounts/acct"
+    "$CW_BIN" account migrate acct
+    ln -s "$root/ghost" "$root/claude/ghost"
+    run "$CW_BIN" account migrate acct --undo
+    [ "$status" -eq 0 ]
+    [ ! -d "$root/claude" ]
+    [ -L "$root/ghost" ]
+    run readlink "$root/ghost"
+    [ "$output" = "$root/ghost" ]
+}
+
+@test "a stray file does not make a claude-free account look legacy" {
+    local root="$CW_HOME/accounts/free"
+    mkdir -p "$root/pi"
+    echo '{"name":"free","harness":"pi"}' > "$root/meta.json"
+    echo 'junk' > "$root/.DS_Store"
+    run bash -c "source '$CW_BIN'; _account_layout free"
+    [ "$output" = "none" ]
+    run "$CW_BIN" account migrate free
+    [ "$status" -eq 0 ]
+    [ ! -d "$root/claude" ]
+    [ -f "$root/.DS_Store" ]
+}

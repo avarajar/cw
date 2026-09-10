@@ -190,6 +190,9 @@ _harness_dir() {
 # root entries cw owns — a harness migration never moves these
 CW_ACCOUNT_OWNED="meta.json CLAUDE.md templates skills"
 
+# root entries that mean claude itself has state here — a stray file does not
+CW_CLAUDE_MARKERS=".claude.json .credentials.json settings.json projects todos statsig shell-snapshots history.jsonl ide plugins"
+
 # lists a dir into CW_ACCOUNT_ENTRIES, dotfiles included, empty dir tolerated
 _account_scan_dir() {
     local dir="$1" undo_dot=false undo_null=false
@@ -227,12 +230,20 @@ _account_claude_entries() {
     CW_ACCOUNT_ENTRIES=(${keep[@]+"${keep[@]}"})
 }
 
+# true when the account root is itself a claude config dir
+_account_has_claude_state() {
+    local root="$1" name
+    for name in $CW_CLAUDE_MARKERS; do
+        [[ -e "$root/$name" || -L "$root/$name" ]] && return 0
+    done
+    return 1
+}
+
 # split when a claude subdir exists, legacy when claude state sits at the root, else none
 _account_layout() {
     local root; root="$(_account_root "$1")"
     [[ -d "$root/claude" ]] && { printf 'split'; return 0; }
-    _account_claude_entries "$root"
-    if [[ ${#CW_ACCOUNT_ENTRIES[@]} -gt 0 ]]; then
+    if _account_has_claude_state "$root"; then
         printf 'legacy'
     else
         printf 'none'
@@ -757,23 +768,20 @@ _account_migrate() {
 # moves the claude state at an account root down into claude/
 _account_migrate_split() {
     local account="$1" root="$2" dry="$3"
+    if [[ ! -d "$root/claude" ]] && ! _account_has_claude_state "$root"; then
+        _warn "Account '$account' has no claude state at its root — nothing to move."
+        return 0
+    fi
     _account_claude_entries "$root"
     local entries=(${CW_ACCOUNT_ENTRIES[@]+"${CW_ACCOUNT_ENTRIES[@]}"})
     if [[ ${#entries[@]} -eq 0 ]]; then
-        if [[ -d "$root/claude" ]]; then
-            _warn "Account '$account' is already split — nothing to move."
-        else
-            _warn "Account '$account' has no claude state at its root — nothing to move."
-        fi
+        _warn "Account '$account' is already split — nothing to move."
         return 0
     fi
     [[ -d "$root/claude" ]] && \
         _warn "Account '$account' has ${#entries[@]} entries left at its root — resuming the migration."
     _warn "If you have CLAUDE_CONFIG_DIR=$root hardcoded anywhere, update it to $root/claude."
-    if ! $dry; then
-        mkdir -p "$root/claude" || { _err "Cannot create $root/claude."; return 1; }
-    fi
-    local entry base blocked=0
+    local entry base blocked=0 made=false
     for entry in "${entries[@]}"; do
         base="$(basename "$entry")"
         if [[ -e "$root/claude/$base" || -L "$root/claude/$base" ]]; then
@@ -785,8 +793,14 @@ _account_migrate_split() {
             _dim "  would move $base -> claude/$base"
             continue
         fi
+        # created only once a move is certain, so an interrupted run resolves to the root
+        if [[ ! -d "$root/claude" ]]; then
+            mkdir "$root/claude" || { _err "Cannot create $root/claude."; return 1; }
+            made=true
+        fi
         if ! mv "$entry" "$root/claude/$base"; then
             _err "Failed to move $base. Everything already moved is in claude/; re-run to resume."
+            $made && rmdir "$root/claude" 2>/dev/null
             return 1
         fi
     done
@@ -795,6 +809,16 @@ _account_migrate_split() {
         return 0
     fi
     [[ $blocked -eq 0 ]] || { _err "Some entries stayed at the root. Resolve the conflicts and re-run."; return 1; }
+    # the claim is that the root is clean, not that the loop ended
+    _account_claude_entries "$root"
+    if [[ ${#CW_ACCOUNT_ENTRIES[@]} -gt 0 ]]; then
+        _err "Migration incomplete — ${#CW_ACCOUNT_ENTRIES[@]} entries are still at the root:"
+        for entry in "${CW_ACCOUNT_ENTRIES[@]}"; do
+            _err "  $(basename "$entry")"
+        done
+        _err "Claude now resolves to $root/claude. Move them yourself or run --undo."
+        return 1
+    fi
     _log "Account ${C}$account${NC} migrated to the split layout."
 }
 
@@ -807,7 +831,7 @@ _account_migrate_undo() {
     local entry base blocked=0
     for entry in ${entries[@]+"${entries[@]}"}; do
         base="$(basename "$entry")"
-        if [[ -L "$entry" && "$(readlink "$entry")" == "$root/$base" ]]; then
+        if [[ -L "$entry" && "$(readlink "$entry")" == "$root/$base" && -e "$root/$base" ]]; then
             $dry && { _dim "  would drop the claude/$base link"; continue; }
             rm -f "$entry"
             continue
