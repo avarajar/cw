@@ -1098,7 +1098,7 @@ _mcp_list() {
     local account_flag="" project_flag=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --account|-a) account_flag="$2"; shift 2 ;;
+            --account|-a) account_flag="${2:?--account requires a value}"; shift 2 ;;
             -*)           _err "Unknown flag: $1"; return 1 ;;
             *)            project_flag="$1"; shift ;;
         esac

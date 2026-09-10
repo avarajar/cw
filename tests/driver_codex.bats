@@ -79,8 +79,7 @@ PY
     [[ "$output" == *"no MCP support"* ]]
 }
 
-# prints the element count and a <bracketed> join, since bats' $lines
-# splitting collapses empty array elements and would hide the bug either way
+# prints the element count and a <bracketed> join, since $lines hides empty elements
 _codex_env_probe() {
     run bash -c "
         source '$CW_BIN'
