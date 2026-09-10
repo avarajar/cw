@@ -29,6 +29,7 @@ ACTIVITY_FILE = os.path.join(CW_HOME, "activity.jsonl")
 HARNESS_AUTH_MARKERS = {
     "claude": [".claude.json"],
     "codex": ["auth.json", "env"],
+    "pi": ["auth.json", "env"],
 }
 
 
