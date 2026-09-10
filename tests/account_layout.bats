@@ -52,6 +52,20 @@ setup() { setup_cw_home; }
     [ "$output" = "account rules" ]
 }
 
+@test "_install_account_instructions no-ops when the loaded driver differs from the requested harness" {
+    echo "account rules" > "$CW_HOME/accounts/acct/CLAUDE.md"
+    mkdir -p "$BATS_TEST_TMPDIR/codexdir"
+    run bash -c "
+        source '$CW_BIN'
+        _harness_load claude
+        _install_account_instructions acct codex '$BATS_TEST_TMPDIR/codexdir'
+        [[ -e '$BATS_TEST_TMPDIR/codexdir/AGENTS.md' ]] && echo CREATED
+        [[ \"\$_CW_HARNESS_LOADED\" == claude ]] && echo STILL_CLAUDE
+    "
+    [[ "$output" != *"CREATED"* ]]
+    [[ "$output" == *"STILL_CLAUDE"* ]]
+}
+
 @test "a legacy flat account does not link the file onto itself" {
     echo "account rules" > "$CW_HOME/accounts/acct/CLAUDE.md"
     make_project app >/dev/null
