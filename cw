@@ -232,6 +232,20 @@ except Exception: print('')
     printf '%s' "${h:-$CW_HARNESS_DEFAULT}"
 }
 
+# true when the account's default harness driver reports it connected
+_account_authenticated() {
+    local account="$1" h dir status
+    h="$(_account_default_harness "$account")"
+    dir="$(_harness_dir "$account" "$h")"
+    _harness_load "$h" >/dev/null 2>&1 || return 1
+    status=$(CW_HARNESS_DIR="$dir" harness_doctor 2>/dev/null | python3 -c "
+import json, sys
+try: print(json.load(sys.stdin).get('status', ''))
+except Exception: print('')
+" 2>/dev/null)
+    [[ "$status" == "connected" ]]
+}
+
 # resolves the harness for a command, refusing an override that fights a session
 _resolve_harness() {
     local account="$1" project="$2" session_meta="$3" override="$4"
@@ -289,6 +303,12 @@ _resolve_account() {
 CW_HARNESS_DEFAULT="claude"
 # the user's CW_HARNESS env var, captured once in main before CW_HARNESS becomes the resolved value
 _CW_HARNESS_ENV=""
+CW_HARNESS_ALL="claude codex pi opencode"
+
+# json-encodes a single string argument
+_json_str() {
+    python3 -c "import json,sys; print(json.dumps(sys.argv[1]), end='')" "$1"
+}
 
 # sources a driver and aliases its functions to the generic names
 _harness_load() {
@@ -598,7 +618,7 @@ with open('$CW_CONFIG', 'w') as f: f.write(text)
             for dir in "$CW_ACCOUNTS_DIR"/*/; do
                 [[ -d "$dir" ]] || continue
                 local n; n=$(basename "$dir")
-                local auth="${R}✗${NC}"; [[ -f "$(_harness_dir "$n" claude)/.claude.json" ]] && auth="${G}✓${NC}"
+                local auth="${R}✗${NC}"; _account_authenticated "$n" && auth="${G}✓${NC}"
                 echo -e "  ${C}$n${NC}  [$auth auth]"
             done; echo ""
             ;;
@@ -2607,7 +2627,7 @@ cmd_doctor() {
         for dir in "$CW_ACCOUNTS_DIR"/*/; do
             [[ -d "$dir" ]] || continue
             local n; n=$(basename "$dir")
-            if [[ -f "$(_harness_dir "$n" claude)/.claude.json" ]]; then
+            if _account_authenticated "$n"; then
                 echo -e "    ${G}✓${NC} $n — authenticated"
             else
                 echo -e "    ${Y}!${NC} $n — ${Y}not authenticated${NC} (run ${C}cw launch $n${NC} then /login)"
@@ -3089,7 +3109,7 @@ cmd_dashboard() {
         for dir in "$CW_ACCOUNTS_DIR"/*/; do
             [[ -d "$dir" ]] || continue
             local n; n=$(basename "$dir")
-            local auth="${R}✗${NC}"; [[ -f "$(_harness_dir "$n" claude)/.claude.json" ]] && auth="${G}✓${NC}"
+            local auth="${R}✗${NC}"; _account_authenticated "$n" && auth="${G}✓${NC}"
             echo -e "  ${C}$n${NC}  [$auth]"
         done
     fi

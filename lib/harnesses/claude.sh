@@ -69,3 +69,15 @@ claude_resume() {
     [[ -n "$CW_PROMPT" ]] && HARNESS_ARGV+=("$CW_PROMPT")
     return 0
 }
+
+claude_doctor() {
+    local status detail="null"
+    if ! command -v claude >/dev/null 2>&1; then
+        status="not_installed"; detail='"claude not found on PATH"'
+    elif [[ -f "$CW_HARNESS_DIR/.claude.json" ]]; then
+        status="connected"
+    else
+        status="not_logged_in"
+    fi
+    printf '{"harness":"claude","status":"%s","detail":%s}\n' "$status" "$detail"
+}
