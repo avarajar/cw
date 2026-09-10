@@ -2091,13 +2091,13 @@ PYEOF
     fi
 }
 
-# replaces the Context section of a notes file with fetched markdown
-# body goes through a temp file, never an env var, so a large body can't hit E2BIG
+# replaces the Context section of a notes file with fetched markdown, body via temp file
 _context_write_notes() {
     local notes="$1" body="$2"
     [[ -f "$notes" ]] || return 0
     local tmp; tmp=$(mktemp) || return 1
-    printf '%s' "$body" > "$tmp" || { rm -f "$tmp"; return 1; }
+    trap 'rm -f "$tmp"' INT TERM
+    printf '%s' "$body" > "$tmp" || { rm -f "$tmp"; trap - INT TERM; return 1; }
     CW_NOTES="$notes" CW_BODY_FILE="$tmp" python3 - <<'PY'
 import os, re
 p = os.environ["CW_NOTES"]
@@ -2114,6 +2114,7 @@ with open(p, "w") as f: f.write(text)
 PY
     local rc=$?
     rm -f "$tmp"
+    trap - INT TERM
     return $rc
 }
 

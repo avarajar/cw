@@ -242,6 +242,37 @@ SCRIPT
     [ "$status" -ne 0 ]
 }
 
+@test "_context_write_notes removes its temp file when interrupted mid-write" {
+    local notes="$BATS_TEST_TMPDIR/TASK_NOTES.md"
+    printf '# Task: t\n\n## Context\n<!-- placeholder -->\n' > "$notes"
+    local slowbin="$BATS_TEST_TMPDIR/slowbin"
+    mkdir -p "$slowbin"
+    local faketmp="$BATS_TEST_TMPDIR/faketmp"
+    mkdir -p "$faketmp"
+    # macOS mktemp ignores TMPDIR, so a fake mktemp pins the file where we can watch it
+    cat > "$slowbin/mktemp" <<FAKE
+#!/usr/bin/env bash
+f="$faketmp/tmp.\$\$"
+touch "\$f"
+printf '%s\n' "\$f"
+FAKE
+    chmod +x "$slowbin/mktemp"
+    cat > "$slowbin/python3" <<'FAKE'
+#!/usr/bin/env bash
+sleep 1
+FAKE
+    chmod +x "$slowbin/python3"
+    PATH="$slowbin:$PATH" bash -c "
+        source '$CW_BIN'
+        _context_write_notes '$notes' 'body text'
+    " &
+    local pid=$!
+    sleep 0.3
+    kill -TERM "$pid"
+    wait "$pid" 2>/dev/null || true
+    [ -z "$(find "$faketmp" -type f 2>/dev/null)" ]
+}
+
 @test "_context_fetch_for_task fails when writing the notes fails, instead of reporting success" {
     mkdir -p "$CW_HOME/context"
     cat > "$CW_HOME/context/dummy.sh" <<'EOF'
