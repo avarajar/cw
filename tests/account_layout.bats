@@ -96,6 +96,44 @@ setup() { setup_cw_home; }
     [ "$(call_count)" -eq 0 ]
 }
 
+@test "_account_authenticated is true for a legacy account with .claude.json" {
+    echo '{}' > "$CW_HOME/accounts/acct/.claude.json"
+    run bash -c "source '$CW_BIN'; _account_authenticated acct"
+    [ "$status" -eq 0 ]
+}
+
+@test "_account_authenticated is false for an account that never logged in" {
+    run bash -c "source '$CW_BIN'; _account_authenticated acct"
+    [ "$status" -ne 0 ]
+}
+
+@test "_account_authenticated reads the codex driver for a codex-default account" {
+    python3 - "$CW_HOME/accounts/acct/meta.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+m = json.load(open(p)); m["harness"] = "codex"
+json.dump(m, open(p, "w"))
+PY
+    mkdir -p "$CW_HOME/accounts/acct/codex"
+    touch "$CW_HOME/accounts/acct/codex/auth.json"
+    run bash -c "source '$CW_BIN'; _account_authenticated acct"
+    [ "$status" -eq 0 ]
+}
+
+@test "cw account list marks a codex-only account authenticated" {
+    python3 - "$CW_HOME/accounts/acct/meta.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+m = json.load(open(p)); m["harness"] = "codex"
+json.dump(m, open(p, "w"))
+PY
+    mkdir -p "$CW_HOME/accounts/acct/codex"
+    touch "$CW_HOME/accounts/acct/codex/auth.json"
+    run "$CW_BIN" account list
+    local clean; clean="$(printf '%s' "$output" | sed -E 's/\x1b\[[0-9;]*m//g')"
+    [[ "$clean" == *"[✓ auth]"* ]]
+}
+
 @test "harness_context falls back to the split dir when CW_HARNESS_DIR is unset" {
     mkdir -p "$CW_HOME/accounts/acct/claude"
     run bash -c "

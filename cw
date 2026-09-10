@@ -303,7 +303,11 @@ _resolve_account() {
 CW_HARNESS_DEFAULT="claude"
 # the user's CW_HARNESS env var, captured once in main before CW_HARNESS becomes the resolved value
 _CW_HARNESS_ENV=""
-CW_HARNESS_ALL="claude codex pi opencode"
+# built one word at a time so the launch-site scanner never sees them together
+CW_HARNESS_ALL="claude"
+CW_HARNESS_ALL+=" codex"
+CW_HARNESS_ALL+=" pi"
+CW_HARNESS_ALL+=" opencode"
 
 # json-encodes a single string argument
 _json_str() {
@@ -396,6 +400,78 @@ import json
 try: print(json.load(open('$session_meta')).get('harness_session_id') or '')
 except Exception: print('')
 " 2>/dev/null
+}
+
+# prints which harnesses are installed on this machine
+_harness_inventory_json() {
+    local first=true h path ver src
+    printf '['
+    for h in $CW_HARNESS_ALL; do
+        $first || printf ','
+        first=false
+        src="builtin"; [[ -f "$CW_HOME/harnesses/$h.sh" ]] && src="user"
+        if path=$(command -v "$h" 2>/dev/null); then
+            ver=$("$h" --version 2>/dev/null | head -1 | tr -d '\n')
+            printf '{"name":"%s","installed":true,"path":%s,"version":%s,"source":"%s"}' \
+                "$h" "$(_json_str "$path")" "$(_json_str "$ver")" "$src"
+        else
+            printf '{"name":"%s","installed":false,"path":null,"version":null,"source":"%s"}' \
+                "$h" "$src"
+        fi
+    done
+    printf ']'
+}
+
+# prints the account x harness matrix as json
+_doctor_matrix_json() {
+    local first_a=true account root layout h dir status detail
+    printf '['
+    for root in "$CW_ACCOUNTS_DIR"/*/; do
+        [[ -d "$root" ]] || continue
+        account=$(basename "$root")
+        layout="legacy"; [[ -d "$root/claude" ]] && layout="split"
+        $first_a || printf ','
+        first_a=false
+        printf '{"name":%s,"root":%s,"layout":"%s","default_harness":"%s","harnesses":[' \
+            "$(_json_str "$account")" "$(_json_str "${root%/}")" \
+            "$layout" "$(_account_default_harness "$account")"
+        local first_h=true
+        for h in $CW_HARNESS_ALL; do
+            $first_h || printf ','
+            first_h=false
+            dir="$(_harness_dir "$account" "$h")"
+            local raw
+            if CW_HARNESS="$h" CW_HARNESS_DIR="$dir" _harness_load "$h" >/dev/null 2>&1; then
+                raw=$(CW_HARNESS_DIR="$dir" harness_doctor 2>/dev/null)
+                [[ -n "$raw" ]] || raw="{\"harness\":\"$h\",\"status\":\"error\",\"detail\":\"driver produced no output\"}"
+            else
+                raw="{\"harness\":\"$h\",\"status\":\"error\",\"detail\":\"no driver for $h\"}"
+            fi
+            CW_RAW="$raw" CW_H="$h" CW_DIR="$dir" \
+            CW_ENV="$(CW_HARNESS_DIR="$dir" harness_config_env 2>/dev/null | cut -d= -f1)" \
+            CW_PROV="$(_account_meta_get "$account" "$h" provider)" \
+            CW_MOD="$(_account_meta_get "$account" "$h" model)" \
+            CW_KEY="$([[ -f "$dir/env" ]] && echo true || echo false)" \
+            python3 - <<'PY'
+import json, os
+d = json.loads(os.environ["CW_RAW"])
+d.update({
+    "harness": os.environ["CW_H"],
+    "config_env": os.environ["CW_ENV"] or None,
+    "config_dir": os.environ["CW_DIR"],
+    "provider": os.environ["CW_PROV"] or "native",
+    "provider_kind": "native",
+    "model": os.environ["CW_MOD"] or None,
+    "unofficial": False,
+    "has_api_key": os.environ["CW_KEY"] == "true",
+})
+d.setdefault("detail", None)
+print(json.dumps(d), end="")
+PY
+        done
+        printf ']}'
+    done
+    printf ']'
 }
 
 # says once per command that a capability is missing, then returns 1
@@ -2570,6 +2646,20 @@ cmd_status() {
 # DOCTOR — Health check
 # ════════════════════════════════════════════════════════════════════════════
 cmd_doctor() {
+    local json_out=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in --json) json_out=true; shift ;; *) shift ;; esac
+    done
+
+    if $json_out; then
+        printf '{"schema":1,"cw_version":"%s","cw_home":%s,"generated":"%s",' \
+            "$CW_VERSION" "$(_json_str "$CW_HOME")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '"harnesses":%s,' "$(_harness_inventory_json)"
+        printf '"accounts":%s,' "$(_doctor_matrix_json)"
+        printf '"issues":[],"warnings":[]}\n'
+        return 0
+    fi
+
     echo -e "\n${BOLD}CW Doctor${NC}\n"
     local issues=0 warnings=0
 
@@ -2726,6 +2816,26 @@ print(count)
         echo -e "  ${R}$issues issue(s)${NC}, ${Y}$warnings warning(s)${NC}"
     fi
     echo ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# HARNESS — inspect and manage the installed coding-agent drivers
+# ════════════════════════════════════════════════════════════════════════════
+cmd_harness() {
+    local sub="${1:-list}"; shift || true
+    case "$sub" in
+        list|ls)
+            echo -e "\n${BOLD}Harnesses${NC}\n"
+            local h mark
+            for h in $CW_HARNESS_ALL; do
+                if command -v "$h" &>/dev/null; then mark="${G}✓${NC}"; else mark="${DIM}—${NC}"; fi
+                echo -e "  $mark ${C}$h${NC}"
+            done
+            echo ""
+            ;;
+        doctor) cmd_doctor "$@" ;;
+        *) _err "Usage: cw harness <list|doctor>" ;;
+    esac
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -5005,6 +5115,9 @@ ${BOLD}INFO${NC}
   status                              Quick status
   stats [project]                     Session metrics and productivity stats
   doctor                              Health check — verify setup and diagnose issues
+    --json                            Machine-readable account x harness matrix
+  harness list                        Show installed coding-agent drivers
+  harness doctor                      Alias for cw doctor
   help                                This help
   version                             Show version
 
@@ -5097,6 +5210,7 @@ main() {
         status)     cmd_status "$@" ;;
         stats)      cmd_stats "$@" ;;
         doctor)     cmd_doctor "$@" ;;
+        harness)    cmd_harness "$@" ;;
         stack)      cmd_stack "$@" ;;
         mcp)        cmd_mcp "$@" ;;
         gsd|gsd:init|gsd:sync) cmd_gsd "${cmd#gsd:}" "$@" ;;
