@@ -870,16 +870,47 @@ with open(sf, 'w') as f:
     fi
 }
 
+# finds the --account/-a value or a project's account, without consuming args
+_mcp_peek_account() {
+    local account_flag="" positional=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --account|-a) account_flag="$2"; shift 2 ;;
+            --transport|-t) shift 2 ;;
+            --) shift; break ;;
+            -*) shift ;;
+            *) [[ -z "$positional" ]] && positional="$1"; shift ;;
+        esac
+    done
+    if [[ -n "$account_flag" ]]; then
+        printf '%s' "$account_flag"; return 0
+    fi
+    if [[ -n "$positional" ]]; then
+        local pj
+        if pj=$(_get_project "$positional" 2>/dev/null); then
+            _get_field "$pj" account "$(_default_account)"
+            return 0
+        fi
+    fi
+    printf '%s' "$(_default_account)"
+}
+
 # ════════════════════════════════════════════════════════════════════════════
 # MCP — Manage MCPs per account
 # ════════════════════════════════════════════════════════════════════════════
 cmd_mcp() {
-    _harness_load "${_CW_HARNESS_ENV:-$CW_HARNESS_DEFAULT}" || return 1
+    local sub="${1:-list}"; shift || true
+    local mcp_harness="${_CW_HARNESS_ENV:-}"
+    if [[ -z "$mcp_harness" ]]; then
+        local mcp_account; mcp_account="$(_mcp_peek_account "$@")"
+        [[ -n "$mcp_account" ]] && mcp_harness="$(_account_default_harness "$mcp_account")"
+    fi
+    mcp_harness="${mcp_harness:-$CW_HARNESS_DEFAULT}"
+    _harness_load "$mcp_harness" || return 1
     if ! harness_supports mcp; then
-        _err "Harness '${_CW_HARNESS_ENV:-$CW_HARNESS_DEFAULT}' has no MCP support that cw can configure."
+        _err "Harness '$mcp_harness' has no MCP support that cw can configure."
         return 1
     fi
-    local sub="${1:-list}"; shift || true
     case "$sub" in
         add)    _mcp_add "$@" ;;
         remove|rm) _mcp_remove "$@" ;;
