@@ -20,7 +20,8 @@ print(\"ok\")'"
 }
 
 @test "doctor --json marks an uninstalled harness as not_installed" {
-    run bash -c "'$CW_BIN' doctor --json | python3 -c '
+    local minpath; minpath="$(restricted_path)"
+    run bash -c "PATH='$minpath' '$CW_BIN' doctor --json | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 by = {h[\"name\"]: h for h in d[\"harnesses\"]}
@@ -49,13 +50,17 @@ print(\"ok\")'"
 }
 
 @test "doctor --json marks a per-account harness with no driver as error, not not_installed" {
-    run bash -c "'$CW_BIN' doctor --json | python3 -c '
+    run bash -c "
+        source '$CW_BIN'
+        CW_HARNESS_ALL='fakeharness'
+        _doctor_matrix_json | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
-by = {h[\"harness\"]: h for h in d[\"accounts\"][0][\"harnesses\"]}
-assert by[\"opencode\"][\"status\"] == \"error\", by
-assert by[\"opencode\"][\"detail\"] == \"no driver for opencode\", by
-print(\"ok\")'"
+by = {h[\"harness\"]: h for h in d[0][\"harnesses\"]}
+assert by[\"fakeharness\"][\"status\"] == \"error\", by
+assert by[\"fakeharness\"][\"detail\"] == \"no driver for fakeharness\", by
+print(\"ok\")'
+    "
     [ "$output" = "ok" ]
 }
 

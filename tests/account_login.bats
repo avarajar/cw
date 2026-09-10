@@ -113,9 +113,9 @@ FAKE
 }
 
 @test "an account with no driver for the harness fails cleanly instead of doing something surprising" {
-    run "$CW_BIN" account login acct --harness opencode
+    run "$CW_BIN" account login acct --harness fakeharness
     [ "$status" -ne 0 ]
-    [[ "$output" == *"Unknown harness 'opencode'"* ]]
+    [[ "$output" == *"Unknown harness 'fakeharness'"* ]]
 }
 
 @test "login on an unknown account fails without touching a harness" {
@@ -195,9 +195,9 @@ except subprocess.TimeoutExpired:
 }
 
 @test "a failed --harness login leaves no stray credential directory behind" {
-    run "$CW_BIN" account login acct --harness opencode
+    run "$CW_BIN" account login acct --harness fakeharness
     [ "$status" -ne 0 ]
-    [ ! -d "$CW_HOME/accounts/acct/opencode" ]
+    [ ! -d "$CW_HOME/accounts/acct/fakeharness" ]
 }
 
 @test "an unterminated final line from the harness is not silently dropped" {

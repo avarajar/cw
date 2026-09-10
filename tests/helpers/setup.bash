@@ -67,6 +67,19 @@ with open(f, "w") as fh: json.dump(reg, fh)
 PYX
 }
 
+# a PATH with only basic tools on it — no fake or real harness binaries
+restricted_path() {
+    local dir="$BATS_TEST_TMPDIR/restricted_bin" b p
+    mkdir -p "$dir"
+    for b in bash python3 grep sed awk cut tr date mkdir cat basename dirname find \
+             xargs sort uniq wc head tail rm cp mv ls chmod stat touch env git \
+             readlink realpath mktemp id whoami uname hostname; do
+        p=$(command -v "$b" 2>/dev/null) || continue
+        [[ "$p" == /* ]] && ln -sf "$p" "$dir/$b"
+    done
+    printf '%s' "$dir"
+}
+
 # prints a file's permission bits portably
 mode_of() {
     python3 -c "import os,stat,sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode))[-3:])" "$1"
