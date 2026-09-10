@@ -388,3 +388,17 @@ print(\"ok\")'"
     [[ "$output" == *"Migration incomplete"* ]]
     [[ "$output" == *".claude.json"* ]]
 }
+
+@test "resume finishes a migration whose leftovers carry no claude marker" {
+    local root="$CW_HOME/accounts/half"
+    mkdir -p "$root/claude"
+    echo '{"name":"half"}'   > "$root/meta.json"
+    echo '{"oauth":"token"}' > "$root/claude/.claude.json"
+    echo 'stranded'          > "$root/sandbox-cache"
+    run "$CW_BIN" account migrate half
+    [ "$status" -eq 0 ]
+    [ -f "$root/claude/sandbox-cache" ]
+    [ ! -e "$root/sandbox-cache" ]
+    [ -f "$root/claude/.claude.json" ]
+    [ -f "$root/meta.json" ]
+}
