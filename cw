@@ -2536,7 +2536,19 @@ $acct_resume"
 # SPACES — Show all active spaces
 # ════════════════════════════════════════════════════════════════════════════
 cmd_spaces() {
-    local filter="${1:-}"
+    local filter="" json_out=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) json_out=true; shift ;;
+            *) filter="$1"; shift ;;
+        esac
+    done
+
+    if $json_out; then
+        _spaces_json "$filter"
+        return 0
+    fi
+
     local sessions_dir="$CW_HOME/sessions"
 
     echo -e "\n${BOLD}Active spaces${NC}\n"
@@ -2581,6 +2593,9 @@ for proj in sorted(os.listdir(sessions_dir)):
         stype = m.get("type", "?")
         opens = m.get("opens", 0)
         last = m.get("last_opened", "?")[:10]
+        harness = m.get("harness") or "claude"
+        provider = m.get("provider") or "native"
+        model = m.get("model") or ""
 
         if stype == "task":
             sid = m.get("task", "?")
@@ -2591,13 +2606,17 @@ for proj in sorted(os.listdir(sessions_dir)):
             label = f"review: PR #{sid}"
             cmd = f"cw review {proj} {sid}"
         else: continue
-        spaces.append((label, opens, last, cmd))
+
+        label_extra = harness
+        if provider and provider != "native":
+            label_extra = f"{harness} · {model or provider}"
+        spaces.append((label, opens, last, cmd, label_extra))
 
     if spaces:
         acct = reg.get(proj, {}).get("account", "")
         print(f"  {C}{proj}{NC}  {DIM}({acct}){NC}")
-        for label, opens, last, cmd in spaces:
-            print(f"    {Y}{label}{NC}  {DIM}({opens}x, {last}){NC}")
+        for label, opens, last, cmd, label_extra in spaces:
+            print(f"    {Y}{label}{NC}  {DIM}({opens}x, {last}){NC}  {label_extra}")
             print(f"      {DIM}resume:{NC} {cmd}")
             print(f"      {DIM}close:{NC}  {cmd} --done")
         print()
@@ -2610,6 +2629,65 @@ PYEOF
     echo -e "$output"
     echo -e "  ${DIM}Close all for a project: cw work <proy> --task <t> --done${NC}"
     echo -e "  ${DIM}                            cw review <proy> --pr <n> --done${NC}\n"
+}
+
+# builds the machine-readable spaces payload as a single json object
+_spaces_json() {
+    local filter="$1"
+    local sessions_dir="$CW_HOME/sessions"
+    python3 - "$sessions_dir" "$filter" "$CW_REGISTRY" <<'PYEOF'
+import json, os, sys
+
+sessions_dir, filter_proj, registry = sys.argv[1], sys.argv[2], sys.argv[3]
+
+reg = {}
+try:
+    with open(registry) as f: reg = json.load(f)
+except Exception: pass
+
+spaces = []
+if os.path.isdir(sessions_dir):
+    for proj in sorted(os.listdir(sessions_dir)):
+        proj_dir = os.path.join(sessions_dir, proj)
+        if not os.path.isdir(proj_dir): continue
+        if filter_proj and proj != filter_proj: continue
+        # Walk recursively to find session.json (task names with slashes create nested dirs)
+        for root, dirs, files in os.walk(proj_dir):
+            dirs.sort()
+            if "session.json" not in files: continue
+            meta_file = os.path.join(root, "session.json")
+            try:
+                with open(meta_file) as f: m = json.load(f)
+            except Exception: continue
+            if m.get("status") != "active": continue
+
+            stype = m.get("type", "?")
+            if stype == "task":
+                sid = m.get("task", "?")
+                resume = f"cw work {proj} {sid}"
+            elif stype == "review":
+                sid = m.get("pr", "?")
+                resume = f"cw review {proj} {sid}"
+            else:
+                continue
+
+            spaces.append({
+                "project": proj,
+                "account": reg.get(proj, {}).get("account", ""),
+                "type": stype,
+                "id": sid,
+                "harness": m.get("harness") or "claude",
+                "provider": m.get("provider") or "native",
+                "model": m.get("model") or None,
+                "opens": m.get("opens", 0),
+                "last_opened": m.get("last_opened", ""),
+                "worktree": m.get("worktree", ""),
+                "resume": resume,
+                "close": f"{resume} --done",
+            })
+
+print(json.dumps({"schema": 1, "spaces": spaces}))
+PYEOF
 }
 
 # ── Shared: close space ──────────────────────────────────────────────────
@@ -2810,7 +2888,8 @@ for proj in sorted(os.listdir(sessions_dir)):
         if m.get("status") != "active": continue
         sid = m.get("task", "") or m.get("pr", "?")
         opens = m.get("opens", 0)
-        print(f"  {C}{proj}{NC}  {Y}{sid}{NC}  {DIM}({opens}x){NC}")
+        harness = m.get("harness") or "claude"
+        print(f"  {C}{proj}{NC}  {Y}{sid}{NC}  {DIM}({opens}x){NC}  {harness}")
 PYEOF
     )
     [[ -n "$output" ]] && echo -e "$output"
@@ -2826,6 +2905,15 @@ cmd_status() {
     [[ -f "$CW_REGISTRY" ]] && projs=$(python3 -c "import json; print(len(json.load(open('$CW_REGISTRY'))))" 2>/dev/null || echo 0)
     echo -e "  Accounts:     ${C}$accts${NC}"
     echo -e "  Projects:   ${C}$projs${NC}"
+
+    if [[ -d "$CW_ACCOUNTS_DIR" ]]; then
+        for dir in "$CW_ACCOUNTS_DIR"/*/; do
+            [[ -d "$dir" ]] || continue
+            local n; n=$(basename "$dir")
+            local h; h="$(_account_default_harness "$n")"
+            echo -e "    ${DIM}$n — $h${NC}"
+        done
+    fi
 
     # Recent sessions
     if [[ -f "$CW_SESSIONS_LOG" ]]; then
@@ -5278,7 +5366,8 @@ ${BOLD}MAIN COMMANDS${NC}
     --name <slug>                     Explicit session name (default: derived from prompt)
   open <project>                      Open project quick (no worktree)
   launch [account]                    Open Claude with account (no project needed)
-  spaces                              Show active spaces
+  spaces [project]                    Show active spaces
+    --json                            Machine-readable list of active spaces
   clean                               Remove stale worktrees/sessions
     --days, -d <N>                    Stale threshold (default: 7)
     --dry-run, -n                     Show what would be cleaned

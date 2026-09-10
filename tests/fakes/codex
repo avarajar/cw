@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # records one invocation, then exits with the next code in CW_FAKE_EXIT_SEQ
+: "${CW_FAKE_LOG:?CW_FAKE_LOG must be set}"
 {
     printf 'bin=%s\n' "$(basename "$0")"
     printf 'cwd=%s\n' "$PWD"
