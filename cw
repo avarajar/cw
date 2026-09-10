@@ -1279,8 +1279,7 @@ with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
     local is_new=true
     [[ -f "$session_meta" ]] && is_new=false
 
-    # If session exists but is done, reset it for a fresh start before
-    # resolving the harness, so a closed session never blocks a new choice
+    # If session exists but is done, reset it before resolving the harness
     if ! $is_new; then
         local session_status
         session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
@@ -1612,8 +1611,7 @@ PYEOF
     local is_new=true
     [[ -f "$session_meta" ]] && is_new=false
 
-    # If session exists but is done, reset it for a fresh start before
-    # resolving the harness, so a closed session never blocks a new choice
+    # If session exists but is done, reset it before resolving the harness
     if ! $is_new; then
         local session_status
         session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
@@ -1834,8 +1832,7 @@ cmd_work() {
     local is_new=true
     [[ -f "$session_meta" ]] && is_new=false
 
-    # If session exists but is done, reset it for a fresh start before
-    # resolving the harness, so a closed session never blocks a new choice
+    # If session exists but is done, reset it before resolving the harness
     if ! $is_new; then
         local session_status
         session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
