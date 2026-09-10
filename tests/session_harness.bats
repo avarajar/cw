@@ -68,6 +68,39 @@ PY
     [ "$(call_count)" -eq 0 ]
 }
 
+@test "a closed task session can be reopened with a different harness" {
+    make_project app >/dev/null
+    "$CW_BIN" work app fix-auth
+    "$CW_BIN" work app fix-auth --done
+    rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
+    run "$CW_BIN" work app fix-auth --harness codex
+    [[ "$output" != *"was created with claude"* ]]
+    run grep -q '"harness": "codex"' "$CW_HOME/sessions/app/task-fix-auth/session.json"
+    [ "$status" -eq 0 ]
+}
+
+@test "a closed review session can be reopened with a different harness" {
+    make_project app >/dev/null
+    "$CW_BIN" review app 123
+    "$CW_BIN" review app 123 --done
+    rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
+    run "$CW_BIN" review app 123 --harness codex
+    [[ "$output" != *"was created with claude"* ]]
+    run grep -q '"harness": "codex"' "$CW_HOME/sessions/app/review-pr-123/session.json"
+    [ "$status" -eq 0 ]
+}
+
+@test "a closed loop session can be reopened with a different harness" {
+    make_project app >/dev/null
+    "$CW_BIN" loop app "check the deploy" --name lp
+    "$CW_BIN" loop app lp --done
+    rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
+    run "$CW_BIN" loop app "check the deploy" --name lp --harness codex
+    [[ "$output" != *"was created with claude"* ]]
+    run grep -q '"harness": "codex"' "$CW_HOME/sessions/app/loop-lp/session.json"
+    [ "$status" -eq 0 ]
+}
+
 @test "project register --harness writes the field into projects.json" {
     local path="$BATS_TEST_TMPDIR/app2"
     mkdir -p "$path"

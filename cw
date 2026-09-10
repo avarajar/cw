@@ -1273,6 +1273,21 @@ with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
         return
     fi
 
+    local is_new=true
+    [[ -f "$session_meta" ]] && is_new=false
+
+    # If session exists but is done, reset it for a fresh start before
+    # resolving the harness, so a closed session never blocks a new choice
+    if ! $is_new; then
+        local session_status
+        session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
+        if [[ "$session_status" == "done" ]]; then
+            _log "Previous review for PR #${Y}$pr${NC} was closed — starting fresh"
+            rm -f "$session_meta"
+            is_new=true
+        fi
+    fi
+
     local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "$harness_override") || return 1
     CW_HARNESS="$harness"
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
@@ -1284,20 +1299,6 @@ with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
 
     # ── Create or resume review ──────────────────────────────────────────
     mkdir -p "$session_dir"
-
-    local is_new=true
-    [[ -f "$session_meta" ]] && is_new=false
-
-    # If session exists but is done, reset it for a fresh start
-    if ! $is_new; then
-        local session_status
-        session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
-        if [[ "$session_status" == "done" ]]; then
-            _log "Previous review for PR #${Y}$pr${NC} was closed — starting fresh"
-            rm -f "$session_meta"
-            is_new=true
-        fi
-    fi
 
     if [[ -z "$model_override" ]] && ! $is_new && [[ -f "$session_meta" ]]; then
         local stored_model
@@ -1605,18 +1606,11 @@ PYEOF
     local session_meta="$session_dir/session.json"
     local notes_file="$session_dir/LOOP_NOTES.md"
 
-    local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "$harness_override") || return 1
-    CW_HARNESS="$harness"
-    local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
-    _ensure_statusline "$acct_dir"
-    local provider="${CW_PROVIDER:-native}"
-
-    mkdir -p "$session_dir"
-
     local is_new=true
     [[ -f "$session_meta" ]] && is_new=false
 
-    # If session exists but is done, reset it for a fresh start
+    # If session exists but is done, reset it for a fresh start before
+    # resolving the harness, so a closed session never blocks a new choice
     if ! $is_new; then
         local session_status
         session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
@@ -1626,6 +1620,14 @@ PYEOF
             is_new=true
         fi
     fi
+
+    local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "$harness_override") || return 1
+    CW_HARNESS="$harness"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
+    _ensure_statusline "$acct_dir"
+    local provider="${CW_PROVIDER:-native}"
+
+    mkdir -p "$session_dir"
 
     local model="${model_override:-$(_model_for_type loop)}"
     if [[ -z "$model_override" ]] && ! $is_new && [[ -f "$session_meta" ]]; then
@@ -1826,6 +1828,21 @@ cmd_work() {
         return
     fi
 
+    local is_new=true
+    [[ -f "$session_meta" ]] && is_new=false
+
+    # If session exists but is done, reset it for a fresh start before
+    # resolving the harness, so a closed session never blocks a new choice
+    if ! $is_new; then
+        local session_status
+        session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
+        if [[ "$session_status" == "done" ]]; then
+            _log "Previous session for ${Y}$task${NC} was closed — starting fresh"
+            rm -f "$session_meta"
+            is_new=true
+        fi
+    fi
+
     local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "$harness_override") || return 1
     CW_HARNESS="$harness"
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
@@ -1837,20 +1854,6 @@ cmd_work() {
 
     # ── Create or resume ─────────────────────────────────────────────────
     mkdir -p "$session_dir"
-
-    local is_new=true
-    [[ -f "$session_meta" ]] && is_new=false
-
-    # If session exists but is done, reset it for a fresh start
-    if ! $is_new; then
-        local session_status
-        session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
-        if [[ "$session_status" == "done" ]]; then
-            _log "Previous session for ${Y}$task${NC} was closed — starting fresh"
-            rm -f "$session_meta"
-            is_new=true
-        fi
-    fi
 
     if [[ -z "$model_override" ]] && ! $is_new && [[ -f "$session_meta" ]]; then
         local stored_model
