@@ -232,6 +232,70 @@ except Exception: print('')
     printf '%s' "${h:-$CW_HARNESS_DEFAULT}"
 }
 
+# classifies a provider as native (the harness's own account), local, or a remote api
+_provider_kind() {
+    case "$1" in
+        ""|native)                 printf 'native' ;;
+        ollama|lmstudio|llamacpp)  printf 'local' ;;
+        *)                         printf 'api' ;;
+    esac
+}
+
+# first match wins: override, session, account, config models, harness default
+_resolve_model() {
+    local account="$1" harness="$2" task_type="$3" override="$4" session_meta="$5"
+    if [[ -n "$override" ]]; then printf '%s' "$override"; return 0; fi
+    if [[ -n "$session_meta" && -f "$session_meta" ]]; then
+        local stored
+        stored=$(python3 -c "
+import json
+try: print(json.load(open('$session_meta')).get('model') or '')
+except Exception: print('')
+" 2>/dev/null)
+        [[ -n "$stored" ]] && { printf '%s' "$stored"; return 0; }
+    fi
+    local acct_model; acct_model=$(_account_meta_get "$account" "$harness" model)
+    [[ -n "$acct_model" ]] && { printf '%s' "$acct_model"; return 0; }
+    if [[ "$harness" == "claude" ]]; then
+        _model_for_type "$task_type"
+        return 0
+    fi
+    printf '%s' ""
+}
+
+# resolves an account's provider for a harness, defaulting to native
+_resolve_provider() {
+    local account="$1" harness="$2"
+    local provider; provider="${CW_PROVIDER:-$(_account_meta_get "$account" "$harness" provider)}"
+    printf '%s' "${provider:-native}"
+}
+
+# true when the ollama HTTP endpoint answers, false otherwise — never hangs
+_ollama_reachable() {
+    python3 -c "
+import urllib.request, sys
+try:
+    urllib.request.urlopen('${OLLAMA_HOST:-http://localhost:11434}/api/tags', timeout=1)
+except Exception: sys.exit(1)
+" 2>/dev/null
+}
+
+# true when the named model is already pulled into the local ollama daemon
+_ollama_has_model() {
+    [[ -n "$1" ]] || return 1
+    python3 - "$1" <<'PY' 2>/dev/null
+import json, os, sys, urllib.request
+host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+try:
+    with urllib.request.urlopen(host + "/api/tags", timeout=1) as r:
+        tags = json.load(r)
+except Exception:
+    sys.exit(1)
+names = {m.get("name", "") for m in tags.get("models", [])}
+sys.exit(0 if sys.argv[1] in names else 1)
+PY
+}
+
 # prints the account's default-harness doctor status, or "error" with no driver
 _account_harness_status() {
     local account="$1" h dir status
@@ -457,24 +521,43 @@ _doctor_matrix_json() {
             else
                 raw="{\"harness\":\"$h\",\"status\":\"error\",\"detail\":\"no driver for $h\"}"
             fi
+            local prov kind model_name
+            prov="$(_account_meta_get "$account" "$h" provider)"
+            kind="$(_provider_kind "$prov")"
+            model_name="$(_account_meta_get "$account" "$h" model)"
+            local reachable="false" pulled="false"
+            if [[ "$kind" == "local" ]]; then
+                _ollama_reachable && reachable="true"
+                _ollama_has_model "$model_name" && pulled="true"
+            fi
             CW_RAW="$raw" CW_H="$h" CW_DIR="$dir" \
             CW_ENV="$(CW_HARNESS_DIR="$dir" harness_config_env 2>/dev/null | cut -d= -f1)" \
-            CW_PROV="$(_account_meta_get "$account" "$h" provider)" \
-            CW_MOD="$(_account_meta_get "$account" "$h" model)" \
+            CW_PROV="$prov" CW_KIND="$kind" CW_MOD="$model_name" \
+            CW_ENDPOINT="${OLLAMA_HOST:-http://localhost:11434}" \
+            CW_REACHABLE="$reachable" CW_PULLED="$pulled" \
             CW_KEY="$([[ -f "$dir/env" ]] && echo true || echo false)" \
             python3 - <<'PY'
 import json, os
 d = json.loads(os.environ["CW_RAW"])
+prov = os.environ["CW_PROV"] or "native"
+kind = os.environ["CW_KIND"]
 d.update({
     "harness": os.environ["CW_H"],
     "config_env": os.environ["CW_ENV"] or None,
     "config_dir": os.environ["CW_DIR"],
-    "provider": os.environ["CW_PROV"] or "native",
-    "provider_kind": "native",
+    "provider": prov,
+    "provider_kind": kind,
     "model": os.environ["CW_MOD"] or None,
     "unofficial": False,
     "has_api_key": os.environ["CW_KEY"] == "true",
 })
+if kind == "local":
+    d["status"] = "local"
+    d["detail"] = {
+        "endpoint": os.environ.get("CW_ENDPOINT") or "http://localhost:11434",
+        "reachable": os.environ.get("CW_REACHABLE") == "true",
+        "model_pulled": os.environ.get("CW_PULLED") == "true",
+    }
 d.setdefault("detail", None)
 print(json.dumps(d), end="")
 PY
@@ -593,12 +676,16 @@ _harness_api_key_var() {
 # authenticates an account against a harness, headless or via a stdin api key
 _account_login() {
     local account="${1:?Usage: cw account login <account> --harness <h>}"; shift
-    local harness="" no_browser="" api_key_stdin="" stdin_marker=""
+    local harness="" no_browser="" api_key_stdin=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --harness|-H)   harness="${2:?--harness requires a value}"; shift 2 ;;
+            --harness|-H)
+                [[ $# -ge 2 ]] || { _err "--harness requires a value"; return 1; }
+                harness="$2"; shift 2 ;;
             --no-browser)   no_browser=1; shift ;;
-            --with-api-key) stdin_marker="${2:?--with-api-key requires a trailing -}"; api_key_stdin=1; shift 2 ;;
+            --with-api-key)
+                [[ $# -ge 2 ]] || { _err "--with-api-key requires a trailing -"; return 1; }
+                api_key_stdin=1; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -684,6 +771,7 @@ models:
   plan: opus
   create: haiku
   open: sonnet
+  loop: sonnet
 YAML
     fi
 
@@ -730,17 +818,39 @@ cmd_account() {
     local sub="${1:-list}"; shift || true
     case "$sub" in
         add)
-            local name="${1:?Usage: cw account add <name>}"
-            local dir="$CW_ACCOUNTS_DIR/$name"
+            local name="${1:?Usage: cw account add <name>}"; shift || true
+            local harness="" provider="" model=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --harness|-H) harness="$2"; shift 2 ;;
+                    --provider|-p) provider="$2"; shift 2 ;;
+                    --model|-m)   model="$2"; shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            local dir; dir="$(_account_root "$name")"
             [[ -d "$dir" ]] && { _warn "Account '$name' already exists."; return 1; }
-            mkdir -p "$dir"
-            echo "{\"name\":\"$name\",\"created\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > "$dir/meta.json"
+            harness="${harness:-$CW_HARNESS_DEFAULT}"
+            mkdir -p "$dir" "$(_harness_dir "$name" "$harness")"
+            CW_A_NAME="$name" CW_A_H="$harness" CW_A_META="$dir/meta.json" python3 - <<'PY'
+import json, os
+from datetime import datetime, timezone
+meta = {
+    "name": os.environ["CW_A_NAME"],
+    "created": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "harness": os.environ["CW_A_H"],
+    "harnesses": {},
+}
+with open(os.environ["CW_A_META"], "w") as f: json.dump(meta, f, indent=2)
+PY
+            [[ -n "$provider" ]] && _account_meta_set "$name" "$harness" provider "$provider"
+            [[ -n "$model" ]]    && _account_meta_set "$name" "$harness" model "$model"
 
             # Auto-install arcade hooks if setup was done
             if [[ -f "$CW_HOME/.arcade-hook" ]]; then
                 local hook_script; hook_script=$(cat "$CW_HOME/.arcade-hook")
                 if [[ -f "$hook_script" ]]; then
-                    _arcade_install_hooks_for "$dir/settings.json" "$hook_script"
+                    _arcade_install_hooks_for "$(_harness_dir "$name" "$harness")/settings.json" "$hook_script"
                     _log "  Activity hooks auto-installed."
                 fi
             fi
@@ -761,7 +871,7 @@ with open('$CW_CONFIG', 'w') as f: f.write(text)
             echo ""
             echo -e "  ${BOLD}Next steps:${NC}"
             echo -e "  ${Y}1.${NC} Authenticate this account:"
-            echo -e "     ${BOLD}cw account login $name --harness claude${NC}"
+            echo -e "     ${BOLD}cw account login $name --harness $harness${NC}"
             echo ""
             echo -e "  ${Y}2.${NC} Register a project:"
             echo -e "     ${C}cw project register <path> --account $name${NC}"
@@ -1524,25 +1634,19 @@ with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
     _ensure_statusline "$acct_dir"
 
-    local model="${model_override:-$(_model_for_type review)}"
+    local model; model="$(_resolve_model "$account" "$harness" review "$model_override" "$session_meta")"
     [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
-    local provider="${CW_PROVIDER:-native}"
+    local provider; provider="$(_resolve_provider "$account" "$harness")"
 
     # ── Create or resume review ──────────────────────────────────────────
     mkdir -p "$session_dir"
-
-    if [[ -z "$model_override" ]] && ! $is_new && [[ -f "$session_meta" ]]; then
-        local stored_model
-        stored_model=$(python3 -c "import json; print(json.load(open('$session_meta')).get('model',''))" 2>/dev/null)
-        [[ -n "$stored_model" ]] && model="$stored_model"
-    fi
 
     if $is_new; then
         _log "New review: ${C}$name${NC} PR #${Y}$pr${NC}"
         _dim "  Model: ${model:-claude default}"
 
         # Save session metadata
-        CW_SESSION_HARNESS="$harness" python3 -c "
+        CW_SESSION_HARNESS="$harness" CW_SESSION_PROVIDER="$provider" python3 -c "
 import json, os
 from datetime import datetime, timezone
 meta = {
@@ -1554,7 +1658,7 @@ meta = {
     'notes': '$notes_file',
     'harness': os.environ['CW_SESSION_HARNESS'],
     'harness_session_id': '',
-    'provider': '$provider',
+    'provider': os.environ['CW_SESSION_PROVIDER'],
     'status': 'active',
     'created': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'last_opened': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -1648,7 +1752,7 @@ If I say 'none', do not post. If I say 'edit', let me modify before posting."
         local prompt_file="$session_dir/recheck_prompt.txt"
         printf '%s' "$recheck_prompt" > "$prompt_file"
         CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account"
-        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
         CW_PROMPT="$(cat "$prompt_file")"
         CW_SESSION_REF="$(_read_harness_ref "$session_meta")"
         _harness_load "$CW_HARNESS" || return 1
@@ -1740,7 +1844,7 @@ If I say 'none', do not post. If I say 'edit', let me modify the findings before
         local prompt_file="$session_dir/init_prompt.txt"
         printf '%s' "$review_prompt" > "$prompt_file"
         CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account"
-        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
         CW_PROMPT="$(cat "$prompt_file")"
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
@@ -1856,16 +1960,11 @@ PYEOF
     CW_HARNESS="$harness"
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
     _ensure_statusline "$acct_dir"
-    local provider="${CW_PROVIDER:-native}"
+    local provider; provider="$(_resolve_provider "$account" "$harness")"
 
     mkdir -p "$session_dir"
 
-    local model="${model_override:-$(_model_for_type loop)}"
-    if [[ -z "$model_override" ]] && ! $is_new && [[ -f "$session_meta" ]]; then
-        local stored_model
-        stored_model=$(python3 -c "import json; print(json.load(open('$session_meta')).get('model',''))" 2>/dev/null)
-        [[ -n "$stored_model" ]] && model="$stored_model"
-    fi
+    local model; model="$(_resolve_model "$account" "$harness" loop "$model_override" "$session_meta")"
     [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
 
     if $is_new; then
@@ -1952,7 +2051,7 @@ PYEOF
         fi
         printf '%s' "$init_prompt" > "$session_dir/loop_prompt.txt"
         CW_PROJECT="$name" CW_TASK="loop-$slug" CW_TASK_TYPE="loop" CW_ACCOUNT="$account"
-        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
         CW_PROMPT="$(cat "$session_dir/loop_prompt.txt")"
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
@@ -1961,7 +2060,7 @@ PYEOF
     else
         local resume_prompt="Resume the loop for this session: read $notes_file for the objective and interval, then re-invoke /loop with that same objective (and interval, if any)."
         CW_PROJECT="$name" CW_TASK="loop-$slug" CW_TASK_TYPE="loop" CW_ACCOUNT="$account"
-        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
         CW_PROMPT="$resume_prompt"
         CW_SESSION_REF="$(_read_harness_ref "$session_meta")"
         _harness_load "$CW_HARNESS" || return 1
@@ -2079,18 +2178,12 @@ cmd_work() {
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
     _ensure_statusline "$acct_dir"
 
-    local model="${model_override:-$(_model_for_type work)}"
+    local model; model="$(_resolve_model "$account" "$harness" work "$model_override" "$session_meta")"
     [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
-    local provider="${CW_PROVIDER:-native}"
+    local provider; provider="$(_resolve_provider "$account" "$harness")"
 
     # ── Create or resume ─────────────────────────────────────────────────
     mkdir -p "$session_dir"
-
-    if [[ -z "$model_override" ]] && ! $is_new && [[ -f "$session_meta" ]]; then
-        local stored_model
-        stored_model=$(python3 -c "import json; print(json.load(open('$session_meta')).get('model',''))" 2>/dev/null)
-        [[ -n "$stored_model" ]] && model="$stored_model"
-    fi
 
     if $is_new; then
         _log "New task: ${C}$name${NC} task=${Y}$task${NC}"
@@ -2280,7 +2373,7 @@ $acct_ctx"
         fi
 
         # Save session
-        CW_SESSION_HARNESS="$harness" python3 -c "
+        CW_SESSION_HARNESS="$harness" CW_SESSION_PROVIDER="$provider" python3 -c "
 import json, os
 from datetime import datetime, timezone
 meta = {
@@ -2291,7 +2384,7 @@ meta = {
     'model': '$model',
     'harness': os.environ['CW_SESSION_HARNESS'],
     'harness_session_id': '',
-    'provider': '$provider',
+    'provider': os.environ['CW_SESSION_PROVIDER'],
     'status': 'active',
     'created': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'last_opened': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -2361,7 +2454,7 @@ After setting up the workspace, analyze the task scope and create an agent team 
 
 MANDATORY — Comment & notes style: Keep every comment to a single short line. Never write multi-line comment blocks or docstring-style explanations. This applies both to comments in code and to notes you write in TASK_NOTES.md or any task file. Comments must never reference task IDs, branch names, or GitHub/Linear issue or PR numbers — that context belongs in the PR description, not in the code. This rule is not optional; follow it in every file you touch."
         printf '%s' "$init_prompt" > "$prompt_file"
-        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
         CW_TEAM_ENV="$team_env" CW_PROMPT="$(cat "$prompt_file")"
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
@@ -2396,7 +2489,7 @@ $acct_resume"
         local session_name="$account/$name/$task"
 
         # Try to resume named session; fall back to --continue, then start fresh
-        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
         CW_TEAM_ENV="$team_env" CW_PROMPT="$resume_msg"
         CW_SESSION_REF="$(_read_harness_ref "$session_meta")"
         _harness_load "$CW_HARNESS" || return 1
@@ -2405,7 +2498,7 @@ $acct_resume"
         _record_harness_ref "$session_meta"
     else
         local session_name="$account/$name/$task"
-        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
         CW_TEAM_ENV="$team_env" CW_PROMPT=""
         if $team_flag && [[ -n "$team_prompt" ]]; then
             CW_PROMPT="Create an agent team for this task: $team_prompt"
@@ -3085,8 +3178,9 @@ cmd_plan() {
     local harness; harness=$(_resolve_harness "$account" "$name" "" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
     CW_HARNESS="$harness"
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
-    local model="${model_override:-$(_model_for_type plan)}"
+    local model; model="$(_resolve_model "$account" "$harness" plan "$model_override" "")"
     [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
+    local provider; provider="$(_resolve_provider "$account" "$harness")"
 
     _log "Planning: ${C}$name${NC} — ${Y}$description${NC}"
     _dim "  Model: ${model:-claude default}"
@@ -3122,7 +3216,7 @@ IMPORTANT: Keep the plan focused and practical. Don't over-split — 2-4 tasks i
     cd "$path"
     _set_tab_title "plan: $name"
     export CW_PROJECT="$name" CW_TASK="plan" CW_TASK_TYPE="plan" CW_ACCOUNT="$account"
-    CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$account/$name/plan" CW_MODEL="$model"
+    CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$account/$name/plan" CW_MODEL="$model" CW_PROVIDER="$provider"
     CW_PROMPT="$plan_prompt"
     _harness_load "$CW_HARNESS" || return 1
     _harness_context
@@ -4979,9 +5073,9 @@ cmd_create() {
     local harness; harness=$(_resolve_harness "$account" "$proj_name" "$session_meta" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
     CW_HARNESS="$harness"
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
-    local model="${model_override:-$(_model_for_type create)}"
+    local model; model="$(_resolve_model "$account" "$harness" create "$model_override" "$session_meta")"
     [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
-    local provider="${CW_PROVIDER:-native}"
+    local provider; provider="$(_resolve_provider "$account" "$harness")"
 
     # ── Create directory ──────────────────────────────────────────────
     base_dir="${base_dir:-${CW_WORKSPACE:-$HOME/workspace}}"
@@ -5078,7 +5172,7 @@ Create an agent team to build this project in parallel. Analyze the scope and sp
     local session_dir="$CW_HOME/sessions/$proj_name/task-init"
     mkdir -p "$session_dir"
 
-    CW_SESSION_HARNESS="$harness" python3 -c "
+    CW_SESSION_HARNESS="$harness" CW_SESSION_PROVIDER="$provider" python3 -c "
 import json, os
 from datetime import datetime, timezone
 meta = {
@@ -5088,7 +5182,7 @@ meta = {
     'source': '$source', 'source_url': '$source_url',
     'harness': os.environ['CW_SESSION_HARNESS'],
     'harness_session_id': '',
-    'provider': '$provider',
+    'provider': os.environ['CW_SESSION_PROVIDER'],
     'status': 'active',
     'created': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'last_opened': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -5121,7 +5215,7 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
     [[ -n "$team_env" ]] && _log "Agent teams ${G}enabled${NC}"
     _ensure_statusline "$acct_dir"
 
-    CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$account/$proj_name/init" CW_MODEL="$model"
+    CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$account/$proj_name/init" CW_MODEL="$model" CW_PROVIDER="$provider"
     CW_TEAM_ENV="$team_env" CW_PROMPT="$(cat "$prompt_file")"
     _harness_load "$CW_HARNESS" || return 1
     _harness_context

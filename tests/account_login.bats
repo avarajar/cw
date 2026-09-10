@@ -138,9 +138,7 @@ env > "$envlog"
 exit 0
 FAKE
     chmod +x "$BATS_TEST_TMPDIR/fakes/codex"
-    # shims the real env binary to catch a secret riding in ITS argv, the
-    # actual leak vector: "env KEY=VAL cmd" puts KEY=VAL on env's own argv,
-    # not the launched process's, which is why the fake codex above can't see it
+    # shims env to catch a secret riding in env's own argv, not the launched process's
     cat > "$BATS_TEST_TMPDIR/fakes/env" <<FAKE
 #!/usr/bin/env bash
 if [[ \$# -eq 0 ]]; then
@@ -225,9 +223,7 @@ FAKE
 }
 
 @test "login's exit status is the child's, even if the scraper stage fails on its own" {
-    # shadows _login_scrape after sourcing, to prove PIPESTATUS[0] (not \$?)
-    # is what _account_login reports — pipefail would report the scraper's
-    # own failure here if the code used \$? instead
+    # proves PIPESTATUS[0], not \$?, is what _account_login reports here
     run bash -c "
         source '$CW_BIN'
         _login_scrape() { cat >/dev/null; return 1; }

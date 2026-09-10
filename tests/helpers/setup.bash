@@ -2,6 +2,7 @@
 setup_cw_home() {
     unset CLAUDE_CONFIG_DIR CODEX_HOME PI_CODING_AGENT_DIR OPENCODE_DATA_DIR CW_HARNESS
     unset CW_CLAUDE_FLAGS CW_CODEX_FLAGS CW_MODEL CW_PROMPT CW_EXTRA_FLAGS CW_SESSION_REF
+    unset OLLAMA_HOST CW_PROVIDER
     export HOME="$BATS_TEST_TMPDIR/home"
     export CW_HOME="$BATS_TEST_TMPDIR/cw"
     export CW_FAKE_LOG="$BATS_TEST_TMPDIR/calls.log"
@@ -68,4 +69,46 @@ PYX
 # prints a file's permission bits portably
 mode_of() {
     python3 -c "import os,stat,sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode))[-3:])" "$1"
+}
+
+# starts a local /api/tags stub on 127.0.0.1, exports OLLAMA_HOST at it, waits until it answers
+start_ollama_stub() {
+    local models_json="$1"
+    [[ -n "$models_json" ]] || models_json='[{"name":"qwen3-coder:14b"}]'
+    local port
+    port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+    python3 - "$port" "$models_json" > "$BATS_TEST_TMPDIR/ollama-stub.log" 2>&1 <<'PY' &
+import http.server, json, sys
+port, models_json = int(sys.argv[1]), sys.argv[2]
+body = json.dumps({"models": json.loads(models_json)}).encode()
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a):
+        pass
+http.server.HTTPServer(('127.0.0.1', port), H).serve_forever()
+PY
+    OLLAMA_STUB_PID=$!
+    export OLLAMA_STUB_PID
+    export OLLAMA_HOST="http://127.0.0.1:$port"
+    local i
+    for i in $(seq 1 50); do
+        python3 -c "import urllib.request; urllib.request.urlopen('$OLLAMA_HOST/api/tags', timeout=0.2)" 2>/dev/null && return 0
+        sleep 0.05
+    done
+    return 1
+}
+
+stop_ollama_stub() {
+    [[ -n "${OLLAMA_STUB_PID:-}" ]] && kill "$OLLAMA_STUB_PID" 2>/dev/null
+    wait "$OLLAMA_STUB_PID" 2>/dev/null || true
+    unset OLLAMA_STUB_PID
+}
+
+# a port nothing is listening on, for a deterministic loopback connection refusal
+free_local_port() {
+    python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'
 }

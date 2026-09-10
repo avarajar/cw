@@ -32,8 +32,18 @@ _codex_base() {
     return 0
 }
 
+# writes an openai-compatible provider into the account's codex config
+_codex_write_provider() {
+    local provider="$1" model="$2"
+    [[ -n "$provider" && "$provider" != "native" ]] || return 0
+    mkdir -p "$CW_HARNESS_DIR"
+    printf 'model = "%s"\nmodel_provider = "%s"\n' "$model" "$provider" \
+        > "$CW_HARNESS_DIR/config.toml"
+}
+
 # unverified: interactive launch argv beyond the bare binary
 codex_launch() {
+    _codex_write_provider "${CW_PROVIDER:-}" "$CW_MODEL"
     _codex_base
     [[ -n "$CW_MODEL" ]] && HARNESS_ARGV+=(--model "$CW_MODEL")
     [[ -n "$CW_PROMPT" ]] && HARNESS_ARGV+=("$CW_PROMPT")
