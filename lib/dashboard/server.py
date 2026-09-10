@@ -30,6 +30,7 @@ HARNESS_AUTH_MARKERS = {
     "claude": [".claude.json"],
     "codex": ["auth.json", "env"],
     "pi": ["auth.json", "env"],
+    "opencode": ["auth.json", "env"],
 }
 
 
