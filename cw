@@ -733,6 +733,108 @@ _harness_api_key_var() {
     esac
 }
 
+# opt-in only — nothing in cw calls this on a user's behalf
+_account_migrate() {
+    local account="${1:?Usage: cw account migrate <account> [--dry-run|--undo]}"; shift || true
+    local dry=false undo=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run) dry=true; shift ;;
+            -n)        dry=true; shift ;;
+            --undo)    undo=true; shift ;;
+            *) _err "Unknown flag: $1"; return 1 ;;
+        esac
+    done
+    local root; root="$(_account_root "$account")"
+    [[ -d "$root" ]] || { _err "Account '$account' not found."; return 1; }
+    if $undo; then
+        _account_migrate_undo "$account" "$root" "$dry"
+    else
+        _account_migrate_split "$account" "$root" "$dry"
+    fi
+}
+
+# moves the claude state at an account root down into claude/
+_account_migrate_split() {
+    local account="$1" root="$2" dry="$3"
+    _account_claude_entries "$root"
+    local entries=(${CW_ACCOUNT_ENTRIES[@]+"${CW_ACCOUNT_ENTRIES[@]}"})
+    if [[ ${#entries[@]} -eq 0 ]]; then
+        if [[ -d "$root/claude" ]]; then
+            _warn "Account '$account' is already split — nothing to move."
+        else
+            _warn "Account '$account' has no claude state at its root — nothing to move."
+        fi
+        return 0
+    fi
+    [[ -d "$root/claude" ]] && \
+        _warn "Account '$account' has ${#entries[@]} entries left at its root — resuming the migration."
+    _warn "If you have CLAUDE_CONFIG_DIR=$root hardcoded anywhere, update it to $root/claude."
+    if ! $dry; then
+        mkdir -p "$root/claude" || { _err "Cannot create $root/claude."; return 1; }
+    fi
+    local entry base blocked=0
+    for entry in "${entries[@]}"; do
+        base="$(basename "$entry")"
+        if [[ -e "$root/claude/$base" || -L "$root/claude/$base" ]]; then
+            _warn "  skipping $base — claude/$base already exists"
+            blocked=1
+            continue
+        fi
+        if $dry; then
+            _dim "  would move $base -> claude/$base"
+            continue
+        fi
+        if ! mv "$entry" "$root/claude/$base"; then
+            _err "Failed to move $base. Everything already moved is in claude/; re-run to resume."
+            return 1
+        fi
+    done
+    if $dry; then
+        _log "Dry run — nothing moved."
+        return 0
+    fi
+    [[ $blocked -eq 0 ]] || { _err "Some entries stayed at the root. Resolve the conflicts and re-run."; return 1; }
+    _log "Account ${C}$account${NC} migrated to the split layout."
+}
+
+# moves a split account's claude/ contents back up to the root
+_account_migrate_undo() {
+    local account="$1" root="$2" dry="$3"
+    [[ -d "$root/claude" ]] || { _warn "Account '$account' is already flat."; return 0; }
+    _account_scan_dir "$root/claude"
+    local entries=(${CW_ACCOUNT_ENTRIES[@]+"${CW_ACCOUNT_ENTRIES[@]}"})
+    local entry base blocked=0
+    for entry in ${entries[@]+"${entries[@]}"}; do
+        base="$(basename "$entry")"
+        if [[ -L "$entry" && "$(readlink "$entry")" == "$root/$base" ]]; then
+            $dry && { _dim "  would drop the claude/$base link"; continue; }
+            rm -f "$entry"
+            continue
+        fi
+        if [[ -e "$root/$base" || -L "$root/$base" ]]; then
+            _warn "  skipping claude/$base — $base already exists at the root"
+            blocked=1
+            continue
+        fi
+        if $dry; then
+            _dim "  would move claude/$base up"
+            continue
+        fi
+        if ! mv "$entry" "$root/$base"; then
+            _err "Failed to move claude/$base. Everything already moved is at the root; re-run to resume."
+            return 1
+        fi
+    done
+    if $dry; then
+        _log "Dry run — nothing moved."
+        return 0
+    fi
+    [[ $blocked -eq 0 ]] || { _err "Some entries stayed in claude/. Resolve the conflicts and re-run."; return 1; }
+    rmdir "$root/claude" 2>/dev/null || { _err "Could not remove $root/claude."; return 1; }
+    _log "Account ${C}$account${NC} restored to the flat layout."
+}
+
 # authenticates an account against a harness, headless or via a stdin api key
 _account_login() {
     local account="${1:?Usage: cw account login <account> --harness <h>}"; shift
@@ -963,7 +1065,10 @@ with open('$CW_CONFIG', 'w') as f: f.write(text)
         login)
             _account_login "$@"
             ;;
-        *) _err "Subcommands: add | list | remove | login" ;;
+        migrate)
+            _account_migrate "$@"
+            ;;
+        *) _err "Subcommands: add | list | remove | login | migrate" ;;
     esac
 }
 
@@ -5506,6 +5611,9 @@ ${BOLD}SETUP${NC}
   account login <name> --harness <h>  Authenticate an account
     --no-browser                      Headless / device-code login
     --with-api-key -                  Read an api key from stdin
+  account migrate <name>              Move root claude state into <account>/claude/
+    --dry-run, -n                     Show what would move, touch nothing
+    --undo                            Move it back up to the account root
   project register [path] [opts]       Register project (path defaults to cwd)
     --account, -a <account>
     --type, -t <type>                 fullstack | api | knowledge | infra | agents
