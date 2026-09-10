@@ -68,6 +68,29 @@ PY
     [ "$(call_count)" -eq 0 ]
 }
 
+@test "a --harness value with a single quote does not break work's session.json" {
+    make_project app >/dev/null
+    run "$CW_BIN" work app fix-auth --harness "x'"
+    run python3 -c "import json; print(json.load(open('$CW_HOME/sessions/app/task-fix-auth/session.json'))['harness'])"
+    [ "$status" -eq 0 ]
+    [ "$output" = "x'" ]
+}
+
+@test "a --harness value with a single quote does not break review's session.json" {
+    make_project app >/dev/null
+    run "$CW_BIN" review app 123 --harness "x'"
+    run python3 -c "import json; print(json.load(open('$CW_HOME/sessions/app/review-pr-123/session.json'))['harness'])"
+    [ "$status" -eq 0 ]
+    [ "$output" = "x'" ]
+}
+
+@test "a --harness value with a single quote does not break create's session.json" {
+    run "$CW_BIN" create "a test project" --name qcreate --dir "$BATS_TEST_TMPDIR/createdir" --harness "x'"
+    run python3 -c "import json; print(json.load(open('$CW_HOME/sessions/qcreate/task-init/session.json'))['harness'])"
+    [ "$status" -eq 0 ]
+    [ "$output" = "x'" ]
+}
+
 @test "the CW_HARNESS env var routes like --harness would" {
     make_project app >/dev/null
     python3 - "$CW_HOME/accounts/acct/meta.json" <<'PY'

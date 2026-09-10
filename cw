@@ -1314,8 +1314,8 @@ with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
         _dim "  Model: ${model:-claude default}"
 
         # Save session metadata
-        python3 -c "
-import json
+        CW_SESSION_HARNESS="$harness" python3 -c "
+import json, os
 from datetime import datetime, timezone
 meta = {
     'project': '$name',
@@ -1324,7 +1324,7 @@ meta = {
     'account': '$account',
     'model': '$model',
     'notes': '$notes_file',
-    'harness': '$harness',
+    'harness': os.environ['CW_SESSION_HARNESS'],
     'harness_session_id': '',
     'provider': '$provider',
     'status': 'active',
@@ -2052,8 +2052,8 @@ $acct_ctx"
         fi
 
         # Save session
-        python3 -c "
-import json
+        CW_SESSION_HARNESS="$harness" python3 -c "
+import json, os
 from datetime import datetime, timezone
 meta = {
     'project': '$name', 'task': '$task', 'type': 'task',
@@ -2061,7 +2061,7 @@ meta = {
     'worktree': '$wt_dir', 'notes': '$notes_file',
     'source': '$task_source', 'source_url': '$task_url',
     'model': '$model',
-    'harness': '$harness',
+    'harness': os.environ['CW_SESSION_HARNESS'],
     'harness_session_id': '',
     'provider': '$provider',
     'status': 'active',
@@ -4810,15 +4810,15 @@ Create an agent team to build this project in parallel. Analyze the scope and sp
     local session_dir="$CW_HOME/sessions/$proj_name/task-init"
     mkdir -p "$session_dir"
 
-    python3 -c "
-import json
+    CW_SESSION_HARNESS="$harness" python3 -c "
+import json, os
 from datetime import datetime, timezone
 meta = {
     'project': '$proj_name', 'task': 'init', 'type': 'task',
     'account': '$account',
     'worktree': '$proj_path',
     'source': '$source', 'source_url': '$source_url',
-    'harness': '$harness',
+    'harness': os.environ['CW_SESSION_HARNESS'],
     'harness_session_id': '',
     'provider': '$provider',
     'status': 'active',
