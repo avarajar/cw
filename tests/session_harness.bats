@@ -62,9 +62,9 @@ PY
 
 @test "a --harness with no driver fails clearly and launches nothing" {
     make_project app >/dev/null
-    run "$CW_BIN" work app fix-auth --harness codex
+    run "$CW_BIN" work app fix-auth --harness ghostharness
     [ "$status" -ne 0 ]
-    [[ "$output" == *"Unknown harness 'codex'"* ]]
+    [[ "$output" == *"Unknown harness 'ghostharness'"* ]]
     [ "$(call_count)" -eq 0 ]
 }
 
@@ -114,22 +114,22 @@ PY
 }
 
 @test "cw launch fails cleanly when CW_HARNESS names a harness with no driver" {
-    run bash -c "CW_HARNESS=codex '$CW_BIN' launch acct"
+    run bash -c "CW_HARNESS=ghostharness '$CW_BIN' launch acct"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"Unknown harness 'codex'"* ]]
+    [[ "$output" == *"Unknown harness 'ghostharness'"* ]]
     [ "$(call_count)" -eq 0 ]
 }
 
 @test "cw mcp fails cleanly when CW_HARNESS names a harness with no driver" {
-    run bash -c "CW_HARNESS=codex '$CW_BIN' mcp list"
+    run bash -c "CW_HARNESS=ghostharness '$CW_BIN' mcp list"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"Unknown harness 'codex'"* ]]
+    [[ "$output" == *"Unknown harness 'ghostharness'"* ]]
 }
 
 @test "cw arcade --setup fails cleanly when CW_HARNESS names a harness with no driver" {
-    run bash -c "CW_HARNESS=codex '$CW_BIN' arcade --setup"
+    run bash -c "CW_HARNESS=ghostharness '$CW_BIN' arcade --setup"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"Unknown harness 'codex'"* ]]
+    [[ "$output" == *"Unknown harness 'ghostharness'"* ]]
 }
 
 @test "a closed task session can be reopened with a different harness" {

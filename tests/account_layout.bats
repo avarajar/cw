@@ -74,11 +74,11 @@ setup() { setup_cw_home; }
 }
 
 @test "a CW_HARNESS env var naming a harness with no driver fails cleanly" {
-    mkdir -p "$CW_HOME/accounts/acct/codex"
+    mkdir -p "$CW_HOME/accounts/acct/ghostharness"
     make_project app >/dev/null
-    run bash -c "CW_HARNESS=codex '$CW_BIN' work app fix-auth"
+    run bash -c "CW_HARNESS=ghostharness '$CW_BIN' work app fix-auth"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"Unknown harness 'codex'"* ]]
+    [[ "$output" == *"Unknown harness 'ghostharness'"* ]]
     [ "$(call_count)" -eq 0 ]
 }
 
