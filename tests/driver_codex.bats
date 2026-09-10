@@ -62,3 +62,56 @@ PY
     [ "$status" -ne 0 ]
     [[ "$output" == *"no MCP support"* ]]
 }
+
+# prints the element count and a <bracketed> join, since bats' $lines
+# splitting collapses empty array elements and would hide the bug either way
+_codex_env_probe() {
+    run bash -c "
+        source '$CW_BIN'
+        source '$BATS_TEST_DIRNAME/../lib/harnesses/codex.sh'
+        CW_HARNESS_DIR='$1'
+        CW_EXTRA_FLAGS=''
+        _codex_base
+        echo \"count=\${#HARNESS_ENV[@]}\"
+        printf '<%s>' \"\${HARNESS_ENV[@]}\"
+    "
+}
+
+@test "codex env file: two entries become two separate env vars" {
+    local dir="$BATS_TEST_TMPDIR/envtwo"
+    mkdir -p "$dir"
+    printf 'FOO=1\nBAR=2\n' > "$dir/env"
+    _codex_env_probe "$dir"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"count=3"* ]]
+    [[ "$output" == *"<FOO=1><BAR=2>"* ]]
+}
+
+@test "codex env file: one entry becomes one env var" {
+    local dir="$BATS_TEST_TMPDIR/envone"
+    mkdir -p "$dir"
+    printf 'FOO=1\n' > "$dir/env"
+    _codex_env_probe "$dir"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"count=2"* ]]
+    [[ "$output" == *"<FOO=1>"* ]]
+}
+
+@test "codex env file: an empty file adds nothing and does not crash the launch" {
+    mkdir -p "$CW_HOME/accounts/acct/codex"
+    : > "$CW_HOME/accounts/acct/codex/env"
+    make_project app >/dev/null
+    run "$CW_BIN" work app fix-auth
+    [ "$status" -eq 0 ]
+    [ "$(call_field 1 bin)" = "codex" ]
+    [[ "$output" != *"No such file or directory"* ]]
+}
+
+@test "codex env file: a comment-only file adds nothing" {
+    local dir="$BATS_TEST_TMPDIR/envcomment"
+    mkdir -p "$dir"
+    printf '# just a comment\n\n' > "$dir/env"
+    _codex_env_probe "$dir"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"count=1"* ]]
+}

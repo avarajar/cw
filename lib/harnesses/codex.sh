@@ -20,9 +20,14 @@ codex_session_ref() {
 
 _codex_base() {
     HARNESS_ENV=("CODEX_HOME=$CW_HARNESS_DIR")
-    [[ -f "$CW_HARNESS_DIR/env" ]] && HARNESS_ENV+=("$(_harness_env_file "$CW_HARNESS_DIR/env")")
+    if [[ -f "$CW_HARNESS_DIR/env" ]]; then
+        local -a extra_env=()
+        mapfile -t extra_env < <(_harness_env_file "$CW_HARNESS_DIR/env")
+        [[ ${#extra_env[@]} -gt 0 ]] && HARNESS_ENV+=("${extra_env[@]}")
+    fi
     HARNESS_ARGV=(codex)
     local f
+    # unverified: flag ordering around the resume subcommand (before vs after)
     for f in $CW_EXTRA_FLAGS; do HARNESS_ARGV+=("$f"); done
     return 0
 }

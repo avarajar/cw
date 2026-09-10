@@ -449,11 +449,11 @@ _harness_context() {
     export CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
 }
 
-# reads KEY=VALUE lines from a 600 env file for the harness process only
+# prints one KEY=VALUE per line from a 600 env file, skipping blanks and comments
 _harness_env_file() {
     local f="$1"
     [[ -f "$f" ]] || return 0
-    grep -E '^[A-Z_][A-Z0-9_]*=' "$f" | tr '\n' ' '
+    grep -E '^[A-Z_][A-Z0-9_]*=' "$f"
 }
 
 # ════════════════════════════════════════════════════════════════════════════
