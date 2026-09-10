@@ -60,8 +60,9 @@ if [[ -n "${BASH_VERSION:-}" ]]; then
     _cw_comp() {
         local cur="${COMP_WORDS[COMP_CWORD]}" prev="${COMP_WORDS[COMP_CWORD-1]}"
         case "$prev" in
-            cw) COMPREPLY=($(compgen -W "init account project open work review plan spaces launch dashboard status stats doctor help" -- "$cur")) ;;
-            account) COMPREPLY=($(compgen -W "add list remove" -- "$cur")) ;;
+            cw) COMPREPLY=($(compgen -W "init account project open work review plan spaces launch dashboard status stats doctor harness help" -- "$cur")) ;;
+            account) COMPREPLY=($(compgen -W "add list remove login migrate" -- "$cur")) ;;
+            harness) COMPREPLY=($(compgen -W "list doctor" -- "$cur")) ;;
             project) COMPREPLY=($(compgen -W "register list scaffold setup-mcps setup-agents info" -- "$cur")) ;;
             open|info|setup-mcps|setup-agents)
                 [[ -f "$CW_HOME/projects.json" ]] && \
@@ -100,6 +101,7 @@ if [[ -n "${BASH_VERSION:-}" ]]; then
             --type|-t) COMPREPLY=($(compgen -W "fullstack api knowledge infra agents" -- "$cur")) ;;
             --workflow|-w) COMPREPLY=($(compgen -W "$(ls "$CW_HOME/templates/workflows/" 2>/dev/null | sed 's/\.md$//')" -- "$cur")) ;;
             --account|-a) [[ -d "$CW_HOME/accounts" ]] && COMPREPLY=($(compgen -W "$(ls "$CW_HOME/accounts" 2>/dev/null)" -- "$cur")) ;;
+            --harness|-H) COMPREPLY=($(compgen -W "claude codex pi opencode" -- "$cur")) ;;
         esac
     }
     complete -F _cw_comp cw
@@ -108,13 +110,14 @@ fi
 # ── Zsh completions ─────────────────────────────────────────────────────────
 if [[ -n "${ZSH_VERSION:-}" ]]; then
     _cw_comp_zsh() {
-        local -a cmds=('init' 'account' 'project' 'open' 'work' 'review' 'plan' 'spaces' 'launch' 'dashboard' 'status' 'stats' 'doctor' 'help')
+        local -a cmds=('init' 'account' 'project' 'open' 'work' 'review' 'plan' 'spaces' 'launch' 'dashboard' 'status' 'stats' 'doctor' 'harness' 'help')
         _arguments '1:command:($cmds)' '*::arg:->args'
         case "$state" in
             args)
                 case "${words[1]}" in
-                    account) _values 'sub' add list remove ;;
+                    account) _values 'sub' add list remove login migrate ;;
                     project) _values 'sub' register list scaffold setup-mcps setup-agents info ;;
+                    harness) _values 'sub' list doctor ;;
                     open|work|review)
                         [[ -f "$CW_HOME/projects.json" ]] && {
                             local -a projs=($(python3 -c "import json;[print(n) for n in json.load(open('$CW_HOME/projects.json'))]" 2>/dev/null))

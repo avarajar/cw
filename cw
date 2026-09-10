@@ -19,7 +19,7 @@ fi
 
 set -uo pipefail
 
-CW_VERSION="0.2.0"
+CW_VERSION="0.3.0"
 CW_HOME="${CW_HOME:-$HOME/.cw}"
 CW_ACCOUNTS_DIR="$CW_HOME/accounts"
 CW_REGISTRY="$CW_HOME/projects.json"
@@ -5686,6 +5686,11 @@ ${BOLD}GLOBAL FLAGS${NC}
                                       Can also be set permanently in ~/.cw/config.yaml:
                                         skip_permissions: true
                                       Or via env: CW_CLAUDE_FLAGS="--dangerously-skip-permissions"
+  --harness, -H <name>                 Run this command on a specific harness
+                                       (claude | codex | pi | opencode)
+                                       Accepted by work, review, loop, plan,
+                                       create, open, account login/add and
+                                       project register
 
 ${BOLD}EXAMPLES${NC}
   cw create "SaaS de analytics con Stripe"          # New project from description
