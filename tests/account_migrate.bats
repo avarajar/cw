@@ -369,3 +369,22 @@ print(\"ok\")'"
     [ ! -d "$root/claude" ]
     [ -f "$root/.DS_Store" ]
 }
+
+@test "migrate fails loudly when the scanner itself misses a dotfile" {
+    run bash -c "
+        source '$CW_BIN'
+        _account_scan_dir() {
+            CW_ACCOUNT_ENTRIES=()
+            [[ -d \"\$1\" ]] || return 0
+            local e
+            shopt -s nullglob
+            for e in \"\$1\"/*; do CW_ACCOUNT_ENTRIES+=(\"\$e\"); done
+            shopt -u nullglob
+            return 0
+        }
+        _account_migrate acct
+    "
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Migration incomplete"* ]]
+    [[ "$output" == *".claude.json"* ]]
+}

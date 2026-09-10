@@ -239,6 +239,16 @@ _account_has_claude_state() {
     return 1
 }
 
+# an independent listing, so a bug in the glob scanner cannot mask an unfinished migration
+_account_root_leftovers() {
+    local root="$1" path base
+    while IFS= read -r path; do
+        base="${path##*/}"
+        _account_entry_owned "$base" && continue
+        printf '%s\n' "$base"
+    done < <(find "$root" -mindepth 1 -maxdepth 1)
+}
+
 # split when a claude subdir exists, legacy when claude state sits at the root, else none
 _account_layout() {
     local root; root="$(_account_root "$1")"
@@ -810,12 +820,12 @@ _account_migrate_split() {
     fi
     [[ $blocked -eq 0 ]] || { _err "Some entries stayed at the root. Resolve the conflicts and re-run."; return 1; }
     # the claim is that the root is clean, not that the loop ended
-    _account_claude_entries "$root"
-    if [[ ${#CW_ACCOUNT_ENTRIES[@]} -gt 0 ]]; then
-        _err "Migration incomplete — ${#CW_ACCOUNT_ENTRIES[@]} entries are still at the root:"
-        for entry in "${CW_ACCOUNT_ENTRIES[@]}"; do
-            _err "  $(basename "$entry")"
-        done
+    local left; left="$(_account_root_leftovers "$root")"
+    if [[ -n "$left" ]]; then
+        _err "Migration incomplete — these are still at the account root:"
+        while IFS= read -r base; do
+            _err "  $base"
+        done <<< "$left"
         _err "Claude now resolves to $root/claude. Move them yourself or run --undo."
         return 1
     fi
