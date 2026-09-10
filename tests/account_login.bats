@@ -214,3 +214,12 @@ FAKE
     [ "$status" -eq 0 ]
     [[ "$output" == *"Paste the code: "* ]]
 }
+
+@test "--with-api-key against a harness with no api-key import refuses instead of claiming success" {
+    run bash -c "echo 'sk-should-not-be-stored' | '$CW_BIN' account login acct --harness claude --with-api-key -"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"has no api-key import"* ]]
+    [[ "$output" != *"API key stored"* ]]
+    [ ! -e "$CW_HOME/accounts/acct/env" ]
+    [ ! -d "$CW_HOME/accounts/acct/claude" ]
+}

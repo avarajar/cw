@@ -608,6 +608,11 @@ _account_login() {
     local dir; dir="$(_harness_dir "$account" "$harness")"
     CW_HARNESS="$harness" CW_HARNESS_DIR="$dir"
     _harness_load "$harness" || return 1
+
+    if [[ -n "$api_key_stdin" ]] && ! harness_supports api_key_login; then
+        _err "Harness '$harness' has no api-key import cw can drive."
+        return 1
+    fi
     mkdir -p "$dir"
 
     if [[ -n "$api_key_stdin" ]]; then
