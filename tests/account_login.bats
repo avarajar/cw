@@ -166,3 +166,38 @@ FAKE
     run bash -c "[ ! -f '$leaklog' ] || ! grep -q 'CODEX_API_KEY=sk-LEAKCANARY-123' '$leaklog'"
     [ "$status" -eq 0 ]
 }
+
+# runs argv under a 5s watchdog so a reintroduced infinite loop fails fast
+_run_with_watchdog() {
+    python3 -c "
+import subprocess, sys
+try:
+    r = subprocess.run(sys.argv[1:], capture_output=True, timeout=5, text=True)
+    sys.stdout.write(r.stdout)
+    sys.stderr.write(r.stderr)
+    sys.exit(r.returncode)
+except subprocess.TimeoutExpired:
+    print('TIMEOUT-HANG-DETECTED')
+    sys.exit(124)
+" "$@"
+}
+
+@test "--with-api-key without a trailing dash fails cleanly instead of spinning forever" {
+    run _run_with_watchdog "$CW_BIN" account login acct --harness codex --with-api-key
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"TIMEOUT-HANG-DETECTED"* ]]
+    [[ "$output" == *"--with-api-key requires a trailing -"* ]]
+}
+
+@test "--harness as the final argument fails cleanly instead of an unbound-variable error" {
+    run _run_with_watchdog "$CW_BIN" account login acct --harness
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--harness requires a value"* ]]
+    [[ "$output" != *"unbound variable"* ]]
+}
+
+@test "a failed --harness login leaves no stray credential directory behind" {
+    run "$CW_BIN" account login acct --harness pi
+    [ "$status" -ne 0 ]
+    [ ! -d "$CW_HOME/accounts/acct/pi" ]
+}

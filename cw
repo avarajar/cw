@@ -593,12 +593,12 @@ _harness_api_key_var() {
 # authenticates an account against a harness, headless or via a stdin api key
 _account_login() {
     local account="${1:?Usage: cw account login <account> --harness <h>}"; shift
-    local harness="" no_browser="" api_key_stdin=""
+    local harness="" no_browser="" api_key_stdin="" stdin_marker=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --harness|-H)   harness="$2"; shift 2 ;;
+            --harness|-H)   harness="${2:?--harness requires a value}"; shift 2 ;;
             --no-browser)   no_browser=1; shift ;;
-            --with-api-key) api_key_stdin=1; shift 2 ;;
+            --with-api-key) stdin_marker="${2:?--with-api-key requires a trailing -}"; api_key_stdin=1; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -606,10 +606,9 @@ _account_login() {
     harness="${harness:-$(_account_default_harness "$account")}"
 
     local dir; dir="$(_harness_dir "$account" "$harness")"
-    mkdir -p "$dir"
-
     CW_HARNESS="$harness" CW_HARNESS_DIR="$dir"
     _harness_load "$harness" || return 1
+    mkdir -p "$dir"
 
     if [[ -n "$api_key_stdin" ]]; then
         local key; IFS= read -r key
