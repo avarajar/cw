@@ -428,9 +428,9 @@ _doctor_matrix_json() {
         layout="legacy"; [[ -d "$root/claude" ]] && layout="split"
         $first_a || printf ','
         first_a=false
-        printf '{"name":%s,"root":%s,"layout":"%s","default_harness":"%s","harnesses":[' \
+        printf '{"name":%s,"root":%s,"layout":"%s","default_harness":%s,"harnesses":[' \
             "$(_json_str "$account")" "$(_json_str "${root%/}")" \
-            "$layout" "$(_account_default_harness "$account")"
+            "$layout" "$(_json_str "$(_account_default_harness "$account")")"
         local first_h=true
         for h in $CW_HARNESS_ALL; do
             $first_h || printf ','

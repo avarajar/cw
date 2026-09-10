@@ -59,6 +59,21 @@ print(\"ok\")'"
     [ "$output" = "ok" ]
 }
 
+@test "doctor --json stays valid when default_harness contains a quote" {
+    python3 - "$CW_HOME/accounts/acct/meta.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+m = json.load(open(p)); m["harness"] = 'x"y'
+json.dump(m, open(p, "w"))
+PY
+    run bash -c "'$CW_BIN' doctor --json | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+assert d[\"accounts\"][0][\"default_harness\"] == chr(120)+chr(34)+chr(121), d
+print(\"ok\")'"
+    [ "$output" = "ok" ]
+}
+
 @test "harness list shows the built-in drivers" {
     run "$CW_BIN" harness list
     [[ "$output" == *claude* ]]
