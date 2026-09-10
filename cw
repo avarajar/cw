@@ -349,8 +349,15 @@ _harness_load() {
 }
 
 # the only place in cw that starts a harness process
+# exports env vars and execs in a subshell so a secret never sits in argv
 _harness_exec() {
-    env ${HARNESS_ENV[@]+"${HARNESS_ENV[@]}"} "${HARNESS_ARGV[@]}"
+    (
+        local kv
+        for kv in ${HARNESS_ENV[@]+"${HARNESS_ENV[@]}"}; do
+            export "$kv"
+        done
+        exec "${HARNESS_ARGV[@]}"
+    )
 }
 
 # true when the binary the driver put in HARNESS_ARGV is on PATH

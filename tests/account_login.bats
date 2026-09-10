@@ -124,3 +124,45 @@ FAKE
     [[ "$output" == *"not found"* ]]
     [ ! -d "$CW_HOME/accounts/ghost" ]
 }
+
+@test "a secret already stored in an account's env file never appears in argv of a later launch" {
+    mkdir -p "$CW_HOME/accounts/acct/codex"
+    printf 'CODEX_API_KEY=sk-LEAKCANARY-123\n' > "$CW_HOME/accounts/acct/codex/env"
+    local argvlog="$BATS_TEST_TMPDIR/launch-argv.log"
+    local envlog="$BATS_TEST_TMPDIR/launch-env.log"
+    local leaklog="$BATS_TEST_TMPDIR/env-shim-leak.log"
+    cat > "$BATS_TEST_TMPDIR/fakes/codex" <<FAKE
+#!/usr/bin/env bash
+printf '%s\n' "\$@" > "$argvlog"
+env > "$envlog"
+exit 0
+FAKE
+    chmod +x "$BATS_TEST_TMPDIR/fakes/codex"
+    # shims the real env binary to catch a secret riding in ITS argv, the
+    # actual leak vector: "env KEY=VAL cmd" puts KEY=VAL on env's own argv,
+    # not the launched process's, which is why the fake codex above can't see it
+    cat > "$BATS_TEST_TMPDIR/fakes/env" <<FAKE
+#!/usr/bin/env bash
+if [[ \$# -eq 0 ]]; then
+    exec /usr/bin/env
+fi
+for a in "\$@"; do
+    [[ "\$a" == CODEX_API_KEY=* ]] && printf '%s\n' "\$a" >> "$leaklog"
+done
+while [[ \$# -gt 0 && "\$1" == *=* ]]; do
+    export "\$1"
+    shift
+done
+exec "\$@"
+FAKE
+    chmod +x "$BATS_TEST_TMPDIR/fakes/env"
+    make_project app >/dev/null
+    run "$CW_BIN" work app fix-auth --harness codex
+    [ "$status" -eq 0 ]
+    run grep -q 'sk-LEAKCANARY-123' "$argvlog"
+    [ "$status" -ne 0 ]
+    run grep -qx 'CODEX_API_KEY=sk-LEAKCANARY-123' "$envlog"
+    [ "$status" -eq 0 ]
+    run bash -c "[ ! -f '$leaklog' ] || ! grep -q 'CODEX_API_KEY=sk-LEAKCANARY-123' '$leaklog'"
+    [ "$status" -eq 0 ]
+}
