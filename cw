@@ -367,6 +367,17 @@ with open(p, 'w') as f: json.dump(meta, f, indent=2)
 PY
 }
 
+# reads a session's previously recorded harness session id, if any
+_read_harness_ref() {
+    local session_meta="$1"
+    [[ -f "$session_meta" ]] || { printf ''; return 0; }
+    python3 -c "
+import json
+try: print(json.load(open('$session_meta')).get('harness_session_id') or '')
+except Exception: print('')
+" 2>/dev/null
+}
+
 # says once per command that a capability is missing, then returns 1
 _degrade() {
     local cap="$1" msg="$2"
@@ -1421,6 +1432,7 @@ If I say 'none', do not post. If I say 'edit', let me modify before posting."
         CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account"
         CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
         CW_PROMPT="$(cat "$prompt_file")"
+        CW_SESSION_REF="$(_read_harness_ref "$session_meta")"
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
         _harness_resume
@@ -1733,6 +1745,7 @@ PYEOF
         CW_PROJECT="$name" CW_TASK="loop-$slug" CW_TASK_TYPE="loop" CW_ACCOUNT="$account"
         CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
         CW_PROMPT="$resume_prompt"
+        CW_SESSION_REF="$(_read_harness_ref "$session_meta")"
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
         _harness_resume
@@ -2167,6 +2180,7 @@ $acct_resume"
         # Try to resume named session; fall back to --continue, then start fresh
         CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model"
         CW_TEAM_ENV="$team_env" CW_PROMPT="$resume_msg"
+        CW_SESSION_REF="$(_read_harness_ref "$session_meta")"
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
         _harness_resume
