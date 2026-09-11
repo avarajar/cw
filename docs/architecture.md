@@ -2,11 +2,16 @@
 
 ## Overview
 
-CW is a Bash CLI that orchestrates Claude Code sessions with iTerm2. It manages three concerns:
+CW is a Bash CLI that orchestrates coding-agent sessions (Claude Code and others) with iTerm2.
+It manages four concerns:
 
-1. **Account routing** — maps projects to Claude accounts
-2. **Workspace isolation** — uses git worktrees for parallel work
-3. **Session persistence** — notes files survive conversation loss
+1. **Account routing** — maps projects to accounts
+2. **Harness routing** — maps each account to a coding-agent CLI ("harness") through a driver
+   layer, so `cw work`/`review`/`loop`/`plan`/`create`/`open` run the same way on Claude Code,
+   Codex CLI, Pi or OpenCode. See [harness-drivers.md](harness-drivers.md) for the driver
+   contract and capability enumeration.
+3. **Workspace isolation** — uses git worktrees for parallel work
+4. **Session persistence** — notes files survive conversation loss
 
 ## Directory Structure
 
@@ -16,10 +21,14 @@ CW is a Bash CLI that orchestrates Claude Code sessions with iTerm2. It manages 
 │   └── cw                          # main script (~2500 lines bash)
 ├── cw-shell-integration.sh         # PATH, completions, aliases
 ├── accounts/
-│   ├── work/                       # CLAUDE_CONFIG_DIR for "work"
+│   ├── work/                       # flat layout — the account root IS Claude's config dir
 │   │   ├── settings.json
+│   │   ├── meta.json               # harness, provider, model per harness (cw-owned)
 │   │   └── ...
-│   └── personal/
+│   └── personal/                   # split layout — one subdir per harness
+│       ├── meta.json
+│       ├── claude/                 # CLAUDE_CONFIG_DIR for "personal" on claude
+│       └── codex/                  # CODEX_HOME for "personal" on codex
 ├── sessions/
 │   └── <project>/
 │       ├── SHARED_CONTEXT.md       # shared across all worktrees
@@ -36,6 +45,19 @@ CW is a Bash CLI that orchestrates Claude Code sessions with iTerm2. It manages 
 ├── projects.json                   # { "name": { path, account, type } }
 └── cw.log                          # session open log
 ```
+
+An account has one of two layouts, and `cw` resolves both the same way through `_harness_dir`:
+
+- **Flat (legacy)** — the account root itself holds Claude's state (`.claude.json`,
+  `settings.json`, ...). This is what every pre-0.3.0 account looks like, and it keeps working
+  with no migration step; `claude` is the only harness a flat account can hold.
+- **Split** — a `<harness>/` subdirectory under the account root holds that harness's
+  credential dir (`claude/`, `codex/`, ...). An account created with `--harness` other than
+  `claude`, or one moved with `cw account migrate`, uses this layout. Multiple harnesses can
+  coexist on one account, each in its own subdirectory.
+
+`cw doctor --json` reports which layout an account is in as `legacy`, `split`, or `none` (no
+recognized Claude state in either place — see [Account Routing](#account-routing)).
 
 ## Worktree Strategy
 
@@ -103,6 +125,9 @@ DONE: cw work app fix-auth --done
   "task": "fix-auth",
   "type": "task",
   "account": "work",
+  "harness": "claude",
+  "provider": "native",
+  "model": "sonnet",
   "workflow": "bugfix",
   "branch": "joselito/proj-123-fix-auth",
   "worktree": "/path/to/.tasks/fix-auth",
@@ -156,31 +181,48 @@ When a URL is passed as the task argument, CW detects the source and adjusts the
 
 | Source | Detection | Extracted ID | Branch Strategy |
 |--------|-----------|-------------|----------------|
-| Linear | `linear.app` in URL | `ABC-123` regex | Fetched from Linear issue via MCP |
+| Linear | `linear.app` in URL | `ABC-123` regex | `task/<id>` |
 | GitHub | `github.com` + `issues`/`pull` | Issue/PR number | PR branch or `task/<id>` |
 | Notion | `notion.so` or `notion.site` | Page slug | `task/<slug>` |
 | Plain text | No URL detected | Used as-is | Used as branch name directly |
 
-Claude handles the actual MCP calls and worktree creation via the init prompt.
+`cw` fetches the ticket content itself, before launching any harness — Linear via
+`LINEAR_API_KEY`, GitHub via the `gh` CLI's own auth, Notion via `NOTION_TOKEN` — and writes it
+straight into `TASK_NOTES.md`. This is what makes the URL flow harness-agnostic: the context is
+already on disk by the time the agent starts, so it doesn't depend on that harness having a
+matching MCP connector. If no credential is configured for that source, `cw` falls back to its
+older behavior and asks the agent to fetch it and fill in `TASK_NOTES.md` itself via MCP — the
+agent then handles the worktree creation and the fetch via the init prompt, same as before.
 
 ## Account Routing
 
-Each project maps to an account in `projects.json`:
+Each project maps to an account in `projects.json`, with an optional `harness` override:
 
 ```json
 {
   "my-app": {
     "path": "/Users/you/code/my-app",
     "account": "work",
-    "type": "fullstack"
+    "type": "fullstack",
+    "harness": "codex"
   }
 }
 ```
 
 When you run `cw work my-app fix-auth`, CW:
 1. Looks up `my-app` in `projects.json`
-2. Finds `account: "work"`
-3. Sets `CLAUDE_CONFIG_DIR=~/.cw/accounts/work`
-4. Launches Claude with that config
+2. Finds `account: "work"` (and `harness: "codex"`, or the account's own default harness if the
+   project doesn't set one; `--harness` on the command line overrides both)
+3. Resolves the credential directory with `_harness_dir <account> <harness>` — for `claude` on a
+   flat account this is the account root itself (`~/.cw/accounts/work`), otherwise it's
+   `~/.cw/accounts/work/<harness>`
+4. Sets that harness's config-dir env var (`CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME` for
+   codex, and so on — each driver declares its own in `<h>_config_env`) and launches it through
+   the driver layer
 
-No manual account switching needed.
+No manual account switching, and no hard-coded `CLAUDE_CONFIG_DIR`, needed.
+
+A running session remembers the harness it was created with (`session.json`'s `harness` field)
+and resuming it always uses that harness — `--harness` on a later `cw work` for the same task is
+only honored if it matches, otherwise `cw` refuses rather than silently switching agents
+mid-session.
