@@ -179,25 +179,29 @@ cw doctor --json | python3 -m json.tool
 }
 ```
 
-**`layout` is three-valued, not a boolean:**
+**`layout` is three-valued, not a boolean, and it describes only claude's own state** — it says
+nothing about whether other harnesses on the same account have their own subdirectories:
 
 | Value | Meaning |
 |---|---|
-| `split` | the account has a `<harness>/` subdirectory (e.g. `claude/`, `codex/`) |
-| `legacy` | no subdirectory, but recognized Claude state sits at the account root — `cw account migrate` has work to do |
-| `none` | no subdirectory and no recognized Claude state at the root |
+| `split` | a `claude/` subdirectory exists under the account root |
+| `legacy` | no `claude/` subdirectory, but recognized Claude state sits at the account root — `cw account migrate` has work to do |
+| `none` | no `claude/` subdirectory and no recognized Claude state at the root |
 
 `none` is new in 0.3.0. A consumer that used to treat `layout` as `legacy ? flat : split` must
 now handle `none` explicitly — it does **not** mean "flat"; it means the account has no Claude
-config in either place (e.g. a `pi`-only account).
+config in either place. An account created with `--harness codex`/`pi`/`opencode` and never
+touched by claude reports `none` even though it has its own `codex/`/`pi/`/`opencode/`
+subdirectory — that subdirectory is not what `layout` is reporting on.
 
 `legacy`/`none` are decided by whether the account root contains a name from a fixed marker list
 (`.claude.json`, `.credentials.json`, `settings.json`, `projects`, `todos`, `statsig`,
 `shell-snapshots`, `history.jsonl`, `ide`, `plugins` — `CW_CLAUDE_MARKERS` in `cw`). If Claude
 ever renames or adds to these files, an account with only the new name(s) will incorrectly
-report `none` (and `cw account migrate` will refuse it, saying there's nothing to move) until
-`CW_CLAUDE_MARKERS` is updated — that constant is the single place to fix. This is a known,
-accepted gap: reporting `none` is the safe failure direction (it never invents an empty
+report `none` (and `cw account migrate` will report there's nothing to move and exit 0, rather
+than actually migrating anything) until `CW_CLAUDE_MARKERS` is updated — that constant is the
+single place to fix. This is a known, accepted gap: reporting `none` is the safe failure
+direction (it never invents an empty
 `claude/` that credential resolution would then trust), and any account that has actually
 completed a Claude login always writes `.claude.json`, so it doesn't apply in practice.
 
@@ -277,7 +281,10 @@ in `config.yaml`, `meta.json`, or process argv.
 
 Move a flat account's Claude state (everything at the account root that isn't cw's own
 `meta.json`/`CLAUDE.md`/`templates`/`skills` or another harness's own subdirectory) into
-`<account>/claude/`, so the account can hold more than one harness side by side.
+`<account>/claude/`, so claude's credentials sit in their own subdirectory the same way every
+other harness's already do. An account does **not** need this to run more than one harness —
+`codex`/`pi`/`opencode` each always get their own subdirectory regardless of claude's layout —
+so `migrate` is purely cosmetic tidying that only affects where claude's own state lives.
 
 ```bash
 cw account migrate work --dry-run    # list what would move, touch nothing
@@ -285,11 +292,12 @@ cw account migrate work              # move it
 cw account migrate work --undo       # move it back to the flat layout
 ```
 
-Resolution (`_harness_dir`) already understands both layouts, forever — an account that stays
-flat keeps working exactly as before, so running `migrate` is entirely optional and only useful
-once an account needs a second harness. It refuses to run (rather than inventing an empty
-`claude/`) when it finds no recognized Claude state at the root — see the `layout: "none"` note
-under `cw doctor --json` above for what "recognized" means and its one known edge case.
+Resolution (`_harness_dir`) already understands both of claude's layouts, forever — an account
+that stays flat keeps working exactly as before, so running `migrate` is entirely optional. When
+it finds no recognized Claude state at the root, it reports there's nothing to move and exits 0
+(an idempotent no-op, not an error) rather than inventing an empty `claude/` — see the
+`layout: "none"` note under `cw doctor --json` above for what "recognized" means and its one
+known edge case.
 
 **A maintenance note for anyone extending `cw` itself:** the deny-list of names migration never
 touches (`meta.json`, `CLAUDE.md`, `templates`, `skills`, plus every harness's own subdirectory

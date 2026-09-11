@@ -21,11 +21,11 @@ It manages four concerns:
 │   └── cw                          # main script (~2500 lines bash)
 ├── cw-shell-integration.sh         # PATH, completions, aliases
 ├── accounts/
-│   ├── work/                       # flat layout — the account root IS Claude's config dir
+│   ├── work/                       # claude-only account, still flat
 │   │   ├── settings.json
 │   │   ├── meta.json               # harness, provider, model per harness (cw-owned)
 │   │   └── ...
-│   └── personal/                   # split layout — one subdir per harness
+│   └── personal/                   # uses claude and codex side by side
 │       ├── meta.json
 │       ├── claude/                 # CLAUDE_CONFIG_DIR for "personal" on claude
 │       └── codex/                  # CODEX_HOME for "personal" on codex
@@ -46,18 +46,27 @@ It manages four concerns:
 └── cw.log                          # session open log
 ```
 
-An account has one of two layouts, and `cw` resolves both the same way through `_harness_dir`:
+Every harness other than `claude` always gets its own subdirectory under the account root:
+`_harness_dir <account> <harness>` resolves to `<root>/<harness>`, created the moment that
+harness is first used (`cw account add glm --harness opencode` creates `glm/opencode/`
+immediately). `claude` is the one exception, kept for backward compatibility with every
+pre-0.3.0 account: its credentials live at the account root itself unless a `claude/`
+subdirectory exists, in which case that subdirectory wins. Nothing but `cw account migrate` (or
+a user creating `claude/` by hand) makes that subdirectory appear.
 
-- **Flat (legacy)** — the account root itself holds Claude's state (`.claude.json`,
-  `settings.json`, ...). This is what every pre-0.3.0 account looks like, and it keeps working
-  with no migration step; `claude` is the only harness a flat account can hold.
-- **Split** — a `<harness>/` subdirectory under the account root holds that harness's
-  credential dir (`claude/`, `codex/`, ...). An account created with `--harness` other than
-  `claude`, or one moved with `cw account migrate`, uses this layout. Multiple harnesses can
-  coexist on one account, each in its own subdirectory.
+`cw doctor --json`'s `layout` field describes **only** that claude-specific question — it says
+nothing about whether other harnesses have their own subdirectories:
 
-`cw doctor --json` reports which layout an account is in as `legacy`, `split`, or `none` (no
-recognized Claude state in either place — see [Account Routing](#account-routing)).
+| Value | Meaning |
+|---|---|
+| `split` | a `claude/` subdirectory exists |
+| `legacy` | no `claude/` subdirectory, but recognized claude state sits at the account root — `cw account migrate` has work to do |
+| `none` | no `claude/` subdirectory and no recognized claude state at the root |
+
+An account created with `--harness codex` (or `pi`, or `opencode`) and never touched by claude at
+all reports `none`, even though it has its own `codex/` subdirectory — `layout` isn't tracking
+that subdirectory, only claude's. See `docs/commands.md`'s `cw doctor --json` section for how
+"recognized claude state" is decided.
 
 ## Worktree Strategy
 

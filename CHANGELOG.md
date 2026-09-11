@@ -33,8 +33,10 @@
 
 - Every harness invocation goes through one driver layer; no launch site in `cw` spawns a
   harness binary directly (enforced by `tests/no_direct_launch.bats`).
-- Accounts may hold one credential directory per harness (the "split" layout) alongside the
-  existing flat layout.
+- Every non-claude harness gets its own credential directory under the account root
+  (`<account>/<harness>/`) automatically. Claude can move into its own `claude/` subdirectory
+  too, but only via `cw account migrate` — see the `layout` contract change below, which
+  tracks claude's placement specifically, not this general per-harness mechanism.
 
 ### Contract changes (breaking for `doctor --json` / `spaces --json` consumers)
 
@@ -67,12 +69,13 @@
 - **`layout`/`legacy` recognition depends on a fixed marker list** (`CW_CLAUDE_MARKERS` in `cw`:
   `.claude.json`, `.credentials.json`, `settings.json`, `projects`, `todos`, `statsig`,
   `shell-snapshots`, `history.jsonl`, `ide`, `plugins`). An account whose Claude state carries
-  none of these names reports `layout: "none"` and `cw account migrate` refuses it with "no
-  claude state at its root — nothing to move", even though the account does have *some* state
-  there. This is the safe failure direction (refusing beats inventing an empty `claude/` that
-  credential resolution would then trust), and in practice every account that has completed a
-  real Claude login writes `.claude.json`, so it doesn't come up. If a future Claude release
-  renames these files, `CW_CLAUDE_MARKERS` is the single place to update.
+  none of these names reports `layout: "none"`, and `cw account migrate` reports "no claude
+  state at its root — nothing to move" and exits 0 without moving anything, even though the
+  account does have *some* state there. This is the safe failure direction (a no-op beats
+  inventing an empty `claude/` that credential resolution would then trust), and in practice
+  every account that has completed a real Claude login writes `.claude.json`, so it doesn't come
+  up. If a future Claude release renames these files, `CW_CLAUDE_MARKERS` is the single place to
+  update.
 - **`cw account migrate` classifies root entries by name against a short deny-list**
   (`CW_ACCOUNT_OWNED`, plus every name in `CW_HARNESS_ALL`), not by content. Anything added to
   that deny-list in the future must genuinely belong to `cw` itself — migration will neither move
