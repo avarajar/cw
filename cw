@@ -2008,6 +2008,8 @@ PYEOF
    \`gh api repos/{owner}/{repo}/pulls/$pr/comments\`"
         else
             pr_fetch_instructions="Fetch the latest review comments and requested changes using the GitHub MCP tools (get_pull_request_reviews, get_pull_request_comments, get_pull_request). If no GitHub MCP is available, check REVIEW_NOTES.md for your previous findings."
+            _harness_load "$CW_HARNESS" && ! harness_supports mcp && \
+                pr_fetch_instructions="gh is not installed and this harness has no GitHub MCP, so check REVIEW_NOTES.md for your previous findings and use git to inspect the latest commits on the PR branch."
         fi
 
         local recheck_prompt="This is a follow-up review of PR #$pr for project $name.
@@ -2091,6 +2093,8 @@ If I say 'none', do not post. If I say 'edit', let me modify before posting."
    And the diff: \`gh pr diff $pr\`"
         else
             pr_detail_instructions="Fetch PR details using the GitHub MCP tools (get_pull_request, list_pull_request_files). If no GitHub MCP is available, use git commands only."
+            _harness_load "$CW_HARNESS" && ! harness_supports mcp && \
+                pr_detail_instructions="gh is not installed and this harness has no GitHub MCP, so use git commands only to inspect the PR branch."
         fi
 
         local review_prompt="Review PR #$pr for project $name.
@@ -2249,6 +2253,13 @@ PYEOF
     CW_HARNESS="$harness"
     if ! $is_new && [[ -z "$account_override" && "$harness" != "claude" ]]; then
         account="$(_session_account "$session_meta" "$account")" || return 1
+    fi
+    # /loop is a Claude Code command; sending it to another harness would do nothing useful
+    _harness_load "$CW_HARNESS" || return 1
+    if ! harness_supports slash_commands; then
+        _err "cw loop drives Claude Code's /loop command, which $harness does not have."
+        _err "Run it on claude with --harness claude, or use cw work / cw review with $harness."
+        return 1
     fi
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
     _ensure_statusline "$acct_dir"
@@ -2586,10 +2597,35 @@ cmd_work() {
             _after_fill=8
             _after_fill_pr=9
         fi
-        if [[ "$task_source" == "linear" ]]; then
-            init_prompt="Fetch Linear issue $task using the Linear MCP (get_issue tool). Also fetch the issue comments (list_comments tool) to check for discussion, decisions, or additional context.
+        # a harness without MCP is pointed at TASK_NOTES.md, never at an MCP tool
+        _harness_load "$CW_HARNESS" || return 1
+        local _linear_head="Fetch Linear issue $task using the Linear MCP (get_issue tool). Also fetch the issue comments (list_comments tool) to check for discussion, decisions, or additional context.
 
-IMPORTANT: Use the git branch name from the Linear issue response (the branchName field) for the git branch. Do NOT use the issue ID ($task) as the branch name.
+IMPORTANT: Use the git branch name from the Linear issue response (the branchName field) for the git branch. Do NOT use the issue ID ($task) as the branch name."
+        local _notion_lead="Fetch this Notion page using the Notion MCP: $task_url"
+        local _issue_lead="Fetch this GitHub issue using gh or the GitHub MCP: $task_url"
+        local _pr_lead=""
+        if ! harness_supports mcp; then
+            local _read_notes="Read it first: it is the source of truth for this task."
+            if $context_fetched; then
+                _linear_head="The Linear issue $task has already been fetched into $notes_file. $_read_notes
+
+IMPORTANT: Use the git branch name from the Branch line in TASK_NOTES.md for the git branch. Do NOT use the issue ID ($task) as the branch name."
+                _notion_lead="The Notion page $task_url has already been fetched into $notes_file. $_read_notes"
+                _issue_lead="The GitHub issue $task_url has already been fetched into $notes_file. $_read_notes"
+                _pr_lead="The PR details have already been fetched into $notes_file. $_read_notes
+
+"
+            else
+                _linear_head="The Linear issue $task ($task_url) could not be fetched: no LINEAR_API_KEY is configured and this harness has no Linear MCP. Ask the user for the issue details, including its git branch name, before starting.
+
+IMPORTANT: Use the git branch name the user gives you for the git branch. If there is none, use task/$task."
+                _notion_lead="The Notion page $task_url could not be fetched: no NOTION_TOKEN is configured and this harness has no Notion MCP. Ask the user for the page content before starting."
+                _issue_lead="Fetch this GitHub issue using gh: $task_url"
+            fi
+        fi
+        if [[ "$task_source" == "linear" ]]; then
+            init_prompt="$_linear_head
 
 Set up the workspace using the Linear branch name:
 1. Run: git fetch origin
@@ -2602,7 +2638,7 @@ $_after_fill. Then start working from the .tasks/$task/ directory.
 
 Source URL: $task_url"
         elif [[ "$task_source" == "notion" ]]; then
-            init_prompt="Fetch this Notion page using the Notion MCP: $task_url
+            init_prompt="$_notion_lead
 Then:
 1. Run: git fetch origin
 2. If branch task/$task exists locally, delete it: git branch -D task/$task (ignore errors)
@@ -2614,7 +2650,7 @@ $_after_fill. Then start working from the .tasks/$task/ directory."
         elif [[ "$task_source" == "github" ]] && [[ "$task_url" == *"/pull/"* ]]; then
             local _pr_num
             _pr_num=$(echo "$task_url" | grep -oE '[0-9]+$')
-            init_prompt="Set up the workspace for GitHub PR #$_pr_num ($task_url):
+            init_prompt="${_pr_lead}Set up the workspace for GitHub PR #$_pr_num ($task_url):
 1. Run: git fetch origin
 2. Get the PR branch name: \`gh pr view $_pr_num --json headRefName -q .headRefName\`
 3. If the PR branch already exists locally, delete it: \`git branch -D <pr_branch>\` (ignore errors)
@@ -2625,7 +2661,7 @@ $_after_fill. Then start working from the .tasks/$task/ directory."
 7. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude$_fill_pr
 $_after_fill_pr. Then start working from the .tasks/$task/ directory."
         elif [[ "$task_source" == "github" ]]; then
-            init_prompt="Fetch this GitHub issue using gh or the GitHub MCP: $task_url
+            init_prompt="$_issue_lead
 Then:
 1. Run: git fetch origin
 2. If branch task/$task exists locally, delete it: git branch -D task/$task (ignore errors)
@@ -2668,6 +2704,10 @@ Set up the workspace:
             fi
         fi
 
+        # /simplify is a Claude Code command; other harnesses get the same ask in plain words
+        local _quality_step="When you finish implementing the task (before committing), run /simplify to review the code for reuse, quality, and efficiency. Fix any issues found before considering the task done."
+        harness_supports slash_commands || _quality_step="When you finish implementing the task (before committing), review your own changes for reuse, quality, and efficiency. Fix any issues found before considering the task done."
+
         # ── Shared context (per-project, visible to all worktrees) ────────
         local shared_context="$CW_HOME/sessions/$name/SHARED_CONTEXT.md"
         if [[ ! -f "$shared_context" ]]; then
@@ -2694,7 +2734,7 @@ When you discover something relevant to other tasks (schema changes, API changes
 
 IMPORTANT — Project rules: Before writing any code, read the project's CLAUDE.md at the worktree root if it exists. Also check .claude/rules/ for coding rules (e.g. backend.md, frontend.md, tests.md) — these have glob patterns in their frontmatter that specify which files they apply to. Follow all coding rules, conventions, and restrictions defined in these files when writing code.
 
-IMPORTANT — Code quality: When you finish implementing the task (before committing), run /simplify to review the code for reuse, quality, and efficiency. Fix any issues found before considering the task done."
+IMPORTANT — Code quality: $_quality_step"
 
         # ── Workflow template ─────────────────────────────────────────────
         if [[ -n "$workflow" ]]; then
@@ -5581,7 +5621,23 @@ PYEOF
 
     # ── Build init prompt ─────────────────────────────────────────────
     local init_prompt=""
-    if [[ -n "$source_url" ]]; then
+    _harness_load "$CW_HARNESS" || return 1
+    if [[ -n "$source_url" ]] && ! harness_supports mcp; then
+        case "$source" in
+            linear)
+                init_prompt="The project specification is the Linear issue/epic at $source_url. This harness has no Linear MCP, so if you cannot open it, ask the user to paste the specification." ;;
+            notion)
+                init_prompt="The project specification is the Notion page at $source_url. This harness has no Notion MCP, so if you cannot open it, ask the user to paste the specification." ;;
+            github)
+                init_prompt="Fetch this GitHub page for context: $source_url
+Use it as reference for the project." ;;
+            *)
+                init_prompt="Reference URL: $source_url" ;;
+        esac
+        init_prompt="$init_prompt
+
+"
+    elif [[ -n "$source_url" ]]; then
         case "$source" in
             linear)
                 init_prompt="Fetch this Linear issue/epic using the Linear MCP: $source_url

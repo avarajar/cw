@@ -66,19 +66,13 @@ PY
     [ "$(call_argv 1 | sed -n 2p)" = "review-abc-123" ]
 }
 
-@test "codex loop resume tries a recorded session id first" {
+@test "codex loop is refused instead of sending /loop, and records no session" {
     make_project app >/dev/null
-    "$CW_BIN" loop app "check the deploy" --name lp
-    python3 - "$CW_HOME/sessions/app/loop-lp/session.json" <<'PY'
-import json, sys
-p = sys.argv[1]
-m = json.load(open(p)); m["harness_session_id"] = "loop-abc-123"
-json.dump(m, open(p, "w"))
-PY
-    rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
     run "$CW_BIN" loop app "check the deploy" --name lp
-    [ "$(call_count)" -eq 1 ]
-    [ "$(call_argv 1 | sed -n 2p)" = "loop-abc-123" ]
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"/loop"* ]]
+    [ "$(call_count)" -eq 0 ]
+    [ ! -e "$CW_HOME/sessions/app/loop-lp/session.json" ]
 }
 
 @test "codex degrades agent teams instead of failing" {

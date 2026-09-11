@@ -175,12 +175,15 @@ PY
 
 @test "a closed loop session can be reopened with a different harness" {
     make_project app >/dev/null
+    # a user driver that, like claude, understands /loop
+    mkdir -p "$CW_HOME/harnesses"
+    sed 's/claude_/loopy_/g' "$BATS_TEST_DIRNAME/../lib/harnesses/claude.sh" > "$CW_HOME/harnesses/loopy.sh"
     "$CW_BIN" loop app "check the deploy" --name lp
     "$CW_BIN" loop app lp --done
     rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
-    run "$CW_BIN" loop app "check the deploy" --name lp --harness codex
+    run "$CW_BIN" loop app "check the deploy" --name lp --harness loopy
     [[ "$output" != *"was created with claude"* ]]
-    run grep -q '"harness": "codex"' "$CW_HOME/sessions/app/loop-lp/session.json"
+    run grep -q '"harness": "loopy"' "$CW_HOME/sessions/app/loop-lp/session.json"
     [ "$status" -eq 0 ]
 }
 

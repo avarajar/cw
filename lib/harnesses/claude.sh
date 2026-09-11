@@ -4,6 +4,7 @@ claude_supports() {
         resume_by_name|continue_last|non_interactive_prompt|interactive_prompt) return 0 ;;
         mcp|hooks|skip_permissions|agent_teams|plugins) return 0 ;;
         model_flag|statusline|instructions_file|skills|custom_provider) return 0 ;;
+        slash_commands) return 0 ;;
         *) return 1 ;;
     esac
 }

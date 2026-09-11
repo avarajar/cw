@@ -69,6 +69,7 @@ The capability enumeration is fixed; an unknown capability is always unsupported
 | `instructions_file` | Has a user-level instructions file `cw` can install `CLAUDE.md`-equivalent content into |
 | `skills` | Has a user-level skills directory `cw` can symlink account skills into |
 | `api_key_login` | Has an API-key import path `cw account login --with-api-key -` can drive |
+| `slash_commands` | Understands the Claude Code slash commands `cw` sends as prompts (`/loop`, `/simplify`). `cw loop` refuses on a harness without it, and `cw work` asks for a self-review in plain words instead of `/simplify` |
 
 A command that wants a capability but can proceed without it calls `_degrade`, which prints one
 dim line the first time a given capability is missing in the current process and then returns 1:
