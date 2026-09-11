@@ -156,19 +156,34 @@ _link_account_skills() {
 }
 
 _get_project() {
-    python3 -c "
-import json, sys
+    CW_REG="$CW_REGISTRY" CW_NAME="$1" python3 -c "
+import json, os, sys
 try:
-    with open('$CW_REGISTRY') as f: reg = json.load(f)
-    if '$1' in reg:
-        print(json.dumps(reg['$1']))
+    with open(os.environ['CW_REG']) as f: reg = json.load(f)
+    if os.environ['CW_NAME'] in reg:
+        print(json.dumps(reg[os.environ['CW_NAME']]))
     else: sys.exit(1)
 except: sys.exit(1)
 " 2>/dev/null
 }
 
 _get_field() {
-    echo "$1" | python3 -c "import json,sys; print(json.load(sys.stdin).get('$2','$3'))" 2>/dev/null
+    echo "$1" | CW_KEY="$2" CW_DEF="${3-}" python3 -c "import json,os,sys; print(json.load(sys.stdin).get(os.environ['CW_KEY'],os.environ['CW_DEF']))" 2>/dev/null
+}
+
+# prints one field of a session.json, exit 2 when the file cannot be read as an object
+_session_field() {
+    CW_META="$1" CW_FIELD="$2" python3 - <<'PY' 2>/dev/null
+import json, os, sys
+try:
+    with open(os.environ["CW_META"]) as f: m = json.load(f)
+except Exception:
+    sys.exit(2)
+if not isinstance(m, dict):
+    sys.exit(2)
+v = m.get(os.environ["CW_FIELD"])
+print(v if v not in (None, "") else "")
+PY
 }
 
 # an account's identity dir — meta.json, templates/, skills/, CLAUDE.md live here
@@ -296,9 +311,9 @@ _account_default_harness() {
     local meta; meta="$(_account_root "$account")/meta.json"
     local h=""
     if [[ -f "$meta" ]]; then
-        h=$(python3 -c "
-import json
-try: print(json.load(open('$meta')).get('harness') or '')
+        h=$(CW_META="$meta" python3 -c "
+import json, os
+try: print(json.load(open(os.environ['CW_META'])).get('harness') or '')
 except Exception: print('')
 " 2>/dev/null)
     fi
@@ -320,11 +335,7 @@ _resolve_model() {
     if [[ -n "$override" ]]; then printf '%s' "$override"; return 0; fi
     if [[ -n "$session_meta" && -f "$session_meta" ]]; then
         local stored
-        stored=$(python3 -c "
-import json
-try: print(json.load(open('$session_meta')).get('model') or '')
-except Exception: print('')
-" 2>/dev/null)
+        stored=$(_session_field "$session_meta" model)
         [[ -n "$stored" ]] && { printf '%s' "$stored"; return 0; }
     fi
     local acct_model; acct_model=$(_account_meta_get "$account" "$harness" model)
@@ -400,11 +411,12 @@ _resolve_harness() {
     local account="$1" project="$2" session_meta="$3" override="$4"
     local recorded=""
     if [[ -f "$session_meta" ]]; then
-        recorded=$(python3 -c "
-import json
-try: print(json.load(open('$session_meta')).get('harness') or '')
-except Exception: print('')
-" 2>/dev/null)
+        # an unreadable session must never fall back to a harness it did not record
+        if ! recorded=$(_session_field "$session_meta" harness); then
+            _err "Cannot read $session_meta — refusing to launch rather than guess its harness."
+            _err "Fix the file, or close the session with --done and start again."
+            return 1
+        fi
         [[ -z "$recorded" ]] && recorded="$CW_HARNESS_DEFAULT"
     fi
     if [[ -n "$recorded" ]]; then
@@ -549,11 +561,35 @@ PY
 _read_harness_ref() {
     local session_meta="$1"
     [[ -f "$session_meta" ]] || { printf ''; return 0; }
-    python3 -c "
-import json
-try: print(json.load(open('$session_meta')).get('harness_session_id') or '')
-except Exception: print('')
-" 2>/dev/null
+    _session_field "$session_meta" harness_session_id || true
+}
+
+# bumps a session's open count and applies a model override, values via env
+_session_touch() {
+    CW_META="$1" CW_MODEL_OVERRIDE="${2:-}" python3 - <<'PY'
+import json, os
+from datetime import datetime, timezone
+p = os.environ['CW_META']
+with open(p) as f: meta = json.load(f)
+meta['last_opened'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+meta['opens'] = meta.get('opens', 0) + 1
+if os.environ.get('CW_MODEL_OVERRIDE'):
+    meta['model'] = os.environ['CW_MODEL_OVERRIDE']
+with open(p, 'w') as f: json.dump(meta, f, indent=2)
+PY
+}
+
+# marks a session done
+_session_close() {
+    CW_META="$1" python3 - <<'PY'
+import json, os
+from datetime import datetime, timezone
+p = os.environ['CW_META']
+with open(p) as f: meta = json.load(f)
+meta['status'] = 'done'
+meta['closed'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+with open(p, 'w') as f: json.dump(meta, f, indent=2)
+PY
 }
 
 # prints which harnesses are installed on this machine
@@ -1155,21 +1191,24 @@ _project_register() {
 
     local name="${alias_name:-$(basename "$path")}"
 
-    python3 -c "
-import json
-f = '$CW_REGISTRY'
+    CW_R_FILE="$CW_REGISTRY" CW_R_NAME="$name" CW_R_PATH="$path" CW_R_ACCOUNT="$account" \
+    CW_R_TYPE="$ptype" CW_R_HARNESS="$harness" CW_R_WHEN="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    python3 - <<'PYEOF'
+import json, os
+e = os.environ
+f = e['CW_R_FILE']
 try:
     with open(f) as fh: reg = json.load(fh)
 except: reg = {}
 entry = {
-    'path': '$path', 'account': '$account', 'type': '$ptype',
-    'registered': '$(date -u +%Y-%m-%dT%H:%M:%SZ)'
+    'path': e['CW_R_PATH'], 'account': e['CW_R_ACCOUNT'], 'type': e['CW_R_TYPE'],
+    'registered': e['CW_R_WHEN']
 }
-if '$harness':
-    entry['harness'] = '$harness'
-reg['$name'] = entry
+if e['CW_R_HARNESS']:
+    entry['harness'] = e['CW_R_HARNESS']
+reg[e['CW_R_NAME']] = entry
 with open(f, 'w') as fh: json.dump(reg, fh, indent=2)
-"
+PYEOF
     mkdir -p "$path/.claude"
     if [[ ! -f "$path/CLAUDE.md" ]]; then
         _generate_claude_md "$path" "$ptype"
@@ -1813,14 +1852,7 @@ cmd_review() {
     if $done_flag; then
         _log "Closing review: ${C}$name${NC} PR #${Y}$pr${NC}"
         if [[ -f "$session_dir/session.json" ]]; then
-            python3 -c "
-import json
-from datetime import datetime, timezone
-with open('$session_dir/session.json') as f: meta = json.load(f)
-meta['status'] = 'done'
-meta['closed'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
-"
+            _session_close "$session_dir/session.json"
         fi
         _log "${G}Review PR #$pr closed${NC}"
         echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) DONE $name review=pr-$pr" >> "$CW_SESSIONS_LOG"
@@ -1833,7 +1865,7 @@ with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
     # If session exists but is done, reset it before resolving the harness
     if ! $is_new; then
         local session_status
-        session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
+        session_status=$(_session_field "$session_meta" status)
         if [[ "$session_status" == "done" ]]; then
             _log "Previous review for PR #${Y}$pr${NC} was closed — starting fresh"
             rm -f "$session_meta"
@@ -1858,27 +1890,30 @@ with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
         _dim "  Model: ${model:-claude default}"
 
         # Save session metadata
-        CW_SESSION_HARNESS="$harness" CW_SESSION_PROVIDER="$provider" python3 -c "
+        CW_S_PROJECT="$name" CW_S_PR="$pr" CW_S_ACCOUNT="$account" CW_S_MODEL="$model" \
+        CW_S_NOTES="$notes_file" CW_S_HARNESS="$harness" CW_S_PROVIDER="$provider" \
+        CW_S_META="$session_meta" python3 - <<'PYEOF'
 import json, os
 from datetime import datetime, timezone
+e = os.environ
 meta = {
-    'project': '$name',
-    'pr': '$pr',
+    'project': e['CW_S_PROJECT'],
+    'pr': e['CW_S_PR'],
     'type': 'review',
-    'account': '$account',
-    'model': '$model',
-    'notes': '$notes_file',
-    'harness': os.environ['CW_SESSION_HARNESS'],
+    'account': e['CW_S_ACCOUNT'],
+    'model': e['CW_S_MODEL'],
+    'notes': e['CW_S_NOTES'],
+    'harness': e['CW_S_HARNESS'],
     'harness_session_id': '',
-    'provider': os.environ['CW_SESSION_PROVIDER'],
+    'provider': e['CW_S_PROVIDER'],
     'status': 'active',
     'created': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'last_opened': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'opens': 1
 }
-with open('$session_meta', 'w') as f:
+with open(e['CW_S_META'], 'w') as f:
     json.dump(meta, f, indent=2)
-"
+PYEOF
         _log "Session created: ${C}$session_dir${NC}"
 
         _link_account_skills "$account" "$(_account_root "$account")"
@@ -1906,17 +1941,7 @@ with open('$session_meta', 'w') as f:
         # Existing review - update metadata
         _log "Resuming review: ${C}$name${NC} PR #${Y}$pr${NC}"
         _dim "  Model: ${model:-claude default}"
-        python3 -c "
-import json
-from datetime import datetime, timezone
-with open('$session_meta') as f: meta = json.load(f)
-meta['last_opened'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-meta['opens'] = meta.get('opens', 0) + 1
-if '$model_override':
-    meta['model'] = '$model_override'
-with open('$session_meta', 'w') as f:
-    json.dump(meta, f, indent=2)
-"
+        _session_touch "$session_meta" "$model_override"
     fi
 
     # ── Run Claude ────────────────────────────────────────────────────
@@ -2160,7 +2185,7 @@ PYEOF
     # If session exists but is done, reset it before resolving the harness
     if ! $is_new; then
         local session_status
-        session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
+        session_status=$(_session_field "$session_meta" status)
         if [[ "$session_status" == "done" ]]; then
             _log "Previous loop ${Y}$slug${NC} was closed — starting fresh"
             rm -f "$session_meta"
@@ -2430,7 +2455,7 @@ cmd_work() {
     # If session exists but is done, reset it before resolving the harness
     if ! $is_new; then
         local session_status
-        session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
+        session_status=$(_session_field "$session_meta" status)
         if [[ "$session_status" == "done" ]]; then
             _log "Previous session for ${Y}$task${NC} was closed — starting fresh"
             rm -f "$session_meta"
@@ -2652,41 +2677,36 @@ $acct_ctx"
         fi
 
         # Save session
-        CW_SESSION_HARNESS="$harness" CW_SESSION_PROVIDER="$provider" python3 -c "
+        CW_S_PROJECT="$name" CW_S_TASK="$task" CW_S_ACCOUNT="$account" CW_S_WORKFLOW="$workflow" \
+        CW_S_WORKTREE="$wt_dir" CW_S_NOTES="$notes_file" CW_S_SOURCE="$task_source" \
+        CW_S_SOURCE_URL="$task_url" CW_S_MODEL="$model" CW_S_HARNESS="$harness" \
+        CW_S_PROVIDER="$provider" CW_S_META="$session_meta" python3 - <<'PYEOF'
 import json, os
 from datetime import datetime, timezone
+e = os.environ
 meta = {
-    'project': '$name', 'task': '$task', 'type': 'task',
-    'account': '$account', 'workflow': '$workflow',
-    'worktree': '$wt_dir', 'notes': '$notes_file',
-    'source': '$task_source', 'source_url': '$task_url',
-    'model': '$model',
-    'harness': os.environ['CW_SESSION_HARNESS'],
+    'project': e['CW_S_PROJECT'], 'task': e['CW_S_TASK'], 'type': 'task',
+    'account': e['CW_S_ACCOUNT'], 'workflow': e['CW_S_WORKFLOW'],
+    'worktree': e['CW_S_WORKTREE'], 'notes': e['CW_S_NOTES'],
+    'source': e['CW_S_SOURCE'], 'source_url': e['CW_S_SOURCE_URL'],
+    'model': e['CW_S_MODEL'],
+    'harness': e['CW_S_HARNESS'],
     'harness_session_id': '',
-    'provider': os.environ['CW_SESSION_PROVIDER'],
+    'provider': e['CW_S_PROVIDER'],
     'status': 'active',
     'created': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'last_opened': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'opens': 1
 }
-with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
-"
+with open(e['CW_S_META'], 'w') as f: json.dump(meta, f, indent=2)
+PYEOF
 
         _link_account_skills "$account" "$(_account_root "$account")"
 
     else
         _log "Resuming task: ${C}$name${NC} task=${Y}$task${NC}"
         _dim "  Model: ${model:-claude default}"
-        python3 -c "
-import json
-from datetime import datetime, timezone
-with open('$session_meta') as f: meta = json.load(f)
-meta['last_opened'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-meta['opens'] = meta.get('opens', 0) + 1
-if '$model_override':
-    meta['model'] = '$model_override'
-with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
-"
+        _session_touch "$session_meta" "$model_override"
     fi
 
     # ── Run Claude ──────────────────────────────────────────────────────
@@ -2971,14 +2991,7 @@ _space_done() {
 
     # Update session
     if [[ -f "$session_dir/session.json" ]]; then
-        python3 -c "
-import json
-from datetime import datetime, timezone
-with open('$session_dir/session.json') as f: meta = json.load(f)
-meta['status'] = 'done'
-meta['closed'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
-"
+        _session_close "$session_dir/session.json"
     fi
 
     # Clean up account skill symlinks (both target and source dirs, in case
@@ -5343,9 +5356,9 @@ _gsd_sync() {
             local meta="$space_dir/session.json"
             [[ -f "$meta" ]] || continue
             local status worktree
-            status=$(python3 -c "import json; print(json.load(open('$meta')).get('status',''))" 2>/dev/null)
+            status=$(_session_field "$meta" status)
             [[ "$status" != "active" ]] && continue
-            worktree=$(python3 -c "import json; print(json.load(open('$meta')).get('worktree',''))" 2>/dev/null)
+            worktree=$(_session_field "$meta" worktree)
             [[ -d "$worktree" ]] || continue
             if [[ -f "$worktree/STATE.md" ]]; then
                 _log "GSD already present: ${DIM}$worktree${NC}"
@@ -5466,18 +5479,20 @@ cmd_create() {
     fi
 
     # ── Register in CW ────────────────────────────────────────────────
-    python3 -c "
-import json
-f = '$CW_REGISTRY'
+    CW_R_FILE="$CW_REGISTRY" CW_R_NAME="$proj_name" CW_R_PATH="$proj_path" CW_R_ACCOUNT="$account" \
+    CW_R_WHEN="$(date -u +%Y-%m-%dT%H:%M:%SZ)" python3 - <<'PYEOF'
+import json, os
+e = os.environ
+f = e['CW_R_FILE']
 try:
     with open(f) as fh: reg = json.load(fh)
 except: reg = {}
-reg['$proj_name'] = {
-    'path': '$proj_path', 'account': '$account', 'type': 'fullstack',
-    'registered': '$(date -u +%Y-%m-%dT%H:%M:%SZ)'
+reg[e['CW_R_NAME']] = {
+    'path': e['CW_R_PATH'], 'account': e['CW_R_ACCOUNT'], 'type': 'fullstack',
+    'registered': e['CW_R_WHEN']
 }
 with open(f, 'w') as fh: json.dump(reg, fh, indent=2)
-"
+PYEOF
     _log "Registered project ${C}$proj_name${NC} (account=${Y}$account${NC})"
 
     # ── Setup .claude dir & CLAUDE.md template ───────────────────────
@@ -5541,24 +5556,27 @@ Create an agent team to build this project in parallel. Analyze the scope and sp
     local session_dir="$CW_HOME/sessions/$proj_name/task-init"
     mkdir -p "$session_dir"
 
-    CW_SESSION_HARNESS="$harness" CW_SESSION_PROVIDER="$provider" python3 -c "
+    CW_S_PROJECT="$proj_name" CW_S_ACCOUNT="$account" CW_S_WORKTREE="$proj_path" \
+    CW_S_SOURCE="$source" CW_S_SOURCE_URL="$source_url" CW_S_HARNESS="$harness" \
+    CW_S_PROVIDER="$provider" CW_S_META="$session_meta" python3 - <<'PYEOF'
 import json, os
 from datetime import datetime, timezone
+e = os.environ
 meta = {
-    'project': '$proj_name', 'task': 'init', 'type': 'task',
-    'account': '$account',
-    'worktree': '$proj_path',
-    'source': '$source', 'source_url': '$source_url',
-    'harness': os.environ['CW_SESSION_HARNESS'],
+    'project': e['CW_S_PROJECT'], 'task': 'init', 'type': 'task',
+    'account': e['CW_S_ACCOUNT'],
+    'worktree': e['CW_S_WORKTREE'],
+    'source': e['CW_S_SOURCE'], 'source_url': e['CW_S_SOURCE_URL'],
+    'harness': e['CW_S_HARNESS'],
     'harness_session_id': '',
-    'provider': os.environ['CW_SESSION_PROVIDER'],
+    'provider': e['CW_S_PROVIDER'],
     'status': 'active',
     'created': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'last_opened': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'opens': 1
 }
-with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
-"
+with open(e['CW_S_META'], 'w') as f: json.dump(meta, f, indent=2)
+PYEOF
 
     # ── Launch Claude ─────────────────────────────────────────────────
     cd "$proj_path"
