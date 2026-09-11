@@ -231,3 +231,72 @@ FAKE
     "
     [ "$status" -eq 0 ]
 }
+
+# runs argv with a pseudo-terminal on stdin, stdout and stderr, like a real shell would
+_run_in_pty() {
+    python3 - "$@" <<'PY'
+import os, subprocess, sys
+master, slave = os.openpty()
+p = subprocess.Popen(sys.argv[1:], stdin=slave, stdout=slave, stderr=slave, close_fds=True)
+os.close(slave)
+out = b""
+while True:
+    try:
+        chunk = os.read(master, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    out += chunk
+sys.stdout.write(out.decode(errors="replace"))
+sys.exit(p.wait())
+PY
+}
+
+# a fake that records whether its stdout and stdin are terminals
+_tty_probe_fake() {
+    cat > "$BATS_TEST_TMPDIR/fakes/$1" <<FAKE
+#!/usr/bin/env bash
+i=notty; o=notty; [ -t 0 ] && i=tty; [ -t 1 ] && o=tty
+printf 'stdin=%s\nstdout=%s\n' "\$i" "\$o" > "$BATS_TEST_TMPDIR/tty.log"
+printf 'Paste code here: '
+exit 0
+FAKE
+    chmod +x "$BATS_TEST_TMPDIR/fakes/$1"
+}
+
+@test "an interactive claude login keeps the terminal instead of a pipe" {
+    _tty_probe_fake claude
+    run _run_in_pty "$CW_BIN" account login acct --harness claude
+    [ "$status" -eq 0 ]
+    run cat "$BATS_TEST_TMPDIR/tty.log"
+    [[ "$output" == *"stdout=tty"* ]]
+    [[ "$output" == *"stdin=tty"* ]]
+}
+
+@test "an interactive pi login keeps the terminal and shows an unterminated prompt" {
+    _tty_probe_fake pi
+    run _run_in_pty "$CW_BIN" account login acct --harness pi
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Paste code here: "* ]]
+    run cat "$BATS_TEST_TMPDIR/tty.log"
+    [[ "$output" == *"stdout=tty"* ]]
+}
+
+@test "--no-browser on a harness with no headless login is refused and runs nothing" {
+    local h
+    for h in claude pi opencode; do
+        rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
+        run "$CW_BIN" account login acct --harness "$h" --no-browser
+        [ "$status" -ne 0 ] || { echo "$h: not refused"; return 1; }
+        [[ "$output" == *"no headless login"* ]] || { echo "$h: $output"; return 1; }
+        [ "$(call_count)" -eq 0 ] || { echo "$h: the harness ran"; return 1; }
+    done
+}
+
+@test "an interactive codex login is passed through untouched, with no scraped lines" {
+    run "$CW_BIN" account login acct --harness codex
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Open this URL to continue:"* ]]
+    [[ "$output" != *"CW_LOGIN_URL="* ]]
+}

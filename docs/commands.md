@@ -265,7 +265,7 @@ Authenticate an account against a harness.
 
 **Options:**
 - `--harness, -H <name>` — which harness to log in; defaults to the account's own default harness
-- `--no-browser` — print a URL or device code instead of opening a browser (only honored today by harnesses with a device-code flow — Codex adds `--device-auth`; claude, pi and opencode ignore this flag and always run their normal interactive login)
+- `--no-browser` — print a URL or device code instead of opening a browser, plus `CW_LOGIN_URL=` / `CW_LOGIN_CODE=` lines. Only a harness with a headless login accepts it (Codex, which adds `--device-auth`); claude, pi and opencode refuse it with an error rather than silently running their interactive login. Without this flag the login runs attached to your terminal, untouched
 - `--with-api-key -` — read an API key from stdin instead of an interactive login; only works on a harness with an API-key import path (Codex today)
 
 ```bash

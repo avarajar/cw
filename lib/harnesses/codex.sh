@@ -4,6 +4,7 @@ codex_supports() {
     case "$1" in
         continue_last|non_interactive_prompt|model_flag|custom_provider) return 0 ;;
         instructions_file|api_key_login) return 0 ;;
+        headless_login) return 0 ;;
         *) return 1 ;;
     esac
 }

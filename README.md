@@ -62,8 +62,8 @@ cw account login glm --harness opencode
 ```
 
 `cw account login` also takes `--no-browser` (print a URL/device code instead of opening a
-browser — only honored by harnesses that implement a device-code flow; Codex is the one that
-does today) and `--with-api-key -` (read a key from stdin, for a harness with an API-key import
+browser — only accepted by a harness with a headless login; Codex is the one that does today,
+and the others refuse the flag instead of ignoring it) and `--with-api-key -` (read a key from stdin, for a harness with an API-key import
 path).
 
 Not every harness supports every feature `cw` knows about (agent teams, MCP, hooks,

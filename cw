@@ -979,6 +979,11 @@ _account_login() {
         _err "Harness '$harness' has no api-key import cw can drive."
         return 1
     fi
+    if [[ -n "$no_browser" && -z "$api_key_stdin" ]] && ! harness_supports headless_login; then
+        _err "Harness '$harness' has no headless login cw can drive, so --no-browser cannot be honoured."
+        _err "Run it without --no-browser to log in interactively, or use --with-api-key - if it takes a key."
+        return 1
+    fi
     mkdir -p "$dir"
 
     if [[ -n "$api_key_stdin" ]]; then
@@ -995,6 +1000,11 @@ _account_login() {
 
     CW_LOGIN_NO_BROWSER="$no_browser"
     harness_login || { _err "Harness '$harness' has no login flow cw can drive."; return 1; }
+    # interactive logins keep the terminal; only a headless flow is piped for its url and code
+    if [[ -z "$no_browser" ]]; then
+        _harness_exec
+        return $?
+    fi
     _harness_exec 2>&1 | _login_scrape
     return "${PIPESTATUS[0]}"
 }
