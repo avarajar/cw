@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# CW Installer — Claude Workspace Manager
+# CW Installer — Coding Workspace
 # Usage: ./install.sh
 #   or:  curl -fsSL https://raw.githubusercontent.com/avarajar/cw/main/install.sh | bash
 
@@ -167,7 +167,7 @@ setup_shell() {
         if [[ -f "$rc" ]]; then
             if ! grep -q "cw-shell-integration" "$rc" 2>/dev/null; then
                 echo "" >> "$rc"
-                echo "# CW — Claude Workspace Manager" >> "$rc"
+                echo "# CW — Coding Workspace" >> "$rc"
                 echo "$shell_line" >> "$rc"
                 ok "Added to $rc"
                 added=true
@@ -182,7 +182,7 @@ setup_shell() {
     if ! $added; then
         local target_rc="$HOME/.${user_shell}rc"
         echo "" >> "$target_rc"
-        echo "# CW — Claude Workspace Manager" >> "$target_rc"
+        echo "# CW — Coding Workspace" >> "$target_rc"
         echo "$shell_line" >> "$target_rc"
         ok "Created and added to $target_rc"
         added=true
@@ -200,7 +200,7 @@ setup_shell() {
 
 main() {
     echo ""
-    echo -e "${BOLD}CW — Claude Workspace Manager${NC}"
+    echo -e "${BOLD}CW — Coding Workspace${NC}"
     echo -e "Installing to ${C}$CW_HOME${NC}"
     echo ""
 

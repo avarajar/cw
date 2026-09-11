@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">CW</h1>
   <p align="center">
-    <strong>Claude Workspace Manager</strong>
+    <strong>Coding Workspace</strong>
     <br />
     Multi-project orchestrator for coding agents — <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a>, Codex CLI, Pi and OpenCode
   </p>

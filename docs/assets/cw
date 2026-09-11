@@ -12,7 +12,7 @@ NC='\033[0m'
 case "$1" in
   help)
     echo ""
-    echo -e "${BOLD}CW${NC} — Claude Workspace Manager"
+    echo -e "${BOLD}CW${NC} — Coding Workspace"
     echo ""
     echo -e "  ${C}cw create${NC} <description|URL>       Bootstrap new project"
     echo -e "  ${C}cw work${NC} <project> <task|URL>      Work on feature/bug in worktree"

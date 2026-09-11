@@ -1,4 +1,4 @@
-# CW — Claude Workspace Manager
+# CW — Coding Workspace
 
 Multi-project orchestrator for coding agents: Claude Code, Codex CLI, Pi and OpenCode. A Bash script (`cw`, ~6200 lines) that manages accounts, projects, worktrees, sessions and integrations, plus one driver per harness.
 

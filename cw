@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ============================================================================
-# CW — Claude Workspace Manager
+# CW — Coding Workspace
 # Orchestrates projects, accounts, modes, MCPs, agents and sessions
-# Multi-project orchestrator for Claude Code.
+# Multi-project orchestrator for coding agents: Claude Code, Codex, Pi and OpenCode.
 #
 # Usage: cw <command> [options]
 # ============================================================================
@@ -4138,8 +4138,8 @@ cmd_dashboard() {
 
     echo ""
     echo -e "${BOLD}╔═══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}║        ${C}CW v3 — Claude Workspace Orchestrator${NC}${BOLD}               ║${NC}"
-    echo -e "${BOLD}║        ${DIM}Multi-project Claude Code orchestrator${NC}${BOLD}             ║${NC}"
+    echo -e "${BOLD}║        ${C}CW v3 — Coding Workspace${NC}${BOLD}                               ║${NC}"
+    echo -e "${BOLD}║        ${DIM}Multi-project orchestrator for coding agents${NC}${BOLD}           ║${NC}"
     echo -e "${BOLD}╚═══════════════════════════════════════════════════════════════╝${NC}"
 
     # ── Accounts ─────────────────────────────────────────────────────────
@@ -6003,7 +6003,7 @@ PYEOF
 cmd_help() {
     cat << EOF
 
-${BOLD}CW — Claude Workspace Manager${NC}
+${BOLD}CW — Coding Workspace${NC}
 
 ${BOLD}MAIN COMMANDS${NC}
   create "<description>" [opts]       Bootstrap new project from scratch
