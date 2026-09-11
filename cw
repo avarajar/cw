@@ -1877,14 +1877,15 @@ cmd_open() {
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# LAUNCH — Quick Claude with account
+# LAUNCH — Quick agent session with an account
 # ════════════════════════════════════════════════════════════════════════════
 cmd_launch() {
     local account="${1:-$(_default_account)}"; shift || true
     [[ -d "$(_account_root "$account")" ]] || { _err "Account '$account' does not exist."; return 1; }
     CW_HARNESS="${_CW_HARNESS_ENV:-$CW_HARNESS_DEFAULT}"
     local dir; dir="$(_harness_dir "$account" "$CW_HARNESS")"
-    _log "Launching Claude (${C}$account${NC})..."
+    local label="$CW_HARNESS"; [[ "$label" == "claude" ]] && label="Claude"
+    _log "Launching $label (${C}$account${NC})..."
     _ensure_statusline "$dir"
     local model; model="$(_resolve_model "$account" "$CW_HARNESS" launch "" "")"
     [[ -n "$model" ]] || _use_platform_default_model "$dir"
@@ -3897,11 +3898,11 @@ PYEOF
 # PLAN — Auto-split tasks with Claude
 # ════════════════════════════════════════════════════════════════════════════
 cmd_plan() {
-    local name="" description="" model_override="" harness_override=""
+    local name="" description="" account_override="" model_override="" harness_override=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --model|-m) model_override="$2"; shift 2 ;;
-            --account|-a) shift 2 ;;
+            --account|-a) account_override="$2"; shift 2 ;;
             --harness|-H) harness_override="$2"; shift 2 ;;
             -*) shift ;;
             *)
@@ -3919,7 +3920,7 @@ cmd_plan() {
 
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
-    local account; account=$(_get_field "$pj" account "$(_default_account)")
+    local account; account=${account_override:-$(_get_field "$pj" account "$(_default_account)")}
     local harness; harness=$(_resolve_harness "$account" "$name" "" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
     CW_HARNESS="$harness"
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
@@ -6022,7 +6023,7 @@ ${BOLD}MAIN COMMANDS${NC}
     --every, -e <interval>            Fixed interval (30s, 5m, 2h); omit = self-paced
     --name <slug>                     Explicit session name (default: derived from prompt)
   open <project>                      Open project quick (no worktree)
-  launch [account]                    Open Claude with account (no project needed)
+  launch [account]                    Open the account's agent (no project; CW_HARNESS picks it)
   spaces [project]                    Show active spaces
     --json                            Machine-readable list of active spaces
   clean                               Remove stale worktrees/sessions

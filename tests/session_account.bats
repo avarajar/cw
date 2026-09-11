@@ -110,3 +110,10 @@ argv_after() {
     run "$CW_BIN" work app fix-auth --account oc
     [ "$(argv_after 1 --model)" = "zai/glm-5.1" ]
 }
+
+@test "plan --account launches on that account instead of the project's" {
+    run "$CW_BIN" plan app "migrate auth" --account local
+    [ "$status" -eq 0 ]
+    [ "$(call_field 1 bin)" = "opencode" ]
+    [ "$(call_field 1 'env:OPENCODE_DATA_DIR')" = "$CW_HOME/accounts/local/opencode" ]
+}

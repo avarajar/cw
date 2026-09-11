@@ -208,3 +208,16 @@ PY
     run python3 -c "import json,sys; sys.exit('harness' in json.load(open(sys.argv[1]))['app3'])" "$CW_HOME/projects.json"
     [ "$status" -eq 0 ]
 }
+
+@test "cw launch names the harness it launches" {
+    CW_HARNESS=codex run "$CW_BIN" launch acct
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Launching codex"* ]]
+    [[ "$output" != *"Claude"* ]]
+}
+
+@test "cw launch on claude keeps its message" {
+    run "$CW_BIN" launch acct
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Launching Claude"* ]]
+}

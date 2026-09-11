@@ -518,7 +518,7 @@ No. Existing accounts, projects and sessions keep working unchanged, on Claude C
 Claude Code runs against the real CLI. Codex, Pi and OpenCode are tested against recording fakes only, so they haven't been run for real yet. `cw doctor` shows whether each one is installed and logged in, and bug reports are welcome.
 
 **Can I use multiple accounts on the same project?**
-Each project maps to one account, but `--account <name>` on `cw work`, `cw review`, `cw loop` or `cw open` uses another one for that run.
+Each project maps to one account, but `--account <name>` on `cw work`, `cw review`, `cw plan`, `cw loop` or `cw open` uses another one for that run.
 
 **Do I need Linear, GitHub or Notion to use CW?**
 No. Plain branch names work (`cw work my-app fix-auth`). For ticket URLs, see [URL → Context](#url--context).

@@ -171,6 +171,7 @@ Plan a large task by having Claude analyze the codebase and split the goal into 
 cw plan my-app "migrate auth to OAuth2"
 cw plan my-app "add payment processing with Stripe"
 cw plan my-app "migrate auth to OAuth2" --harness codex   # plan on a specific harness
+cw plan my-app "migrate auth to OAuth2" --account personal # plan on another account
 ```
 
 Claude (or the chosen harness) reads the project structure, proposes 2-6 sub-tasks with branch names, key files, dependencies, and suggested workflows. Then asks if you want to create worktrees for each.
