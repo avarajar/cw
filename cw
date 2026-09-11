@@ -536,9 +536,10 @@ _harness_available() {
     command -v "${HARNESS_ARGV[0]}" >/dev/null 2>&1
 }
 
+# a driver that refuses to build a launch sets _CW_LAUNCH_REFUSED so callers can fail
 _harness_launch() {
     HARNESS_ARGV=(); HARNESS_ENV=()
-    harness_launch || return 1
+    harness_launch || { _CW_LAUNCH_REFUSED=1; return 1; }
     _harness_exec
 }
 
@@ -560,13 +561,12 @@ _harness_resume() {
 # the last resume rung: nothing attributable to resume, so start over from the notes file
 _harness_resume_fresh() {
     local notes="${CW_NOTES_FILE:-}" nl=$'\n'
-    if [[ -n "$notes" ]]; then
-        _warn "No earlier $CW_HARNESS conversation can be attributed to this session — starting a fresh one from $notes"
+    [[ -n "$notes" ]] && \
         CW_PROMPT="${CW_PROMPT:+$CW_PROMPT$nl$nl}The previous conversation for this session could not be resumed, so this one starts fresh. Read $notes first: it holds the objective, context and decisions so far."
-    else
-        _warn "No earlier $CW_HARNESS conversation can be attributed to this session — starting a fresh one"
-    fi
-    _harness_launch
+    HARNESS_ARGV=(); HARNESS_ENV=()
+    harness_launch || { _CW_LAUNCH_REFUSED=1; return 1; }
+    _warn "No earlier $CW_HARNESS conversation can be attributed to this session — starting a fresh one${notes:+ from $notes}"
+    _harness_exec
 }
 
 # records the harness's own session reference and launch dir after a run
@@ -775,7 +775,12 @@ _install_account_instructions() {
         return 0
     fi
     [[ "$src" -ef "$dest" ]] && return 0
-    ln -sf "$src" "$dest"
+    # a file or link the user put there is theirs; never replace it
+    if [[ -e "$dest" || -L "$dest" ]]; then
+        _dim "  Keeping your own $dest — the account's CLAUDE.md is not linked over it"
+        return 0
+    fi
+    ln -s "$src" "$dest"
 }
 
 # sets the globals every driver reads
@@ -1818,7 +1823,7 @@ cmd_open() {
     CW_PROJECT="$name" CW_TASK="" CW_SESSION_NAME="" CW_PROMPT="" CW_MODEL="$model" CW_PROVIDER="$provider"
     _harness_load "$CW_HARNESS" || return 1
     _harness_context
-    _harness_launch
+    _harness_launch || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
 
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) OPEN $name account=$account" >> "$CW_SESSIONS_LOG"
 }
@@ -2058,7 +2063,7 @@ If I say 'none', do not post. If I say 'edit', let me modify before posting."
         CW_NOTES_FILE="$notes_file" CW_CONTINUE_LAST_SAFE=""
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
-        _harness_resume
+        _harness_resume || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
         _record_harness_ref "$session_meta"
     else
         # Build review prompt: project skill > global skill > default
@@ -2151,7 +2156,7 @@ If I say 'none', do not post. If I say 'edit', let me modify the findings before
         CW_PROMPT="$(cat "$prompt_file")" CW_NOTES_FILE="$notes_file"
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
-        _harness_launch
+        _harness_launch || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
         _record_harness_ref "$session_meta"
     fi
 
@@ -2368,7 +2373,7 @@ PYEOF
         CW_PROMPT="$(cat "$session_dir/loop_prompt.txt")" CW_NOTES_FILE="$notes_file"
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
-        _harness_launch
+        _harness_launch || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
         _record_harness_ref "$session_meta"
     else
         local resume_prompt="Resume the loop for this session: read $notes_file for the objective and interval, then re-invoke /loop with that same objective (and interval, if any)."
@@ -2380,7 +2385,7 @@ PYEOF
         CW_NOTES_FILE="$notes_file" CW_CONTINUE_LAST_SAFE=""
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
-        _harness_resume
+        _harness_resume || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
         _record_harness_ref "$session_meta"
     fi
 }
@@ -2867,7 +2872,7 @@ MANDATORY — Comment & notes style: Keep every comment to a single short line. 
         CW_TEAM_ENV="$team_env" CW_PROMPT="$(cat "$prompt_file")" CW_NOTES_FILE="$notes_file"
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
-        _harness_launch
+        _harness_launch || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
         _record_harness_ref "$session_meta"
     elif ! $is_new; then
         # ── Resume context (worktree + branch awareness) ─────────────
@@ -2908,7 +2913,7 @@ $acct_resume"
         fi
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
-        _harness_resume
+        _harness_resume || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
         _record_harness_ref "$session_meta"
     else
         local session_name="$account/$name/$task"
@@ -2919,7 +2924,7 @@ $acct_resume"
         fi
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
-        _harness_launch
+        _harness_launch || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
         _record_harness_ref "$session_meta"
     fi
 
@@ -3729,7 +3734,7 @@ IMPORTANT: Keep the plan focused and practical. Don't over-split — 2-4 tasks i
     CW_PROMPT="$plan_prompt"
     _harness_load "$CW_HARNESS" || return 1
     _harness_context
-    _harness_launch
+    _harness_launch || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
     unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
 }
 
@@ -5749,7 +5754,7 @@ PYEOF
     CW_TEAM_ENV="$team_env" CW_PROMPT="$(cat "$prompt_file")"
     _harness_load "$CW_HARNESS" || return 1
     _harness_context
-    _harness_launch
+    _harness_launch || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
     _record_harness_ref "$session_meta"
 
     unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
