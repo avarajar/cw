@@ -115,6 +115,13 @@ NEW: cw work app fix-auth
   → open Claude with init prompt
   → Claude creates worktree + fetches context
 
+NEW on codex, pi or opencode: cw work app fix-auth --harness codex
+  → create session dir, TASK_NOTES.md, fetch context
+  → git fetch origin + git worktree add .tasks/fix-auth (existing branch attached, never deleted)
+  → symlink TASK_NOTES.md, SHARED_CONTEXT.md, and the root's .env and .claude/ into it
+  → open the harness inside the worktree, with a prompt that has no setup steps
+  → if any of that fails: one warning, no half-created worktree, and the agent-driven flow above
+
 RESUME: cw work app fix-auth (2nd time)
   → update session.json (opens++, last_opened)
   → open Claude with --continue
@@ -190,8 +197,8 @@ When a URL is passed as the task argument, CW detects the source and adjusts the
 
 | Source | Detection | Extracted ID | Branch Strategy |
 |--------|-----------|-------------|----------------|
-| Linear | `linear.app` in URL | `ABC-123` regex | `task/<id>` |
-| GitHub | `github.com` + `issues`/`pull` | Issue/PR number | PR branch or `task/<id>` |
+| Linear | `linear.app` in URL | `ABC-123` regex | the issue's `branchName`, else `task/<id>` |
+| GitHub | `github.com` + `issues`/`pull` | Issue/PR number | PR head branch (from `origin/<branch>`) or `task/<id>` |
 | Notion | `notion.so` or `notion.site` | Page slug | `task/<slug>` |
 | Plain text | No URL detected | Used as-is | Used as branch name directly |
 
@@ -200,8 +207,18 @@ When a URL is passed as the task argument, CW detects the source and adjusts the
 straight into `TASK_NOTES.md`. This is what makes the URL flow harness-agnostic: the context is
 already on disk by the time the agent starts, so it doesn't depend on that harness having a
 matching MCP connector. If no credential is configured for that source, `cw` falls back to its
-older behavior and asks the agent to fetch it and fill in `TASK_NOTES.md` itself via MCP — the
-agent then handles the worktree creation and the fetch via the init prompt, same as before.
+older behavior and asks the agent to fetch it and fill in `TASK_NOTES.md` itself via MCP.
+
+Who creates the worktree depends on the harness, not on the fetch. On claude the init prompt
+asks the agent to create it, same as before, so claude's first launch is in the project root.
+On every other harness `cw` creates it before launch, on the branch in the table above, and the
+harness starts inside it, so its working directory belongs to that one task, which codex's
+`resume --last` relies on (whether `--last` is scoped to the directory is unverified; see the
+CHANGELOG). `_work_branch` picks the branch, `_work_worktree_create` creates the worktree and
+links the task files, and on any failure removes any worktree it created (a branch it had just
+created stays) and returns so `cw work` can fall back to the agent-driven flow with one warning. It never deletes a branch: an existing one
+is attached to the new worktree as it is. The Linear fetcher hands `branchName` to `cw` as JSON
+through the file named by `CW_CONTEXT_META`, so `cw` never parses it back out of the markdown.
 
 ## Account Routing
 

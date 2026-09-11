@@ -49,6 +49,37 @@ configured for that source, `cw` falls back to asking the agent to fetch the con
 MCP, same as before this fetch existed — so MCP connectors are still worth setting up as a
 fallback, not required.
 
+**Worktree creation:**
+
+On `claude`, the init prompt asks the agent to create the worktree, as in the previous release:
+Claude starts in the project root, and `cw` opens later sessions in `.tasks/<task>` once it
+exists. On every other harness (`codex`, `pi`, `opencode`, and any user driver), a new
+`cw work` session creates the worktree itself before launching:
+
+| Task | Branch | Started from |
+|------|--------|--------------|
+| Plain name | `<task>` | the base branch (`--base`, else `origin/HEAD`, else `origin/main`) |
+| GitHub issue | `task/<task>` | the base branch |
+| GitHub PR | the PR's head branch, from `gh pr view <url> --json headRefName` | `origin/<head branch>` |
+| Notion page | `task/<task>` | the base branch |
+| Linear issue | the issue's `branchName` when `cw` fetched it, else `task/<task>` | the base branch |
+
+`cw` runs `git fetch origin` first, links `TASK_NOTES.md`, `SHARED_CONTEXT.md`, and the
+repository root's `.env` and `.claude/` (each only when the worktree does not already have it)
+into the worktree, and launches the harness there with a prompt that carries no setup steps.
+
+- **An existing branch is attached, never deleted or reset.** The agent-driven prompt tells the
+  agent to `git branch -D` an existing branch; `cw` does not, so unpushed work on it survives.
+- **If the worktree cannot be created** — no `origin` remote, a failed fetch, a missing start
+  point, the branch checked out in another worktree, an unresolvable PR branch, or anything
+  already at `.tasks/<task>` — `cw` prints one `Could not create the worktree (...)` line and
+  falls back to the agent-driven setup with the full setup prompt. A worktree that git created
+  and then reported as failed is removed first; a branch `cw` had just created is kept.
+- Only `cw work` creates worktrees. `review`, `loop`, `plan`, `create` and `open` do not.
+
+This is tested against real git with a local bare `origin`, and against recording fakes of
+`codex`, `pi` and `opencode`, not the real binaries.
+
 ---
 
 ### `cw review <project> <PR|URL> [--done]`

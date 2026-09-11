@@ -66,12 +66,31 @@
 
 ### Behaviour on non-claude harnesses
 
+- **`cw work` creates the task worktree itself.** On codex, pi, opencode and any user driver, a
+  new `cw work` session runs `git fetch origin` and `git worktree add .tasks/<task>` before
+  launching, on the branch the agent-driven prompt would have used: the task name, `task/<id>`
+  for a GitHub issue or Notion page, the PR's head branch from `origin/<branch>` (resolved with
+  `gh pr view <url> --json headRefName`), or the Linear issue's `branchName` when `cw` fetched
+  it, else `task/<id>`. It links `TASK_NOTES.md`, `SHARED_CONTEXT.md`, and the root's `.env` and
+  `.claude/` when the worktree lacks them, and launches the harness inside the worktree with a
+  prompt that carries no setup steps. Claude keeps the agent-driven setup unchanged.
+- **`cw` never deletes a branch.** Where the agent-driven prompt tells the agent to
+  `git branch -D` an existing branch, `cw` attaches the new worktree to it as it is, so a stale
+  branch is reused rather than restarted from the base branch.
+- **A worktree `cw` cannot create falls back to the agent-driven setup.** No `origin`, a failed
+  fetch, a missing start point, a branch checked out in another worktree, an unresolvable PR
+  branch, or anything already at `.tasks/<task>`: `cw` prints one line, sends the full setup
+  prompt, and launches where the old flow did (the project root, unless something already
+  exists at `.tasks/<task>`). A worktree git created and then reported as failed is removed
+  first; a branch `cw` had just created stays.
 - **Resume is attributable or fresh.** A session resumes only a conversation `cw` can attribute
   to it: a recorded harness session id, or — Codex only — `codex resume --last` inside the task's
-  own worktree after the session has already run there. Reviews, loops and new tasks run in the
-  shared project root, where "the last conversation here" may be another task's, so `--last` is
-  never used there. OpenCode's `--continue` is not used at all. When nothing is attributable,
-  `cw` prints one line and launches fresh with the resume prompt and a pointer to the notes file.
+  own worktree after the session has already run there. Because `cw` now creates that worktree
+  before the first launch, a codex task can use `--last` from its first resume. Reviews, loops,
+  and a task whose worktree `cw` could not create run in the shared project root, where "the
+  last conversation here" may be another task's, so `--last` is never used there. OpenCode's
+  `--continue` is not used at all. When nothing is attributable, `cw` prints one line and
+  launches fresh with the resume prompt and a pointer to the notes file.
   Claude's `--resume` / `--continue` / `--name` chain is unchanged.
 - **Codex session ids are captured from `$CODEX_HOME/sessions/`, unverified.** After a launch
   `cw` records the id of the one new rollout file that mentions the session's notes file. That
@@ -118,6 +137,25 @@
 
 ### Known limitations
 
+- **Claude's `--continue` fallback still runs in the shared project root.** When resuming a
+  claude session by name fails, `cw` runs `claude --continue` in the directory it opens in,
+  which is the project root until the agent has created the task's worktree. There,
+  `--continue` can reopen another task's claude conversation. This is the previous release's
+  behaviour, kept so that a command without `--harness` behaves exactly as before; the
+  never-guess resume rule above covers codex, pi and opencode only.
+- **A claude session created with `--account X` resumes on the project's account.** Unless
+  `--account X` is passed again, claude resolves the account as the previous release did. `cw
+  spaces` shows the session's own account and puts `--account X` in the suggested resume
+  command.
+- **`codex resume --last` is assumed, not verified, to look only at the current directory.**
+  `cw` offers it only inside a task's own worktree, and only after the session has run there;
+  it is tried when no Codex session id was recorded (the rollout-file capture above is itself
+  unverified) or when resuming the recorded id exits non-zero. Now that codex launches in its
+  own worktree, a directory-scoped `--last` finds only that task's conversations. If `--last`
+  is in fact global to `CODEX_HOME`, that protection is gone: it reopens the account's most
+  recent Codex conversation, which can belong to another task or project. Unlike the other
+  unverified assumptions in this release, this one does not fail safe, and it should be checked
+  against a real Codex install before relying on codex resume.
 - **`layout`/`legacy` recognition depends on a fixed marker list** (`CW_CLAUDE_MARKERS` in `cw`:
   `.claude.json`, `.credentials.json`, `settings.json`, `projects`, `todos`, `statsig`,
   `shell-snapshots`, `history.jsonl`, `ide`, `plugins`). An account whose Claude state carries

@@ -73,10 +73,34 @@ capabilities: a command that can proceed without a capability degrades — one d
 continues — while a command that is meaningless without it (`cw mcp` on a harness with no MCP
 support, `cw loop` on a harness without `/loop`) errors instead of silently doing nothing.
 
-Resuming never guesses. `cw` only reopens a conversation it can attribute to that session — a
-recorded session id, or for Codex the last conversation in the task's own worktree once the
-session has run there. When it has neither, it says so on one line and starts a fresh
-conversation pointed at `TASK_NOTES.md`, rather than risk reopening another task's.
+On `codex`, `pi` and `opencode`, `cw work` creates the task's worktree itself before it
+launches anything. It runs `git fetch origin`, then `git worktree add .tasks/<task>` on the
+branch the agent-driven setup would have picked: the task name for a plain task, `task/<id>` for
+a GitHub issue or a Notion page, the pull request's head branch (started from
+`origin/<branch>`) for a PR, and the Linear issue's `branchName` when the fetch returned one,
+otherwise `task/<id>`. It links `TASK_NOTES.md` and `SHARED_CONTEXT.md` into the worktree, plus
+the repository root's `.env` and `.claude/` when the worktree does not already have them, and
+launches the harness inside the worktree with a prompt that says the workspace is ready. `cw`
+never deletes a branch: if the branch already exists, the worktree is attached to it as it is.
+If the worktree cannot be created (no `origin`, a failed fetch, the branch checked out in
+another worktree, something already at `.tasks/<task>`), `cw` prints one line and falls back to
+the agent-driven setup, removing any worktree it half-created. Claude keeps that agent-driven
+setup unchanged: its prompt asks Claude to create the worktree, as in the previous release. The
+git side of this is tested against real git with a local `origin`; the three harnesses only
+against recording fakes.
+
+On `codex`, `pi` and `opencode`, `cw` only reopens a conversation it can attribute to that
+session — a recorded session id, or for Codex the last conversation in the task's own worktree
+once the session has run there. When it has neither, it says so on one line and starts a fresh
+conversation pointed at `TASK_NOTES.md`, rather than reopen another task's. The Codex rung rests
+on one unverified assumption: that `codex resume --last` only looks at the current directory. It
+has not been checked against a real Codex install, and if it is wrong that rung can reopen
+another task's conversation (see the CHANGELOG).
+
+Claude, the default harness, keeps the previous release's resume chain as it was: when resuming
+by name fails it runs `claude --continue` in the directory it opens in, which is the shared
+project root until the agent has created the task's worktree, so it can reopen another task's
+Claude conversation.
 
 The workflow stays portable because `cw` itself fetches Linear, GitHub and Notion context into
 `TASK_NOTES.md` before it launches anything — Linear via `LINEAR_API_KEY`, GitHub via the `gh`
