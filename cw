@@ -577,6 +577,18 @@ _read_harness_ref() {
     _session_field "$session_meta" harness_session_id || true
 }
 
+# prints the account a session was created on, or the fallback when it recorded none
+_session_account() {
+    local acct; acct="$(_session_field "$1" account)" || acct=""
+    acct="${acct:-$2}"
+    if [[ ! -d "$(_account_root "$acct")" ]]; then
+        _err "This session was created on account '$acct', which no longer exists."
+        _err "Resume it with --account <name>, or close it with --done."
+        return 1
+    fi
+    printf '%s' "$acct"
+}
+
 # bumps a session's open count and applies a model override, values via env
 _session_touch() {
     CW_META="$1" CW_MODEL_OVERRIDE="${2:-}" python3 - <<'PY'
@@ -1888,6 +1900,9 @@ cmd_review() {
 
     local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
     CW_HARNESS="$harness"
+    if ! $is_new && [[ -z "$account_override" && "$harness" != "claude" ]]; then
+        account="$(_session_account "$session_meta" "$account")" || return 1
+    fi
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
     _ensure_statusline "$acct_dir"
 
@@ -2208,6 +2223,9 @@ PYEOF
 
     local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
     CW_HARNESS="$harness"
+    if ! $is_new && [[ -z "$account_override" && "$harness" != "claude" ]]; then
+        account="$(_session_account "$session_meta" "$account")" || return 1
+    fi
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
     _ensure_statusline "$acct_dir"
     local provider; provider="$(_resolve_provider "$account" "$harness")"
@@ -2478,6 +2496,9 @@ cmd_work() {
 
     local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
     CW_HARNESS="$harness"
+    if ! $is_new && [[ -z "$account_override" && "$harness" != "claude" ]]; then
+        account="$(_session_account "$session_meta" "$account")" || return 1
+    fi
     local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
     _ensure_statusline "$acct_dir"
 
@@ -2889,6 +2910,8 @@ for proj in sorted(os.listdir(sessions_dir)):
         harness = m.get("harness") or "claude"
         provider = m.get("provider") or "native"
         model = m.get("model") or ""
+        proj_acct = reg.get(proj, {}).get("account", "")
+        acct = m.get("account") or proj_acct
 
         if stype == "task":
             sid = m.get("task", "?")
@@ -2899,10 +2922,15 @@ for proj in sorted(os.listdir(sessions_dir)):
             label = f"review: PR #{sid}"
             cmd = f"cw review {proj} {sid}"
         else: continue
+        # name the account whenever it is not the one the project would pick
+        if acct and acct != proj_acct:
+            cmd = f"{cmd} --account {acct}"
 
         label_extra = harness
         if provider and provider != "native":
             label_extra = f"{harness} · {model or provider}"
+        if acct and acct != proj_acct:
+            label_extra = f"{label_extra}  @{acct}"
         spaces.append((label, opens, last, cmd, label_extra))
 
     if spaces:
@@ -2963,10 +2991,15 @@ if os.path.isdir(sessions_dir):
                 resume = f"cw review {proj} {sid}"
             else:
                 continue
+            proj_acct = reg.get(proj, {}).get("account", "")
+            acct = m.get("account") or proj_acct
+            # name the account whenever it is not the one the project would pick
+            if acct and acct != proj_acct:
+                resume = f"{resume} --account {acct}"
 
             spaces.append({
                 "project": proj,
-                "account": reg.get(proj, {}).get("account", ""),
+                "account": acct,
                 "type": stype,
                 "id": sid,
                 "harness": m.get("harness") or "claude",

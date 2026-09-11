@@ -31,21 +31,30 @@ _opencode_base() {
     return 0
 }
 
+# prints the provider/model ref opencode expects; a native provider adds no prefix
+_opencode_model_ref() {
+    local provider="${CW_PROVIDER:-native}" model="$CW_MODEL"
+    if [[ -z "$provider" || "$provider" == "native" || "$model" == "$provider/"* ]]; then
+        printf '%s' "$model"
+    else
+        printf '%s/%s' "$provider" "$model"
+    fi
+}
+
 # writes the provider and model into the account's opencode config
 _opencode_write_config() {
     [[ -n "$CW_PROVIDER" && "$CW_PROVIDER" != "native" ]] || return 0
     mkdir -p "$CW_HARNESS_DIR"
-    CW_OC_FILE="$CW_HARNESS_DIR/opencode.json" CW_OC_MODEL="$CW_MODEL" \
-    CW_OC_PROVIDER="$CW_PROVIDER" python3 - <<'PY'
+    CW_OC_FILE="$CW_HARNESS_DIR/opencode.json" CW_OC_MODEL="$(_opencode_model_ref)" \
+    python3 - <<'PY'
 import json, os
 p = os.environ["CW_OC_FILE"]
 try:
     with open(p) as f: cfg = json.load(f)
 except Exception:
     cfg = {}
-provider, model = os.environ["CW_OC_PROVIDER"], os.environ["CW_OC_MODEL"]
-if model:
-    cfg["model"] = f"{provider}/{model}" if "/" not in model else model
+if os.environ["CW_OC_MODEL"]:
+    cfg["model"] = os.environ["CW_OC_MODEL"]
 with open(p, "w") as f: json.dump(cfg, f, indent=2)
 PY
 }
@@ -56,9 +65,9 @@ opencode_launch() {
     _opencode_base
     if [[ -n "$CW_PROMPT" ]]; then
         HARNESS_ARGV=(opencode run "$CW_PROMPT")
-        [[ -n "$CW_MODEL" ]] && HARNESS_ARGV+=(--model "$CW_PROVIDER/$CW_MODEL")
+        [[ -n "$CW_MODEL" ]] && HARNESS_ARGV+=(--model "$(_opencode_model_ref)")
     elif [[ -n "$CW_MODEL" ]]; then
-        HARNESS_ARGV+=(--model "$CW_PROVIDER/$CW_MODEL")
+        HARNESS_ARGV+=(--model "$(_opencode_model_ref)")
     fi
     return 0
 }
@@ -75,7 +84,7 @@ opencode_resume() {
            HARNESS_ARGV=(opencode run "$CW_PROMPT" --session "$CW_SESSION_REF") ;;
         *) return 1 ;;
     esac
-    [[ -n "$CW_MODEL" ]] && HARNESS_ARGV+=(--model "$CW_PROVIDER/$CW_MODEL")
+    [[ -n "$CW_MODEL" ]] && HARNESS_ARGV+=(--model "$(_opencode_model_ref)")
     return 0
 }
 
