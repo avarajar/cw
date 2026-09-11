@@ -471,7 +471,7 @@ are findings, so Forge can parse it unconditionally.
     {
       "name": "local",
       "root": "/Users/joselito/.cw/accounts/local",
-      "layout": "split",
+      "layout": "none",
       "default_harness": "opencode",
       "harnesses": [
         {
@@ -506,7 +506,11 @@ are findings, so Forge can parse it unconditionally.
 
 `status`: `connected` | `not_logged_in` | `not_installed` | `local` | `error`
 `provider_kind`: `native` | `api` | `local`
-`layout`: `legacy` (flat claude dir) | `split` (per-harness subdirs)
+`layout`: `split` | `legacy` | `none` — describes **claude's** state only, not the account's shape.
+`split` means a `claude/` subdirectory exists. `legacy` means no `claude/` subdirectory but
+recognised claude state at the account root, so `cw account migrate` has work to do. `none` means
+neither, which is what every codex-, pi- or opencode-only account reports. *(Amended during
+implementation: the draft said `split` meant per-harness subdirectories, which is not what shipped.)*
 `source`: `builtin` | `user`
 
 `detail` is `null`, a string, or an object. Forge must treat it as opaque except for
