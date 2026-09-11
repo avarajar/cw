@@ -68,27 +68,46 @@ PY
     [ "$(call_count)" -eq 0 ]
 }
 
-@test "a --harness value with a single quote does not break work's session.json" {
+@test "an invalid --harness is refused before work writes session.json" {
     make_project app >/dev/null
     run "$CW_BIN" work app fix-auth --harness "x'"
-    run python3 -c "import json; print(json.load(open('$CW_HOME/sessions/app/task-fix-auth/session.json'))['harness'])"
-    [ "$status" -eq 0 ]
-    [ "$output" = "x'" ]
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Unknown harness"* ]]
+    [ ! -e "$CW_HOME/sessions/app/task-fix-auth/session.json" ]
+    [ "$(call_count)" -eq 0 ]
 }
 
-@test "a --harness value with a single quote does not break review's session.json" {
+@test "an unknown --harness is refused before work writes session.json, so the task is not stuck" {
     make_project app >/dev/null
-    run "$CW_BIN" review app 123 --harness "x'"
-    run python3 -c "import json; print(json.load(open('$CW_HOME/sessions/app/review-pr-123/session.json'))['harness'])"
+    run "$CW_BIN" work app fix-auth --harness ghostharness
+    [ "$status" -ne 0 ]
+    [ ! -e "$CW_HOME/sessions/app/task-fix-auth/session.json" ]
+    run "$CW_BIN" work app fix-auth
     [ "$status" -eq 0 ]
-    [ "$output" = "x'" ]
+    [ "$(call_field 1 bin)" = "claude" ]
 }
 
-@test "a --harness value with a single quote does not break create's session.json" {
+@test "an unknown --harness is refused before review writes session.json" {
+    make_project app >/dev/null
+    run "$CW_BIN" review app 123 --harness ghostharness
+    [ "$status" -ne 0 ]
+    [ ! -e "$CW_HOME/sessions/app/review-pr-123/session.json" ]
+    [ "$(call_count)" -eq 0 ]
+}
+
+@test "an unknown --harness is refused before loop writes session.json" {
+    make_project app >/dev/null
+    run "$CW_BIN" loop app "check the deploy" --name lp --harness ghostharness
+    [ "$status" -ne 0 ]
+    [ ! -e "$CW_HOME/sessions/app/loop-lp/session.json" ]
+    [ "$(call_count)" -eq 0 ]
+}
+
+@test "an unknown --harness is refused before create writes session.json" {
     run "$CW_BIN" create "a test project" --name qcreate --dir "$BATS_TEST_TMPDIR/createdir" --harness "x'"
-    run python3 -c "import json; print(json.load(open('$CW_HOME/sessions/qcreate/task-init/session.json'))['harness'])"
-    [ "$status" -eq 0 ]
-    [ "$output" = "x'" ]
+    [ "$status" -ne 0 ]
+    [ ! -e "$CW_HOME/sessions/qcreate/task-init/session.json" ]
+    [ "$(call_count)" -eq 0 ]
 }
 
 @test "the CW_HARNESS env var routes like --harness would" {
@@ -183,6 +202,6 @@ PY
     git -C "$path" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
     run "$CW_BIN" project register "$path" --alias app3
     [ "$status" -eq 0 ]
-    run grep -q 'harness' "$CW_HOME/projects.json"
-    [ "$status" -ne 0 ]
+    run python3 -c "import json,sys; sys.exit('harness' in json.load(open(sys.argv[1]))['app3'])" "$CW_HOME/projects.json"
+    [ "$status" -eq 0 ]
 }

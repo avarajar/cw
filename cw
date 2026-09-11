@@ -419,21 +419,26 @@ _resolve_harness() {
         fi
         [[ -z "$recorded" ]] && recorded="$CW_HARNESS_DEFAULT"
     fi
+    local h=""
     if [[ -n "$recorded" ]]; then
         if [[ -n "$override" && "$override" != "$recorded" ]]; then
             _err "Session was created with $recorded. Refusing to resume it with $override."
             _err "Close it first, then create a new one with the harness you want."
             return 1
         fi
-        printf '%s' "$recorded"; return 0
+        h="$recorded"
+    elif [[ -n "$override" ]]; then
+        h="$override"
+    else
+        local pj proj_harness=""
+        if [[ -n "$project" ]] && pj=$(_get_project "$project" 2>/dev/null); then
+            proj_harness=$(_get_field "$pj" harness "")
+        fi
+        h="${proj_harness:-$(_account_default_harness "$account")}"
     fi
-    if [[ -n "$override" ]]; then printf '%s' "$override"; return 0; fi
-    local pj proj_harness=""
-    if [[ -n "$project" ]] && pj=$(_get_project "$project" 2>/dev/null); then
-        proj_harness=$(_get_field "$pj" harness "")
-    fi
-    if [[ -n "$proj_harness" ]]; then printf '%s' "$proj_harness"; return 0; fi
-    _account_default_harness "$account"
+    # validated here so a bad name never reaches session.json
+    _harness_driver_path "$h" >/dev/null || { _err "Unknown harness '$h'."; return 1; }
+    printf '%s' "$h"
 }
 
 # resolves an account name from a flag, a project, or the default
@@ -471,16 +476,24 @@ _json_str() {
     python3 -c "import json,sys; print(json.dumps(sys.argv[1]), end='')" "$1"
 }
 
+# prints the driver file for a harness name, first hit in search order
+_harness_driver_path() {
+    local h="$1" candidate
+    [[ "$h" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+    for candidate in "$CW_HOME/harnesses/$h.sh" \
+                     "$SCRIPT_DIR/../lib/harnesses/$h.sh" \
+                     "$SCRIPT_DIR/lib/harnesses/$h.sh"; do
+        [[ -f "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
+    done
+    return 1
+}
+
 # sources a driver and aliases its functions to the generic names
 _harness_load() {
     local h="${1:?Usage: _harness_load <harness>}"
     [[ "${_CW_HARNESS_LOADED:-}" == "$h" ]] && return 0
-    local candidate found="" fn
-    for candidate in "$CW_HOME/harnesses/$h.sh" \
-                     "$SCRIPT_DIR/../lib/harnesses/$h.sh" \
-                     "$SCRIPT_DIR/lib/harnesses/$h.sh"; do
-        [[ -f "$candidate" ]] && { found="$candidate"; break; }
-    done
+    local found="" fn
+    found="$(_harness_driver_path "$h")" || found=""
     if [[ -z "$found" ]]; then
         # fail safe so a later harness never inherits the previous driver
         for fn in supports config_env session_ref launch resume plugin doctor login; do
