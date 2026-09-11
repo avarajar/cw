@@ -3,12 +3,20 @@ load helpers/setup
 setup() {
     setup_cw_home
     mkdir -p "$BATS_TEST_TMPDIR/fakes"
-    cat > "$BATS_TEST_TMPDIR/fakes/gh" <<FAKE
-#!/usr/bin/env bash
-cat "$BATS_TEST_DIRNAME/fixtures/github-issue.json"
-FAKE
-    chmod +x "$BATS_TEST_TMPDIR/fakes/gh"
+    # a copy, not a link, so a test that rewrites fakes/gh cannot clobber the helper
+    cp "$BATS_TEST_DIRNAME/helpers/fake_gh" "$BATS_TEST_TMPDIR/fakes/gh"
+    export CW_FAKE_GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+    export CW_FAKE_GH_FIXTURES="$BATS_TEST_DIRNAME/fixtures"
     export PATH="$BATS_TEST_TMPDIR/fakes:$PATH"
+}
+
+# a git repo whose origin is some other github repository
+make_unrelated_repo() {
+    local dir="$BATS_TEST_TMPDIR/unrelated"
+    mkdir -p "$dir"
+    git -C "$dir" init -q -b main
+    git -C "$dir" remote add origin https://github.com/evil/unrelated.git
+    printf '%s' "$dir"
 }
 
 teardown() { stop_context_stub; }
@@ -34,6 +42,46 @@ teardown() { stop_context_stub; }
     [ "$status" -eq 0 ]
     [[ "$output" == *"Login button does nothing"* ]]
     [[ "$output" == *"no-op in Safari 17"* ]]
+}
+
+@test "github fetch hands gh the full url, never a bare number" {
+    run bash -c "source '$BATS_TEST_DIRNAME/../lib/context/github.sh'
+                 context_fetch_github https://github.com/org/repo/issues/7"
+    [ "$status" -eq 0 ]
+    run sed -n 4p "$CW_FAKE_GH_LOG"
+    [ "$output" = "https://github.com/org/repo/issues/7" ]
+}
+
+@test "github fetch from inside an unrelated repo still fetches the linked issue" {
+    local other; other="$(make_unrelated_repo)"
+    run bash -c "cd '$other'
+                 source '$BATS_TEST_DIRNAME/../lib/context/github.sh'
+                 context_fetch_github https://github.com/org/repo/issues/7"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"body-of-org/repo#7"* ]]
+    [[ "$output" != *"evil/unrelated"* ]]
+}
+
+@test "github fetch ignores a trailing comment anchor instead of reading its number" {
+    run bash -c "source '$BATS_TEST_DIRNAME/../lib/context/github.sh'
+                 context_fetch_github 'https://github.com/org/repo/issues/7#issuecomment-99'"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"body-of-org/repo#7"* ]]
+}
+
+@test "github fetch uses gh pr view for a pull request url" {
+    run bash -c "source '$BATS_TEST_DIRNAME/../lib/context/github.sh'
+                 context_fetch_github https://github.com/org/repo/pull/42"
+    [ "$status" -eq 0 ]
+    [ "$(sed -n 2p "$CW_FAKE_GH_LOG")" = "pr" ]
+    [ "$(sed -n 4p "$CW_FAKE_GH_LOG")" = "https://github.com/org/repo/pull/42" ]
+}
+
+@test "github fetch refuses a url that names no issue or pull request" {
+    run bash -c "source '$BATS_TEST_DIRNAME/../lib/context/github.sh'
+                 context_fetch_github https://github.com/org/repo/releases/1"
+    [ "$status" -ne 0 ]
+    [ ! -f "$CW_FAKE_GH_LOG" ]
 }
 
 @test "github fetch fails cleanly on a 404" {
@@ -296,6 +344,18 @@ EOF
     [ "$status" -eq 0 ]
     run grep -q "no-op in Safari 17" "$CW_HOME/sessions/app/task-issues-1/TASK_NOTES.md"
     [ "$status" -eq 0 ]
+}
+
+@test "work run from inside an unrelated repo writes the linked issue, not the cwd's" {
+    make_project app >/dev/null
+    local other; other="$(make_unrelated_repo)"
+    run bash -c "cd '$other' && '$CW_BIN' work app https://github.com/org/repo/issues/7"
+    [ "$status" -eq 0 ]
+    local notes="$CW_HOME/sessions/app/task-issues-7/TASK_NOTES.md"
+    run grep -q "body-of-org/repo#7" "$notes"
+    [ "$status" -eq 0 ]
+    run grep -q "evil/unrelated" "$notes"
+    [ "$status" -ne 0 ]
 }
 
 @test "work drops the fill-in-Context instruction from the prompt when the fetch succeeded" {
