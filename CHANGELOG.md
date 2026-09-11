@@ -27,7 +27,7 @@
   launching any harness (`LINEAR_API_KEY`, the `gh` CLI's own auth, `NOTION_TOKEN`), instead of
   relying solely on the harness's own MCP connectors. Falls back to the old MCP-based flow when
   no credential is configured.
-- A bats test suite (214 tests as of this release).
+- A bats test suite.
 
 ### Changed
 
@@ -64,6 +64,58 @@
   auto-closed on that path. All three attempts now export the same context, so autoclose fires
   regardless of which attempt in the chain actually succeeded.
 
+### Behaviour on non-claude harnesses
+
+- **Resume is attributable or fresh.** A session resumes only a conversation `cw` can attribute
+  to it: a recorded harness session id, or — Codex only — `codex resume --last` inside the task's
+  own worktree after the session has already run there. Reviews, loops and new tasks run in the
+  shared project root, where "the last conversation here" may be another task's, so `--last` is
+  never used there. OpenCode's `--continue` is not used at all. When nothing is attributable,
+  `cw` prints one line and launches fresh with the resume prompt and a pointer to the notes file.
+  Claude's `--resume` / `--continue` / `--name` chain is unchanged.
+- **Codex session ids are captured from `$CODEX_HOME/sessions/`, unverified.** After a launch
+  `cw` records the id of the one new rollout file that mentions the session's notes file. That
+  file layout has not been checked against a real Codex install; if it differs, nothing is
+  recorded and resume starts fresh as above. `session.json` also gains `harness_workdir` (the
+  directory a non-claude harness last ran in) for this.
+- **A resumed non-claude session keeps its account.** Without `--account`, `work`, `review` and
+  `loop` resume on the account recorded in `session.json`. Claude sessions resolve the account
+  exactly as before; `cw spaces` shows each session's own account and adds `--account` to the
+  suggested resume command when it differs from the project's.
+- **`cw loop` refuses on codex, pi and opencode.** It sends Claude Code's `/loop` command, which
+  they do not have. `cw work` likewise asks them for a self-review in plain words instead of
+  `/simplify`, and a harness without MCP is pointed at `TASK_NOTES.md` rather than told to fetch
+  the ticket through a Linear or Notion MCP. Both are gated by capabilities (`slash_commands`,
+  `mcp`); claude's prompts are byte-identical to before.
+- **`cw account login` keeps the terminal.** The login runs attached to your terminal. Only
+  `--no-browser` pipes it to emit `CW_LOGIN_URL=` / `CW_LOGIN_CODE=`, and only on a harness
+  declaring `headless_login` (Codex); on claude, pi and opencode `--no-browser` is refused
+  instead of silently ignored.
+- **A provider the driver cannot apply is refused.** Only the codex and opencode drivers apply a
+  non-native provider. An account with a provider on claude or pi (for example
+  `cw account add free --harness pi --provider openrouter`) is warned about at `account add` and
+  refused at launch, rather than run on the harness's own login while claiming to use the
+  provider.
+- **`CW_CLAUDE_FLAGS` applies to claude only.** Other harnesses read `CW_<HARNESS>_FLAGS`.
+- **Drivers do not overwrite user files.** Codex's `config.toml` gets only its top-level `model`
+  and `model_provider` lines set, with every other byte left in place; a file cw cannot safely
+  edit is refused with an error. An existing `AGENTS.md` / `CLAUDE.md` is never replaced by the
+  account instructions link, and an `opencode.json` that is not plain JSON is left alone.
+- **`cw doctor --json` fills `issues` and `warnings`** from the same checks as the human report.
+
+### Not built, or not verified
+
+- **OpenCode's interactive session argv is unverified.** A new OpenCode session with a prompt is
+  started with `opencode run "<prompt>"`, which is OpenCode's non-interactive mode: it runs the
+  prompt and exits rather than opening the TUI. The right argv for an interactive session with
+  an initial prompt has not been confirmed against a real install, so it has not been guessed.
+- **The Anthropic-compatible provider path for claude (brief item 3c) was not built.** Claude
+  never reads `CW_PROVIDER`; `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` routing for Z.ai,
+  MiniMax or Moonshot does not exist, and `cw doctor` never reports `"unofficial": true`. An
+  account with a provider on claude is refused at launch instead.
+- **Pi applies no provider.** The pi driver does not translate `CW_PROVIDER`, so the brief's
+  `cw account add free --harness pi --provider openrouter` example is refused at launch.
+
 ### Known limitations
 
 - **`layout`/`legacy` recognition depends on a fixed marker list** (`CW_CLAUDE_MARKERS` in `cw`:
@@ -77,7 +129,8 @@
   up. If a future Claude release renames these files, `CW_CLAUDE_MARKERS` is the single place to
   update.
 - **`cw account migrate` classifies root entries by name against a short deny-list**
-  (`CW_ACCOUNT_OWNED`, plus every name in `CW_HARNESS_ALL`), not by content. Anything added to
+  (`CW_ACCOUNT_OWNED`, every built-in harness, and every user driver in `~/.cw/harnesses/`), not
+  by content. Anything added to
   that deny-list in the future must genuinely belong to `cw` itself — migration will neither move
   a misclassified entry into `claude/` nor report it as a leftover; it will simply look like it
   was never there.

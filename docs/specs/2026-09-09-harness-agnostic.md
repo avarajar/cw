@@ -133,6 +133,8 @@ Fixed enumeration. An unknown capability is unsupported.
 | `statusline` | Has a statusline CW can configure |
 | `instructions_file` | Has a user-level instructions file CW can install `CLAUDE.md` into |
 | `skills` | Has a user-level skills directory CW can symlink account skills into |
+| `slash_commands` | Understands the Claude Code slash commands CW sends (`/loop`, `/simplify`) *(added in the final fix wave)* |
+| `headless_login` | Has a login that prints a URL or code, so `--no-browser` can be honoured *(added in the final fix wave)* |
 
 ### 3.4 Env contract
 
@@ -195,6 +197,12 @@ Two consequences worth stating explicitly:
 CW's model: one worktree per task means "the last codex session started here" is unambiguously
 this task's session. The codex driver therefore prefers `resume --last` from `CW_WORKDIR` and
 falls back to a recorded id. The same needs verifying for OpenCode's `--continue`.
+
+*(Amended in the final fix wave: the premise above is wrong. A new task launches in the shared
+project root and the agent creates the worktree later, and reviews and loops always run in the
+root, so `--last` there can select another task's conversation. Codex now tries a recorded id
+first and uses `--last` only in the task's own worktree after the session has run there; OpenCode
+does not use `--continue`; everything else falls to the last rung of §11.2.)*
 
 ### 4.3 Login
 

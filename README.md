@@ -37,9 +37,10 @@ CW launches Claude with the correct account, fetches the ticket from Linear, cre
 
 ## One Flow, Any Harness
 
-`cw work`, `review`, `loop`, `plan`, `create` and `open` don't hard-code Claude Code. Each goes
+`cw work`, `review`, `plan`, `create` and `open` don't hard-code Claude Code. Each goes
 through a driver layer, so the same command runs on whichever coding-agent CLI ("harness") the
-account is bound to:
+account is bound to. `cw loop` is the exception: it drives Claude Code's own `/loop` command, so
+it refuses on any other harness:
 
 ```bash
 cw work my-app fix-auth                    # uses the account's own harness
@@ -70,7 +71,12 @@ Not every harness supports every feature `cw` knows about (agent teams, MCP, hoo
 skip-permissions, a statusline, and more). Before using one, `cw` checks the harness's declared
 capabilities: a command that can proceed without a capability degrades — one dim warning, then
 continues — while a command that is meaningless without it (`cw mcp` on a harness with no MCP
-support) errors instead of silently doing nothing.
+support, `cw loop` on a harness without `/loop`) errors instead of silently doing nothing.
+
+Resuming never guesses. `cw` only reopens a conversation it can attribute to that session — a
+recorded session id, or for Codex the last conversation in the task's own worktree once the
+session has run there. When it has neither, it says so on one line and starts a fresh
+conversation pointed at `TASK_NOTES.md`, rather than risk reopening another task's.
 
 The workflow stays portable because `cw` itself fetches Linear, GitHub and Notion context into
 `TASK_NOTES.md` before it launches anything — Linear via `LINEAR_API_KEY`, GitHub via the `gh`
