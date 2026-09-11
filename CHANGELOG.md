@@ -53,6 +53,11 @@
 
 ### Fixed
 
+- `cw work` resolved `.git/info/exclude` relative to the directory it was run from, not the
+  project: run from `$HOME` it created `~/.git/info/exclude`, and run from inside another
+  repository it appended `.tasks`, `TASK_NOTES.md` and `SHARED_CONTEXT.md` to that repository's
+  exclude, leaving the project's own untouched. It now writes to the project's shared git dir
+  wherever it runs from, so the task files linked into a worktree stay out of `git status`.
 - `cw stack`'s plugin probe and install ran against the ambient `~/.claude` instead of the
   account's own config directory (no `CLAUDE_CONFIG_DIR` was set), so a plugin present in the
   ambient config but absent from the account was wrongly reported as already installed and never
@@ -76,13 +81,17 @@
   prompt that carries no setup steps. Claude keeps the agent-driven setup unchanged.
 - **`cw` never deletes a branch.** Where the agent-driven prompt tells the agent to
   `git branch -D` an existing branch, `cw` attaches the new worktree to it as it is, so a stale
-  branch is reused rather than restarted from the base branch.
+  branch is reused rather than restarted from the base branch. When `cw` falls back, the
+  non-claude setup prompt asks the agent to attach the existing branch instead of deleting it.
+  Claude's prompt keeps its `git branch -D` step.
 - **A worktree `cw` cannot create falls back to the agent-driven setup.** No `origin`, a failed
-  fetch, a missing start point, a branch checked out in another worktree, an unresolvable PR
-  branch, or anything already at `.tasks/<task>`: `cw` prints one line, sends the full setup
-  prompt, and launches where the old flow did (the project root, unless something already
-  exists at `.tasks/<task>`). A worktree git created and then reported as failed is removed
-  first; a branch `cw` had just created stays.
+  fetch, a missing start point, an invalid branch name, a branch checked out in another
+  worktree, an unresolvable PR branch, or anything already at `.tasks/<task>`: `cw` prints one
+  line, sends the setup prompt, and launches where the old flow did (the project root, unless
+  something already exists at `.tasks/<task>`). `cw` claims `.tasks/<task>` with an atomic
+  `mkdir` and on failure removes only what it claimed, so a second run of the same task never
+  removes the first run's worktree, and no other worktree's registration is pruned. A branch
+  `cw` had just created stays, and the warning names it.
 - **Resume is attributable or fresh.** A session resumes only a conversation `cw` can attribute
   to it: a recorded harness session id, or — Codex only — `codex resume --last` inside the task's
   own worktree after the session has already run there. Because `cw` now creates that worktree

@@ -94,7 +94,7 @@ my-app/                             # main branch (untouched)
 - Shared object store — no disk duplication of git history
 - Proper isolation — one broken build doesn't affect another
 
-**Git exclude:** `.tasks/`, `.reviews/`, and `*_NOTES.md` are added to `.git/info/exclude` (per-repo, not committed to `.gitignore`).
+**Git exclude:** `.tasks`, `TASK_NOTES.md` and `SHARED_CONTEXT.md` are added to the project's `info/exclude` (per-repo, not committed to `.gitignore`). The file is resolved from the project's own shared git dir, whichever directory `cw` runs from, so it also covers every worktree.
 
 ## Session Persistence
 
@@ -214,10 +214,13 @@ asks the agent to create it, same as before, so claude's first launch is in the 
 On every other harness `cw` creates it before launch, on the branch in the table above, and the
 harness starts inside it, so its working directory belongs to that one task, which codex's
 `resume --last` relies on (whether `--last` is scoped to the directory is unverified; see the
-CHANGELOG). `_work_branch` picks the branch, `_work_worktree_create` creates the worktree and
-links the task files, and on any failure removes any worktree it created (a branch it had just
-created stays) and returns so `cw work` can fall back to the agent-driven flow with one warning. It never deletes a branch: an existing one
-is attached to the new worktree as it is. The Linear fetcher hands `branchName` to `cw` as JSON
+CHANGELOG). `_work_branch` picks the branch, `_work_worktree_create` claims `.tasks/<task>` with
+an atomic `mkdir`, creates the worktree and links the task files, and on any failure removes
+only the directory it claimed (a branch it had just created stays, and the warning names it)
+and returns so `cw work` can fall back to the agent-driven flow with one warning. It never
+deletes a branch: an existing one is attached to the new worktree as it is, and on a non-claude
+harness the fallback prompt's `git branch -D` step is rewritten to attach the branch instead.
+The Linear fetcher hands `branchName` to `cw` as JSON
 through the file named by `CW_CONTEXT_META`, so `cw` never parses it back out of the markdown.
 
 ## Account Routing

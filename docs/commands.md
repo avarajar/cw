@@ -68,13 +68,19 @@ exists. On every other harness (`codex`, `pi`, `opencode`, and any user driver),
 repository root's `.env` and `.claude/` (each only when the worktree does not already have it)
 into the worktree, and launches the harness there with a prompt that carries no setup steps.
 
-- **An existing branch is attached, never deleted or reset.** The agent-driven prompt tells the
-  agent to `git branch -D` an existing branch; `cw` does not, so unpushed work on it survives.
+- **On these harnesses a branch is never deleted or reset.** `cw` attaches an existing branch to
+  the new worktree as it is. When it falls back, the setup prompt's "delete it:
+  `git branch -D`" step is replaced by an instruction to attach the existing branch, so neither
+  `cw` nor its prompt removes a branch holding unpushed work. (Claude's prompt keeps its
+  `git branch -D` step, unchanged from the previous release.)
 - **If the worktree cannot be created** — no `origin` remote, a failed fetch, a missing start
-  point, the branch checked out in another worktree, an unresolvable PR branch, or anything
-  already at `.tasks/<task>` — `cw` prints one `Could not create the worktree (...)` line and
-  falls back to the agent-driven setup with the full setup prompt. A worktree that git created
-  and then reported as failed is removed first; a branch `cw` had just created is kept.
+  point, an invalid branch name, the branch checked out in another worktree, an unresolvable PR
+  branch, or anything already at `.tasks/<task>` (including another run of the same task that
+  claimed it first) — `cw` prints one `Could not create the worktree (...)` line and falls back
+  to the agent-driven setup. `cw` claims `.tasks/<task>` with an atomic `mkdir` before
+  `git worktree add` and, on failure, removes only that directory, so it never touches another
+  run's worktree or any other worktree's registration. A branch `cw` had just created is kept,
+  and the warning names it.
 - Only `cw work` creates worktrees. `review`, `loop`, `plan`, `create` and `open` do not.
 
 This is tested against real git with a local bare `origin`, and against recording fakes of

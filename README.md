@@ -80,11 +80,13 @@ a GitHub issue or a Notion page, the pull request's head branch (started from
 `origin/<branch>`) for a PR, and the Linear issue's `branchName` when the fetch returned one,
 otherwise `task/<id>`. It links `TASK_NOTES.md` and `SHARED_CONTEXT.md` into the worktree, plus
 the repository root's `.env` and `.claude/` when the worktree does not already have them, and
-launches the harness inside the worktree with a prompt that says the workspace is ready. `cw`
-never deletes a branch: if the branch already exists, the worktree is attached to it as it is.
-If the worktree cannot be created (no `origin`, a failed fetch, the branch checked out in
-another worktree, something already at `.tasks/<task>`), `cw` prints one line and falls back to
-the agent-driven setup, removing any worktree it half-created. Claude keeps that agent-driven
+launches the harness inside the worktree with a prompt that says the workspace is ready. On
+these harnesses `cw` never deletes a branch: if the branch already exists, the worktree is
+attached to it as it is. If the worktree cannot be created (no `origin`, a failed fetch, the
+branch checked out in another worktree, something already at `.tasks/<task>`), `cw` prints one
+line and falls back to the agent-driven setup, whose prompt then asks the agent to attach an
+existing branch rather than delete it. It removes only a worktree directory it claimed itself,
+never another run's. Claude keeps that agent-driven
 setup unchanged: its prompt asks Claude to create the worktree, as in the previous release. The
 git side of this is tested against real git with a local `origin`; the three harnesses only
 against recording fakes.
