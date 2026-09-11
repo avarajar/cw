@@ -68,6 +68,7 @@ The capability enumeration is fixed; an unknown capability is always unsupported
 | `statusline` | Has a statusline `cw` can configure |
 | `instructions_file` | Has a user-level instructions file `cw` can install `CLAUDE.md`-equivalent content into |
 | `skills` | Has a user-level skills directory `cw` can symlink account skills into |
+| `api_key_login` | Has an API-key import path `cw account login --with-api-key -` can drive |
 
 A command that wants a capability but can proceed without it calls `_degrade`, which prints one
 dim line the first time a given capability is missing in the current process and then returns 1:
@@ -87,7 +88,7 @@ parse `cw`'s own argv.
 | Variable | Meaning |
 |---|---|
 | `CW_HARNESS` | Resolved harness name |
-| `CW_HARNESS_DIR` | Credential dir for this account (passed as `$1` context today; becomes account-root-relative in a later change) |
+| `CW_HARNESS_DIR` | This account's credential dir for `CW_HARNESS`, from `_harness_dir <account> <harness>` — the account root itself for a flat `claude` account, otherwise `<account root>/<harness>` |
 | `CW_SESSION_NAME` | `<account>/<project>/<task>`, or empty |
 | `CW_SESSION_REF` | Harness-native session id, or empty |
 | `CW_PROMPT` | Prompt text, or empty |
@@ -95,6 +96,8 @@ parse `cw`'s own argv.
 | `CW_PROVIDER` | Resolved provider, defaults to `native` |
 | `CW_EXTRA_FLAGS` | Word-split extra flags, already translated for this harness (see below) |
 | `CW_TEAM_ENV` | `HARNESS_ENV` entry enabling agent teams, or empty |
+| `CW_LOGIN_NO_BROWSER` | Set (non-empty) when `cw account login` was given `--no-browser`; only read by `<h>_login` |
+| `CW_LOGIN_API_KEY_STDIN` | Set (non-empty) when `cw account login` was given `--with-api-key -`; only read by `<h>_login`, and only meaningful when `api_key_login` is supported |
 
 `CW_PROJECT`, `CW_TASK`, `CW_TASK_TYPE` and `CW_ACCOUNT` are exported alongside these for hooks and
 `lib/dashboard`; their meaning is unchanged from before the driver layer existed.
@@ -154,8 +157,8 @@ echoagent_resume() {
 }
 ```
 
-Running `cw work myproject sometask` with `CW_HARNESS_DEFAULT=echoagent` (once per-command harness
-selection lands) would then call `echoagent_launch`, land in `_harness_exec`, and spawn
+Running `cw work myproject sometask --harness echoagent` (or registering the project or account
+with that harness) would then call `echoagent_launch`, land in `_harness_exec`, and spawn
 `echoagent --session ... "..."` with `ECHOAGENT_HOME` set — never touching any other part of `cw`.
 Since `echoagent_doctor`, `echoagent_login` and `echoagent_plugin` are omitted, `harness_doctor`,
 `harness_login` and `harness_plugin` are bound to functions that return 1, and any `cw` command
