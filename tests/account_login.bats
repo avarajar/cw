@@ -1,0 +1,302 @@
+load helpers/setup
+
+setup() {
+    setup_cw_home
+    mkdir -p "$BATS_TEST_TMPDIR/fakes"
+    cat > "$BATS_TEST_TMPDIR/fakes/codex" <<'FAKE'
+#!/usr/bin/env bash
+echo "Open this URL to continue:"
+echo "https://auth.example.com/device?code=WXYZ-7788"
+echo "Your code is WXYZ-7788"
+mkdir -p "$CODEX_HOME"; echo '{}' > "$CODEX_HOME/auth.json"
+exit 0
+FAKE
+    chmod +x "$BATS_TEST_TMPDIR/fakes/codex"
+    export PATH="$BATS_TEST_TMPDIR/fakes:$PATH"
+}
+
+@test "login emits a machine-parseable url line" {
+    run "$CW_BIN" account login acct --harness codex --no-browser
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"CW_LOGIN_URL=https://auth.example.com/device?code=WXYZ-7788"* ]]
+}
+
+@test "login emits a machine-parseable code line" {
+    run "$CW_BIN" account login acct --harness codex --no-browser
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"CW_LOGIN_CODE=WXYZ-7788"* ]]
+}
+
+@test "login passes the harness output through unchanged" {
+    run "$CW_BIN" account login acct --harness codex --no-browser
+    [[ "$output" == *"Open this URL to continue:"* ]]
+}
+
+@test "login preserves the harness output order around the scraped lines" {
+    run "$CW_BIN" account login acct --harness codex --no-browser
+    local line_no_of
+    line_no_of() { printf '%s\n' "$output" | grep -nxF "$1" | head -1 | cut -d: -f1; }
+    local l1 l2 l3
+    l1=$(line_no_of "Open this URL to continue:")
+    l2=$(line_no_of "https://auth.example.com/device?code=WXYZ-7788")
+    l3=$(line_no_of "Your code is WXYZ-7788")
+    [ -n "$l1" ] && [ -n "$l2" ] && [ -n "$l3" ]
+    [ "$l1" -lt "$l2" ]
+    [ "$l2" -lt "$l3" ]
+}
+
+@test "login exits with the child harness's exit status" {
+    cat > "$BATS_TEST_TMPDIR/fakes/codex" <<'FAKE'
+#!/usr/bin/env bash
+echo "login failed"
+exit 7
+FAKE
+    chmod +x "$BATS_TEST_TMPDIR/fakes/codex"
+    run "$CW_BIN" account login acct --harness codex --no-browser
+    [ "$status" -eq 7 ]
+}
+
+@test "login creates the per-harness credential dir" {
+    run "$CW_BIN" account login acct --harness codex --no-browser
+    [ -d "$CW_HOME/accounts/acct/codex" ]
+}
+
+@test "doctor reports codex connected after login" {
+    "$CW_BIN" account login acct --harness codex --no-browser
+    run bash -c "'$CW_BIN' doctor --json | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+h = [x for x in d[\"accounts\"][0][\"harnesses\"] if x[\"harness\"] == \"codex\"][0]
+assert h[\"status\"] == \"connected\", h
+print(\"ok\")'"
+    [ "$output" = "ok" ]
+}
+
+@test "an api key on stdin is written 600 and never echoed" {
+    run bash -c "echo 'sk-secret-value' | '$CW_BIN' account login acct --harness codex --with-api-key -"
+    [[ "$output" != *"sk-secret-value"* ]]
+    run mode_of "$CW_HOME/accounts/acct/codex/env"
+    [ "$output" = "600" ]
+    run grep -q 'sk-secret-value' "$CW_HOME/accounts/acct/codex/env"
+    [ "$status" -eq 0 ]
+}
+
+@test "the api key never reaches config.yaml or meta.json" {
+    echo 'sk-secret-value' | "$CW_BIN" account login acct --harness codex --with-api-key -
+    run grep -r 'sk-secret-value' "$CW_HOME/config.yaml" "$CW_HOME/accounts/acct/meta.json"
+    [ "$status" -ne 0 ]
+}
+
+@test "the api key appears nowhere under CW_HOME except the env file" {
+    echo 'sk-secret-value' | "$CW_BIN" account login acct --harness codex --with-api-key -
+    run grep -rl 'sk-secret-value' "$CW_HOME"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$CW_HOME/accounts/acct/codex/env" ]
+}
+
+@test "the api key never appears in the harness's argv, only on its stdin" {
+    local argvlog="$BATS_TEST_TMPDIR/argv.log"
+    cat > "$BATS_TEST_TMPDIR/fakes/codex" <<FAKE
+#!/usr/bin/env bash
+printf '%s\n' "\$@" > "$argvlog"
+cat > "$BATS_TEST_TMPDIR/stdin.log"
+exit 0
+FAKE
+    chmod +x "$BATS_TEST_TMPDIR/fakes/codex"
+    echo 'sk-secret-value' | "$CW_BIN" account login acct --harness codex --with-api-key - >/dev/null
+    run cat "$argvlog"
+    [[ "$output" == *"login"* ]]
+    [[ "$output" == *"--with-api-key"* ]]
+    [[ "$output" != *"sk-secret-value"* ]]
+    run grep -q 'sk-secret-value' "$BATS_TEST_TMPDIR/stdin.log"
+    [ "$status" -eq 0 ]
+}
+
+@test "an account with no driver for the harness fails cleanly instead of doing something surprising" {
+    run "$CW_BIN" account login acct --harness fakeharness
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Unknown harness 'fakeharness'"* ]]
+}
+
+@test "login on an unknown account fails without touching a harness" {
+    run "$CW_BIN" account login ghost --harness codex --no-browser
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not found"* ]]
+    [ ! -d "$CW_HOME/accounts/ghost" ]
+}
+
+@test "a secret already stored in an account's env file never appears in argv of a later launch" {
+    mkdir -p "$CW_HOME/accounts/acct/codex"
+    printf 'CODEX_API_KEY=sk-LEAKCANARY-123\n' > "$CW_HOME/accounts/acct/codex/env"
+    local argvlog="$BATS_TEST_TMPDIR/launch-argv.log"
+    local envlog="$BATS_TEST_TMPDIR/launch-env.log"
+    local leaklog="$BATS_TEST_TMPDIR/env-shim-leak.log"
+    cat > "$BATS_TEST_TMPDIR/fakes/codex" <<FAKE
+#!/usr/bin/env bash
+printf '%s\n' "\$@" > "$argvlog"
+env > "$envlog"
+exit 0
+FAKE
+    chmod +x "$BATS_TEST_TMPDIR/fakes/codex"
+    # shims env to catch a secret riding in env's own argv, not the launched process's
+    cat > "$BATS_TEST_TMPDIR/fakes/env" <<FAKE
+#!/usr/bin/env bash
+if [[ \$# -eq 0 ]]; then
+    exec /usr/bin/env
+fi
+for a in "\$@"; do
+    [[ "\$a" == CODEX_API_KEY=* ]] && printf '%s\n' "\$a" >> "$leaklog"
+done
+while [[ \$# -gt 0 && "\$1" == *=* ]]; do
+    export "\$1"
+    shift
+done
+exec "\$@"
+FAKE
+    chmod +x "$BATS_TEST_TMPDIR/fakes/env"
+    make_project app >/dev/null
+    run "$CW_BIN" work app fix-auth --harness codex
+    [ "$status" -eq 0 ]
+    run grep -q 'sk-LEAKCANARY-123' "$argvlog"
+    [ "$status" -ne 0 ]
+    run grep -qx 'CODEX_API_KEY=sk-LEAKCANARY-123' "$envlog"
+    [ "$status" -eq 0 ]
+    run bash -c "[ ! -f '$leaklog' ] || ! grep -q 'CODEX_API_KEY=sk-LEAKCANARY-123' '$leaklog'"
+    [ "$status" -eq 0 ]
+}
+
+# runs argv under a 5s watchdog so a reintroduced infinite loop fails fast
+_run_with_watchdog() {
+    python3 -c "
+import subprocess, sys
+try:
+    r = subprocess.run(sys.argv[1:], capture_output=True, timeout=5, text=True)
+    sys.stdout.write(r.stdout)
+    sys.stderr.write(r.stderr)
+    sys.exit(r.returncode)
+except subprocess.TimeoutExpired:
+    print('TIMEOUT-HANG-DETECTED')
+    sys.exit(124)
+" "$@"
+}
+
+@test "--with-api-key without a trailing dash fails cleanly instead of spinning forever" {
+    run _run_with_watchdog "$CW_BIN" account login acct --harness codex --with-api-key
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"TIMEOUT-HANG-DETECTED"* ]]
+    [[ "$output" == *"--with-api-key requires a trailing -"* ]]
+}
+
+@test "--harness as the final argument fails cleanly instead of an unbound-variable error" {
+    run _run_with_watchdog "$CW_BIN" account login acct --harness
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--harness requires a value"* ]]
+    [[ "$output" != *"unbound variable"* ]]
+}
+
+@test "a failed --harness login leaves no stray credential directory behind" {
+    run "$CW_BIN" account login acct --harness fakeharness
+    [ "$status" -ne 0 ]
+    [ ! -d "$CW_HOME/accounts/acct/fakeharness" ]
+}
+
+@test "an unterminated final line from the harness is not silently dropped" {
+    cat > "$BATS_TEST_TMPDIR/fakes/codex" <<'FAKE'
+#!/usr/bin/env bash
+echo "Open this URL to continue:"
+printf 'Paste the code: '
+exit 0
+FAKE
+    chmod +x "$BATS_TEST_TMPDIR/fakes/codex"
+    run "$CW_BIN" account login acct --harness codex --no-browser
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Paste the code: "* ]]
+}
+
+@test "--with-api-key against a harness with no api-key import refuses instead of claiming success" {
+    run bash -c "echo 'sk-should-not-be-stored' | '$CW_BIN' account login acct --harness claude --with-api-key -"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"has no api-key import"* ]]
+    [[ "$output" != *"API key stored"* ]]
+    [ ! -e "$CW_HOME/accounts/acct/env" ]
+    [ ! -d "$CW_HOME/accounts/acct/claude" ]
+}
+
+@test "login's exit status is the child's, even if the scraper stage fails on its own" {
+    # proves PIPESTATUS[0], not \$?, is what _account_login reports here
+    run bash -c "
+        source '$CW_BIN'
+        _login_scrape() { cat >/dev/null; return 1; }
+        _account_login acct --harness codex --no-browser
+    "
+    [ "$status" -eq 0 ]
+}
+
+# runs argv with a pseudo-terminal on stdin, stdout and stderr, like a real shell would
+_run_in_pty() {
+    python3 - "$@" <<'PY'
+import os, subprocess, sys
+master, slave = os.openpty()
+p = subprocess.Popen(sys.argv[1:], stdin=slave, stdout=slave, stderr=slave, close_fds=True)
+os.close(slave)
+out = b""
+while True:
+    try:
+        chunk = os.read(master, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    out += chunk
+sys.stdout.write(out.decode(errors="replace"))
+sys.exit(p.wait())
+PY
+}
+
+# a fake that records whether its stdout and stdin are terminals
+_tty_probe_fake() {
+    cat > "$BATS_TEST_TMPDIR/fakes/$1" <<FAKE
+#!/usr/bin/env bash
+i=notty; o=notty; [ -t 0 ] && i=tty; [ -t 1 ] && o=tty
+printf 'stdin=%s\nstdout=%s\n' "\$i" "\$o" > "$BATS_TEST_TMPDIR/tty.log"
+printf 'Paste code here: '
+exit 0
+FAKE
+    chmod +x "$BATS_TEST_TMPDIR/fakes/$1"
+}
+
+@test "an interactive claude login keeps the terminal instead of a pipe" {
+    _tty_probe_fake claude
+    run _run_in_pty "$CW_BIN" account login acct --harness claude
+    [ "$status" -eq 0 ]
+    run cat "$BATS_TEST_TMPDIR/tty.log"
+    [[ "$output" == *"stdout=tty"* ]]
+    [[ "$output" == *"stdin=tty"* ]]
+}
+
+@test "an interactive pi login keeps the terminal and shows an unterminated prompt" {
+    _tty_probe_fake pi
+    run _run_in_pty "$CW_BIN" account login acct --harness pi
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Paste code here: "* ]]
+    run cat "$BATS_TEST_TMPDIR/tty.log"
+    [[ "$output" == *"stdout=tty"* ]]
+}
+
+@test "--no-browser on a harness with no headless login is refused and runs nothing" {
+    local h
+    for h in claude pi opencode; do
+        rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
+        run "$CW_BIN" account login acct --harness "$h" --no-browser
+        [ "$status" -ne 0 ] || { echo "$h: not refused"; return 1; }
+        [[ "$output" == *"no headless login"* ]] || { echo "$h: $output"; return 1; }
+        [ "$(call_count)" -eq 0 ] || { echo "$h: the harness ran"; return 1; }
+    done
+}
+
+@test "an interactive codex login is passed through untouched, with no scraped lines" {
+    run "$CW_BIN" account login acct --harness codex
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Open this URL to continue:"* ]]
+    [[ "$output" != *"CW_LOGIN_URL="* ]]
+}

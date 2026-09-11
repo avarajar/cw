@@ -1,0 +1,1 @@
+{"data":{"issue":{"identifier":"SEI-214","title":"Reservation double-booking","description":"Two guests can book the same slot.","branchName":"jose/sei-214-double-booking","priority":1,"comments":{"nodes":[{"body":"Repro needs two browsers."}]}}}}

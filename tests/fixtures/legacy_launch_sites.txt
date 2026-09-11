@@ -1,0 +1,63 @@
+# every launch site the driver layer replaced, extracted verbatim
+# the scanner must flag exactly the 22 command lines below
+    CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS
+    CLAUDE_CONFIG_DIR="$dir" claude "$@"
+        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --resume "$session_name" "$(cat "$prompt_file")" \
+            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --continue "$(cat "$prompt_file")" \
+            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$prompt_file")"
+        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$prompt_file")"
+        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$session_dir/loop_prompt.txt")"
+        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --resume "$session_name" "$resume_prompt" \
+            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --continue "$resume_prompt" \
+            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$resume_prompt"
+        env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$prompt_file")"
+        env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --resume "$session_name" "$resume_msg" \
+            || env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --continue "$resume_msg" \
+            || env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$resume_msg"
+            env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "Create an agent team for this task: $team_prompt"
+            env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name"
+            CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name"
+    CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$account/$name/plan" "$plan_prompt"
+                    if command -v claude &>/dev/null && claude plugin list 2>/dev/null | grep -q "$plugin"; then
+                            CLAUDE_CONFIG_DIR="$acct_dir" claude plugin add "$plugin" 2>/dev/null || _warn "  Could not install plugin $plugin"
+    env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$account/$proj_name/init" "$(cat "$prompt_file")"
+    claude) claude --resume "$session_name" ;;
+
+# decoys the scanner must not flag
+    case "$harness" in
+        claude) dest="$dir/CLAUDE.md" ;;
+        codex)  dest="$dir/AGENTS.md" ;;
+    esac
+    echo -e "  ${Y}2.${NC} ${C}CLAUDE_CONFIG_DIR=~/.cw/accounts/work claude /login${NC}"
+            echo -e "     ${BOLD}CLAUDE_CONFIG_DIR=$dir claude /login${NC}"
+    # ── Claude CLI ───────────────────────────────────────────────────────
+    if command -v claude &>/dev/null; then
+        echo -e "  ${G}✓${NC} claude CLI found"
+    else
+        echo -e "  ${Y}!${NC} claude CLI not found"
+        warnings=$((warnings+1))
+    fi
+    cat > "$CW_HOME/mcps/README.md" << 'MD'
+# MCP Setup
+
+Replace `$ACCT` with your account path (e.g., ~/.cw/accounts/work).
+
+```bash
+# GitHub
+CLAUDE_CONFIG_DIR=$ACCT claude mcp add --transport http github https://api.githubcopilot.com/mcp/ --scope user
+
+# Linear
+CLAUDE_CONFIG_DIR=$ACCT claude mcp add --transport http linear https://mcp.linear.app/mcp --scope user
+
+# Notion
+CLAUDE_CONFIG_DIR=$ACCT claude mcp add --transport http notion https://mcp.notion.com/mcp --scope user
+```
+
+Verify with `/mcp` inside Claude Code.
+MD
+CW_HARNESS_DEFAULT="claude"
+_dim "  Model: ${model:-claude default}"
+# a comment naming claude --resume "$session_name"
+pip install --quiet somepackage
+_log "pi and opencode appear here only as prose"
+command -v "${HARNESS_ARGV[0]}" >/dev/null 2>&1

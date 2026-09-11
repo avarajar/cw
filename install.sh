@@ -93,6 +93,13 @@ install_files() {
     # Copy lib
     if [[ -d "$source_dir/lib" ]]; then
         cp "$source_dir"/lib/*.sh "$CW_HOME/lib/" 2>/dev/null || true
+        # Copy harness drivers and context adapters
+        for sub in harnesses context; do
+            if [[ -d "$source_dir/lib/$sub" ]]; then
+                mkdir -p "$CW_HOME/lib/$sub"
+                cp "$source_dir"/lib/$sub/*.sh "$CW_HOME/lib/$sub/" 2>/dev/null || true
+            fi
+        done
         # Copy dashboard
         if [[ -d "$source_dir/lib/dashboard" ]]; then
             mkdir -p "$CW_HOME/lib/dashboard"

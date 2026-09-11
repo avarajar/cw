@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# records one invocation, then exits with the next code in CW_FAKE_EXIT_SEQ
+: "${CW_FAKE_LOG:?CW_FAKE_LOG must be set}"
+{
+    printf 'bin=%s\n' "$(basename "$0")"
+    printf 'cwd=%s\n' "$PWD"
+    printf 'env:CLAUDE_CONFIG_DIR=%s\n' "${CLAUDE_CONFIG_DIR:-}"
+    printf 'env:CODEX_HOME=%s\n' "${CODEX_HOME:-}"
+    printf 'env:PI_CODING_AGENT_DIR=%s\n' "${PI_CODING_AGENT_DIR:-}"
+    printf 'env:OPENCODE_DATA_DIR=%s\n' "${OPENCODE_DATA_DIR:-}"
+    printf 'env:OPENCODE_CONFIG=%s\n' "${OPENCODE_CONFIG:-}"
+    printf 'env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=%s\n' "${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-}"
+    printf 'env:CW_PROJECT=%s\n' "${CW_PROJECT:-}"
+    printf 'env:CW_TASK=%s\n' "${CW_TASK:-}"
+    printf 'env:CW_TASK_TYPE=%s\n' "${CW_TASK_TYPE:-}"
+    for a in "$@"; do printf 'arg=%s\n' "$a"; done
+    printf -- '--- end ---\n'
+} >> "$CW_FAKE_LOG"
+
+n=0
+[[ -f "$CW_FAKE_LOG.n" ]] && n=$(cat "$CW_FAKE_LOG.n")
+echo $((n + 1)) > "$CW_FAKE_LOG.n"
+read -r -a codes <<< "${CW_FAKE_EXIT_SEQ:-0}"
+idx=$(( n < ${#codes[@]} ? n : ${#codes[@]} - 1 ))
+exit "${codes[$idx]}"

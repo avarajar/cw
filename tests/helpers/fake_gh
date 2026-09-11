@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# answers only the exact gh view call the fetcher should make; a bare number resolves from cwd like real gh
+[[ -n "${CW_FAKE_GH_LOG:-}" ]] && { printf '%s\n' "cwd=$PWD" "$@" "--- end ---" >> "$CW_FAKE_GH_LOG"; }
+fixtures="${CW_FAKE_GH_FIXTURES:?CW_FAKE_GH_FIXTURES must be set}"
+# a pull request's head branch, answered only for a canonical url
+if [[ $# -eq 5 && "$1" == pr && "$2" == view && "$4" == --json && "$5" == headRefName ]]; then
+    [[ "$3" =~ ^https://github\.com/[^/]+/[^/]+/pull/([0-9]+)$ ]] || { echo "fake gh: unexpected target: $3" >&2; exit 64; }
+    printf '{"headRefName":"feature/pr-%s"}\n' "${BASH_REMATCH[1]}"
+    exit 0
+fi
+[[ $# -eq 5 && ( "$1" == issue || "$1" == pr ) && "$2" == view && "$4" == --json \
+   && "$5" == title,body,number,state,labels ]] || { echo "fake gh: unexpected argv: $*" >&2; exit 64; }
+target="$3" repo="" num=""
+if [[ "$target" =~ ^https://github\.com/([^/]+/[^/]+)/(issues|pull)/([0-9]+)$ ]]; then
+    repo="${BASH_REMATCH[1]}" num="${BASH_REMATCH[3]}"
+elif [[ "$target" =~ ^[0-9]+$ ]]; then
+    origin=$(git remote get-url origin 2>/dev/null) || { echo "fatal: not a git repository" >&2; exit 1; }
+    repo=$(printf '%s' "$origin" | sed -E 's#^(https://github\.com/|git@github\.com:)##; s#\.git$##')
+    num="$target"
+else
+    echo "fake gh: unexpected target: $target" >&2; exit 64
+fi
+if [[ "$repo" == org/repo && "$num" == 1 ]]; then
+    cat "$fixtures/github-issue.json"
+    exit 0
+fi
+CW_R="$repo" CW_N="$num" python3 -c '
+import json, os
+r, n = os.environ["CW_R"], int(os.environ["CW_N"])
+print(json.dumps({"title": f"{r} #{n}", "body": f"body-of-{r}#{n}", "number": n, "state": "open", "labels": []}))'

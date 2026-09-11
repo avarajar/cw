@@ -19,7 +19,7 @@ fi
 
 set -uo pipefail
 
-CW_VERSION="0.2.0"
+CW_VERSION="0.3.0"
 CW_HOME="${CW_HOME:-$HOME/.cw}"
 CW_ACCOUNTS_DIR="$CW_HOME/accounts"
 CW_REGISTRY="$CW_HOME/projects.json"
@@ -105,6 +105,8 @@ print(m.group(1) if m else '${CW_DEFAULT_MODEL:-}')
 # so Claude uses its platform default — same as /model → "Default (recommended)"
 _use_platform_default_model() {
     local settings="$1/settings.json"
+    _harness_load "${CW_HARNESS:-$CW_HARNESS_DEFAULT}" || return 0
+    harness_supports model_flag || return 0
     [[ -f "$settings" ]] || return
     python3 -c "
 import json
@@ -121,6 +123,8 @@ _ensure_dirs() {
 
 _ensure_statusline() {
     local acct_dir="${1:?Usage: _ensure_statusline <acct_dir>}"
+    _harness_load "${CW_HARNESS:-$CW_HARNESS_DEFAULT}" || return 0
+    harness_supports statusline || return 0
     local settings="$acct_dir/settings.json"
     local sl_script="$HOME/.claude/statusline-command.sh"
     [[ -f "$sl_script" ]] || return 0
@@ -134,20 +138,921 @@ with open('$settings', 'w') as f: json.dump(s, f, indent=2)
 "
 }
 
+# symlinks account skills where the harness looks for them
+_link_account_skills() {
+    local account="$1" acct_root="$2"
+    _harness_load "${CW_HARNESS:-$CW_HARNESS_DEFAULT}" || return 0
+    harness_supports skills || return 0
+    local skills_dir="$acct_root/skills"
+    [[ -d "$skills_dir" ]] || return 0
+    local skill_dir skill_name target
+    for skill_dir in "$skills_dir"/*/; do
+        [[ -d "$skill_dir" ]] || continue
+        skill_name=$(basename "$skill_dir")
+        case "$skill_name" in acct--*) continue ;; esac
+        target="$HOME/.claude/skills/acct--${account}--${skill_name}"
+        [[ -e "$target" ]] || ln -sf "$skill_dir" "$target"
+    done
+}
+
 _get_project() {
-    python3 -c "
-import json, sys
+    CW_REG="$CW_REGISTRY" CW_NAME="$1" python3 -c "
+import json, os, sys
 try:
-    with open('$CW_REGISTRY') as f: reg = json.load(f)
-    if '$1' in reg:
-        print(json.dumps(reg['$1']))
+    with open(os.environ['CW_REG']) as f: reg = json.load(f)
+    if os.environ['CW_NAME'] in reg:
+        print(json.dumps(reg[os.environ['CW_NAME']]))
     else: sys.exit(1)
 except: sys.exit(1)
 " 2>/dev/null
 }
 
 _get_field() {
-    echo "$1" | python3 -c "import json,sys; print(json.load(sys.stdin).get('$2','$3'))" 2>/dev/null
+    echo "$1" | CW_KEY="$2" CW_DEF="${3-}" python3 -c "import json,os,sys; print(json.load(sys.stdin).get(os.environ['CW_KEY'],os.environ['CW_DEF']))" 2>/dev/null
+}
+
+# prints one field of a session.json, exit 2 when the file cannot be read as an object
+_session_field() {
+    CW_META="$1" CW_FIELD="$2" python3 - <<'PY' 2>/dev/null
+import json, os, sys
+try:
+    with open(os.environ["CW_META"]) as f: m = json.load(f)
+except Exception:
+    sys.exit(2)
+if not isinstance(m, dict):
+    sys.exit(2)
+v = m.get(os.environ["CW_FIELD"])
+print(v if v not in (None, "") else "")
+PY
+}
+
+# an account's identity dir — meta.json, templates/, skills/, CLAUDE.md live here
+_account_root() {
+    printf '%s' "$CW_ACCOUNTS_DIR/${1:?Usage: _account_root <account>}"
+}
+
+# claude keeps the legacy flat dir unless a claude subdir exists
+_harness_dir() {
+    local account="${1:?Usage: _harness_dir <account> <harness>}" harness="${2:?}"
+    local root; root="$(_account_root "$account")"
+    if [[ "$harness" == "claude" && ! -d "$root/claude" ]]; then
+        printf '%s' "$root"
+    else
+        printf '%s' "$root/$harness"
+    fi
+}
+
+# root entries cw owns — a harness migration never moves these
+CW_ACCOUNT_OWNED="meta.json CLAUDE.md templates skills"
+
+# root entries that mean claude itself has state here — a stray file does not
+CW_CLAUDE_MARKERS=".claude.json .credentials.json settings.json projects todos statsig shell-snapshots history.jsonl ide plugins"
+
+# lists a dir into CW_ACCOUNT_ENTRIES, dotfiles included, empty dir tolerated
+_account_scan_dir() {
+    local dir="$1" undo_dot=false undo_null=false
+    CW_ACCOUNT_ENTRIES=()
+    [[ -d "$dir" ]] || return 0
+    shopt -q dotglob || undo_dot=true
+    shopt -q nullglob || undo_null=true
+    shopt -s dotglob nullglob
+    local e
+    for e in "$dir"/*; do
+        CW_ACCOUNT_ENTRIES+=("$e")
+    done
+    $undo_dot && shopt -u dotglob
+    $undo_null && shopt -u nullglob
+    return 0
+}
+
+# true when a root entry belongs to cw itself or to a harness of its own
+_account_entry_owned() {
+    local base="$1" keep
+    [[ -n "${_CW_OWNED_NAMES:-}" ]] || _CW_OWNED_NAMES="$CW_ACCOUNT_OWNED $(_harness_names)"
+    for keep in $_CW_OWNED_NAMES; do
+        [[ "$base" == "$keep" ]] && return 0
+    done
+    return 1
+}
+
+# collects the root entries a claude migration would move, into CW_ACCOUNT_ENTRIES
+_account_claude_entries() {
+    local root="$1" e keep=()
+    _account_scan_dir "$root"
+    for e in ${CW_ACCOUNT_ENTRIES[@]+"${CW_ACCOUNT_ENTRIES[@]}"}; do
+        _account_entry_owned "$(basename "$e")" && continue
+        keep+=("$e")
+    done
+    CW_ACCOUNT_ENTRIES=(${keep[@]+"${keep[@]}"})
+}
+
+# true when the account root is itself a claude config dir
+_account_has_claude_state() {
+    local root="$1" name
+    for name in $CW_CLAUDE_MARKERS; do
+        [[ -e "$root/$name" || -L "$root/$name" ]] && return 0
+    done
+    return 1
+}
+
+# an independent listing, so a bug in the glob scanner cannot mask an unfinished migration
+_account_root_leftovers() {
+    local root="$1" path base
+    while IFS= read -r path; do
+        base="${path##*/}"
+        _account_entry_owned "$base" && continue
+        printf '%s\n' "$base"
+    done < <(find "$root" -mindepth 1 -maxdepth 1)
+}
+
+# split when a claude subdir exists, legacy when claude state sits at the root, else none
+_account_layout() {
+    local root; root="$(_account_root "$1")"
+    [[ -d "$root/claude" ]] && { printf 'split'; return 0; }
+    if _account_has_claude_state "$root"; then
+        printf 'legacy'
+    else
+        printf 'none'
+    fi
+}
+
+_account_meta_get() {
+    local account="$1" harness="$2" field="$3"
+    local meta; meta="$(_account_root "$account")/meta.json"
+    [[ -f "$meta" ]] || return 0
+    python3 - "$meta" "$harness" "$field" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1]) as f: m = json.load(f)
+except Exception:
+    sys.exit(0)
+v = m.get("harnesses", {}).get(sys.argv[2], {}).get(sys.argv[3])
+print(v if v is not None else "")
+PY
+}
+
+_account_meta_set() {
+    local account="$1" harness="$2" field="$3" value="$4"
+    local meta; meta="$(_account_root "$account")/meta.json"
+    python3 - "$meta" "$harness" "$field" "$value" <<'PY'
+import json, os, sys
+p, harness, field, value = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+try:
+    with open(p) as f: m = json.load(f)
+except Exception:
+    m = {}
+m.setdefault("harnesses", {}).setdefault(harness, {})[field] = value or None
+os.makedirs(os.path.dirname(p), exist_ok=True)
+with open(p, "w") as f: json.dump(m, f, indent=2)
+PY
+}
+
+_account_default_harness() {
+    local account="$1"
+    local meta; meta="$(_account_root "$account")/meta.json"
+    local h=""
+    if [[ -f "$meta" ]]; then
+        h=$(CW_META="$meta" python3 -c "
+import json, os
+try: print(json.load(open(os.environ['CW_META'])).get('harness') or '')
+except Exception: print('')
+" 2>/dev/null)
+    fi
+    printf '%s' "${h:-$CW_HARNESS_DEFAULT}"
+}
+
+# classifies a provider as native (the harness's own account), local, or a remote api
+_provider_kind() {
+    case "$1" in
+        ""|native)                 printf 'native' ;;
+        ollama|lmstudio|llamacpp)  printf 'local' ;;
+        *)                         printf 'api' ;;
+    esac
+}
+
+# first match wins: override, session, account, config models, harness default
+_resolve_model() {
+    local account="$1" harness="$2" task_type="$3" override="$4" session_meta="$5"
+    if [[ -n "$override" ]]; then printf '%s' "$override"; return 0; fi
+    if [[ -n "$session_meta" && -f "$session_meta" ]]; then
+        local stored
+        stored=$(_session_field "$session_meta" model)
+        [[ -n "$stored" ]] && { printf '%s' "$stored"; return 0; }
+    fi
+    local acct_model; acct_model=$(_account_meta_get "$account" "$harness" model)
+    [[ -n "$acct_model" ]] && { printf '%s' "$acct_model"; return 0; }
+    if [[ "$harness" == "claude" ]]; then
+        _model_for_type "$task_type"
+        return 0
+    fi
+    printf '%s' ""
+}
+
+# resolves an account's provider for a harness, defaulting to native
+_resolve_provider() {
+    local account="$1" harness="$2"
+    local provider; provider="${CW_PROVIDER:-$(_account_meta_get "$account" "$harness" provider)}"
+    printf '%s' "${provider:-native}"
+}
+
+# true when the ollama HTTP endpoint answers, false otherwise — never hangs
+_ollama_reachable() {
+    python3 - <<'PY' 2>/dev/null
+import os, urllib.request, sys
+host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+try:
+    urllib.request.urlopen(host + "/api/tags", timeout=1)
+except Exception:
+    sys.exit(1)
+PY
+}
+
+# true when the named model is already pulled into the local ollama daemon
+_ollama_has_model() {
+    [[ -n "$1" ]] || return 1
+    python3 - "$1" <<'PY' 2>/dev/null
+import json, os, sys, urllib.request
+host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+try:
+    with urllib.request.urlopen(host + "/api/tags", timeout=1) as r:
+        tags = json.load(r)
+except Exception:
+    sys.exit(1)
+names = {m.get("name", "") for m in tags.get("models", [])}
+sys.exit(0 if sys.argv[1] in names else 1)
+PY
+}
+
+# prints the account's default-harness doctor status, or "error" with no driver
+_account_harness_status() {
+    local account="$1" h dir status
+    h="$(_account_default_harness "$account")"
+    dir="$(_harness_dir "$account" "$h")"
+    if [[ "$(_provider_kind "$(_account_meta_get "$account" "$h" provider)")" == "local" ]]; then
+        printf 'local'; return 0
+    fi
+    if ! _harness_load "$h" >/dev/null 2>&1; then
+        printf 'error'; return 0
+    fi
+    status=$(CW_HARNESS_DIR="$dir" harness_doctor 2>/dev/null | python3 -c "
+import json, sys
+try: print(json.load(sys.stdin).get('status', ''))
+except Exception: print('')
+" 2>/dev/null)
+    printf '%s' "${status:-error}"
+}
+
+_account_authenticated() {
+    local status; status="$(_account_harness_status "$1")"
+    [[ "$status" == "connected" || "$status" == "local" ]]
+}
+
+# resolves the harness for a command, refusing an override that fights a session
+_resolve_harness() {
+    local account="$1" project="$2" session_meta="$3" override="$4"
+    local recorded=""
+    if [[ -f "$session_meta" ]]; then
+        # an unreadable session must never fall back to a harness it did not record
+        if ! recorded=$(_session_field "$session_meta" harness); then
+            _err "Cannot read $session_meta — refusing to launch rather than guess its harness."
+            _err "Fix the file, or close the session with --done, which sets it aside, and start again."
+            return 1
+        fi
+        [[ -z "$recorded" ]] && recorded="$CW_HARNESS_DEFAULT"
+    fi
+    local h=""
+    if [[ -n "$recorded" ]]; then
+        if [[ -n "$override" && "$override" != "$recorded" ]]; then
+            _err "Session was created with $recorded. Refusing to resume it with $override."
+            _err "Close it first, then create a new one with the harness you want."
+            return 1
+        fi
+        h="$recorded"
+    elif [[ -n "$override" ]]; then
+        h="$override"
+    else
+        local pj proj_harness=""
+        if [[ -n "$project" ]] && pj=$(_get_project "$project" 2>/dev/null); then
+            proj_harness=$(_get_field "$pj" harness "")
+        fi
+        h="${proj_harness:-$(_account_default_harness "$account")}"
+    fi
+    # validated here so a bad name never reaches session.json
+    _harness_driver_path "$h" >/dev/null || { _err "Unknown harness '$h'."; return 1; }
+    printf '%s' "$h"
+}
+
+# resolves an account name from a flag, a project, or the default
+_resolve_account() {
+    local account="" project=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --account|-a) account="${2:?--account requires a value}"; shift 2 ;;
+            *) project="$1"; shift ;;
+        esac
+    done
+    if [[ -n "$account" ]]; then
+        [[ -d "$(_account_root "$account")" ]] || { _err "Account '$account' not found."; return 1; }
+        printf '%s' "$account"; return 0
+    fi
+    if [[ -n "$project" ]]; then
+        local pj; pj=$(_get_project "$project") || { _err "Project '$project' not found."; return 1; }
+        _get_field "$pj" account "$(_default_account)"; return 0
+    fi
+    account=$(_default_account)
+    [[ -n "$account" ]] || { _err "No account specified and no default account."; return 1; }
+    printf '%s' "$account"
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# HARNESS LAYER — the only place that spawns a coding agent
+# ════════════════════════════════════════════════════════════════════════════
+CW_HARNESS_DEFAULT="claude"
+# the user's CW_HARNESS env var, captured once in main before CW_HARNESS becomes the resolved value
+_CW_HARNESS_ENV=""
+CW_HARNESS_ALL="claude codex pi opencode"
+
+# every harness cw knows: the built-ins, then any user driver in $CW_HOME/harnesses
+_harness_names() {
+    local names="$CW_HARNESS_ALL" f n
+    for f in "$CW_HOME"/harnesses/*.sh; do
+        [[ -f "$f" ]] || continue
+        n="$(basename "$f" .sh)"
+        [[ "$n" =~ ^[A-Za-z0-9_-]+$ ]] || continue
+        [[ " $names " == *" $n "* ]] || names="$names $n"
+    done
+    printf '%s' "$names"
+}
+
+# json-encodes a single string argument
+_json_str() {
+    python3 -c "import json,sys; print(json.dumps(sys.argv[1]), end='')" "$1"
+}
+
+# prints the driver file for a harness name, first hit in search order
+_harness_driver_path() {
+    local h="$1" candidate
+    [[ "$h" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+    for candidate in "$CW_HOME/harnesses/$h.sh" \
+                     "$SCRIPT_DIR/../lib/harnesses/$h.sh" \
+                     "$SCRIPT_DIR/lib/harnesses/$h.sh"; do
+        [[ -f "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
+    done
+    return 1
+}
+
+# sources a driver and aliases its functions to the generic names
+_harness_load() {
+    local h="${1:?Usage: _harness_load <harness>}"
+    [[ "${_CW_HARNESS_LOADED:-}" == "$h" ]] && return 0
+    local found="" fn
+    found="$(_harness_driver_path "$h")" || found=""
+    if [[ -z "$found" ]]; then
+        # fail safe so a later harness never inherits the previous driver
+        for fn in supports config_env session_ref launch resume plugin doctor login; do
+            eval "harness_${fn}() { return 1; }"
+        done
+        unset _CW_HARNESS_LOADED
+        _err "Unknown harness '$h'."
+        return 1
+    fi
+    # shellcheck disable=SC1090
+    source "$found"
+    for fn in supports config_env session_ref launch resume plugin doctor login; do
+        if declare -F "${h}_${fn}" >/dev/null; then
+            eval "harness_${fn}() { ${h}_${fn} \"\$@\"; }"
+        else
+            eval "harness_${fn}() { return 1; }"
+        fi
+    done
+    _CW_HARNESS_LOADED="$h"
+    return 0
+}
+
+# the only place in cw that starts a harness process
+# exports env vars and execs in a subshell so a secret never sits in argv
+_harness_exec() {
+    (
+        # cw-only context-fetch credentials must never reach the harness
+        unset LINEAR_API_KEY NOTION_TOKEN
+        local kv
+        for kv in ${HARNESS_ENV[@]+"${HARNESS_ENV[@]}"}; do
+            export "$kv"
+        done
+        exec "${HARNESS_ARGV[@]}"
+    )
+}
+
+# true when the binary the driver put in HARNESS_ARGV is on PATH
+_harness_available() {
+    [[ ${#HARNESS_ARGV[@]} -gt 0 ]] || return 1
+    command -v "${HARNESS_ARGV[0]}" >/dev/null 2>&1
+}
+
+# refuses a launch whose configured provider the driver would silently ignore
+_harness_provider_applies() {
+    local provider="${CW_PROVIDER:-native}"
+    [[ "$provider" == "native" ]] && return 0
+    harness_supports custom_provider && return 0
+    _err "Provider '$provider' is configured, but the $CW_HARNESS driver cannot apply a provider."
+    _err "Refusing to run $CW_HARNESS on its own login instead. Remove the provider from $CW_ACCOUNTS_DIR/${CW_ACCOUNT:-<account>}/meta.json, or use a harness that applies it."
+    return 1
+}
+
+# a driver that refuses to build a launch sets _CW_LAUNCH_REFUSED so callers can fail
+_harness_launch() {
+    HARNESS_ARGV=(); HARNESS_ENV=()
+    _harness_provider_applies || { _CW_LAUNCH_REFUSED=1; return 1; }
+    harness_launch || { _CW_LAUNCH_REFUSED=1; return 1; }
+    _harness_exec
+}
+
+# tries each resume attempt the driver can attribute to this session, then starts fresh
+_harness_resume() {
+    local attempt=1 rc=1
+    _harness_provider_applies || { _CW_LAUNCH_REFUSED=1; return 1; }
+    while :; do
+        HARNESS_ARGV=(); HARNESS_ENV=()
+        harness_resume "$attempt" || break
+        _harness_exec && return 0
+        rc=$?
+        attempt=$((attempt + 1))
+    done
+    # claude's own chain already ends by starting a fresh named session
+    harness_supports resume_by_name && return $rc
+    _harness_resume_fresh
+}
+
+# the last resume rung: nothing attributable to resume, so start over from the notes file
+_harness_resume_fresh() {
+    local notes="${CW_NOTES_FILE:-}" nl=$'\n'
+    [[ -n "$notes" ]] && \
+        CW_PROMPT="${CW_PROMPT:+$CW_PROMPT$nl$nl}The previous conversation for this session could not be resumed, so this one starts fresh. Read $notes first: it holds the objective, context and decisions so far."
+    HARNESS_ARGV=(); HARNESS_ENV=()
+    harness_launch || { _CW_LAUNCH_REFUSED=1; return 1; }
+    _warn "No earlier $CW_HARNESS conversation can be attributed to this session — starting a fresh one${notes:+ from $notes}"
+    _harness_exec
+}
+
+# records the harness's own session reference and launch dir after a run
+_record_harness_ref() {
+    local session_meta="$1"
+    [[ -f "$session_meta" ]] || return 0
+    local ref; ref=$(harness_session_ref 2>/dev/null || true)
+    local workdir=""
+    harness_supports resume_by_name || workdir="$PWD"
+    [[ -n "$ref" || -n "$workdir" ]] || return 0
+    CW_META="$session_meta" CW_REF="$ref" CW_WORKDIR_NOW="$workdir" python3 - <<'PY'
+import json, os
+p = os.environ['CW_META']
+with open(p) as f: meta = json.load(f)
+if os.environ['CW_REF']:
+    meta['harness_session_id'] = os.environ['CW_REF']
+if os.environ['CW_WORKDIR_NOW']:
+    meta['harness_workdir'] = os.environ['CW_WORKDIR_NOW']
+with open(p, 'w') as f: json.dump(meta, f, indent=2)
+PY
+}
+
+# reads a session's previously recorded harness session id, if any
+_read_harness_ref() {
+    local session_meta="$1"
+    [[ -f "$session_meta" ]] || { printf ''; return 0; }
+    _session_field "$session_meta" harness_session_id || true
+}
+
+# prints the account a session was created on, or the fallback when it recorded none
+_session_account() {
+    local acct; acct="$(_session_field "$1" account)" || acct=""
+    acct="${acct:-$2}"
+    if [[ ! -d "$(_account_root "$acct")" ]]; then
+        _err "This session was created on account '$acct', which no longer exists."
+        _err "Resume it with --account <name>, or close it with --done."
+        return 1
+    fi
+    printf '%s' "$acct"
+}
+
+# bumps a session's open count and applies a model override, values via env
+_session_touch() {
+    CW_META="$1" CW_MODEL_OVERRIDE="${2:-}" python3 - <<'PY'
+import json, os
+from datetime import datetime, timezone
+p = os.environ['CW_META']
+with open(p) as f: meta = json.load(f)
+meta['last_opened'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+meta['opens'] = meta.get('opens', 0) + 1
+if os.environ.get('CW_MODEL_OVERRIDE'):
+    meta['model'] = os.environ['CW_MODEL_OVERRIDE']
+with open(p, 'w') as f: json.dump(meta, f, indent=2)
+PY
+}
+
+# marks a session done; an unreadable one is set aside so the task can start fresh
+_session_close() {
+    CW_META="$1" python3 - <<'PY' 2>/dev/null && return 0
+import json, os, sys
+from datetime import datetime, timezone
+p = os.environ['CW_META']
+try:
+    with open(p) as f: meta = json.load(f)
+except Exception:
+    sys.exit(2)
+if not isinstance(meta, dict):
+    sys.exit(2)
+meta['status'] = 'done'
+meta['closed'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+with open(p, 'w') as f: json.dump(meta, f, indent=2)
+PY
+    mv "$1" "$1.unreadable" && _warn "Set aside an unreadable $1 as $1.unreadable"
+}
+
+# prints which harnesses are installed on this machine
+_harness_inventory_json() {
+    local first=true h path ver src
+    printf '['
+    for h in $(_harness_names); do
+        $first || printf ','
+        first=false
+        src="builtin"; [[ -f "$CW_HOME/harnesses/$h.sh" ]] && src="user"
+        if path=$(command -v "$h" 2>/dev/null); then
+            HARNESS_ARGV=("$h" --version); HARNESS_ENV=()
+            ver=$(_harness_exec 2>/dev/null | head -1 | tr -d '\n')
+            printf '{"name":"%s","installed":true,"path":%s,"version":%s,"source":"%s"}' \
+                "$h" "$(_json_str "$path")" "$(_json_str "$ver")" "$src"
+        else
+            printf '{"name":"%s","installed":false,"path":null,"version":null,"source":"%s"}' \
+                "$h" "$src"
+        fi
+    done
+    printf ']'
+}
+
+# prints the account x harness matrix as json
+_doctor_matrix_json() {
+    local first_a=true account root layout h dir status detail
+    printf '['
+    for root in "$CW_ACCOUNTS_DIR"/*/; do
+        [[ -d "$root" ]] || continue
+        account=$(basename "$root")
+        layout="$(_account_layout "$account")"
+        $first_a || printf ','
+        first_a=false
+        printf '{"name":%s,"root":%s,"layout":"%s","default_harness":%s,"harnesses":[' \
+            "$(_json_str "$account")" "$(_json_str "${root%/}")" \
+            "$layout" "$(_json_str "$(_account_default_harness "$account")")"
+        local first_h=true
+        for h in $(_harness_names); do
+            $first_h || printf ','
+            first_h=false
+            dir="$(_harness_dir "$account" "$h")"
+            local raw
+            if CW_HARNESS="$h" CW_HARNESS_DIR="$dir" _harness_load "$h" >/dev/null 2>&1; then
+                raw=$(CW_HARNESS_DIR="$dir" harness_doctor 2>/dev/null)
+                [[ -n "$raw" ]] || raw="{\"harness\":\"$h\",\"status\":\"error\",\"detail\":\"driver produced no output\"}"
+            else
+                raw="{\"harness\":\"$h\",\"status\":\"error\",\"detail\":\"no driver for $h\"}"
+            fi
+            local prov kind model_name
+            prov="$(_account_meta_get "$account" "$h" provider)"
+            kind="$(_provider_kind "$prov")"
+            model_name="$(_account_meta_get "$account" "$h" model)"
+            local reachable="false" pulled="false"
+            if [[ "$kind" == "local" ]]; then
+                _ollama_reachable && reachable="true"
+                _ollama_has_model "$model_name" && pulled="true"
+            fi
+            CW_RAW="$raw" CW_H="$h" CW_DIR="$dir" \
+            CW_ENV="$(CW_HARNESS_DIR="$dir" harness_config_env 2>/dev/null | cut -d= -f1)" \
+            CW_PROV="$prov" CW_KIND="$kind" CW_MOD="$model_name" \
+            CW_ENDPOINT="${OLLAMA_HOST:-http://localhost:11434}" \
+            CW_REACHABLE="$reachable" CW_PULLED="$pulled" \
+            CW_KEY="$([[ -f "$dir/env" ]] && echo true || echo false)" \
+            python3 - <<'PY'
+import json, os
+d = json.loads(os.environ["CW_RAW"])
+prov = os.environ["CW_PROV"] or "native"
+kind = os.environ["CW_KIND"]
+d.update({
+    "harness": os.environ["CW_H"],
+    "config_env": os.environ["CW_ENV"] or None,
+    "config_dir": os.environ["CW_DIR"],
+    "provider": prov,
+    "provider_kind": kind,
+    "model": os.environ["CW_MOD"] or None,
+    "unofficial": False,
+    "has_api_key": os.environ["CW_KEY"] == "true",
+})
+if kind == "local":
+    d["status"] = "local"
+    d["detail"] = {
+        "endpoint": os.environ.get("CW_ENDPOINT") or "http://localhost:11434",
+        "reachable": os.environ.get("CW_REACHABLE") == "true",
+        "model_pulled": os.environ.get("CW_PULLED") == "true",
+    }
+d.setdefault("detail", None)
+print(json.dumps(d), end="")
+PY
+        done
+        printf ']}'
+    done
+    printf ']'
+}
+
+# says once per command that a capability is missing, then returns 1
+_degrade() {
+    local cap="$1" msg="$2"
+    local seen="_CW_DEGRADED_${cap}"
+    if [[ -z "${!seen:-}" ]]; then
+        _dim "  $msg (harness: ${CW_HARNESS:-$CW_HARNESS_DEFAULT})"
+        eval "$seen=1"
+    fi
+    return 1
+}
+
+# true when --skip-permissions or skip_permissions: true in config.yaml asked for it
+_skip_permissions_requested() {
+    [[ "${_CW_SKIP_PERMS:-}" == "true" ]] && return 0
+    [[ -f "$CW_CONFIG" ]] && grep -qE '^skip_permissions:[[:space:]]*true' "$CW_CONFIG"
+}
+
+# CW_CLAUDE_FLAGS is claude's alone; every other harness reads CW_<HARNESS>_FLAGS
+_harness_extra_flags() {
+    local flags
+    if [[ "$CW_HARNESS" == "claude" ]]; then
+        flags="${CW_CLAUDE_FLAGS:-}"
+    else
+        local per_harness_var
+        per_harness_var="CW_$(printf '%s' "$CW_HARNESS" | tr '[:lower:]-' '[:upper:]_')_FLAGS"
+        flags="${!per_harness_var:-}"
+        _skip_permissions_requested && flags="--dangerously-skip-permissions${flags:+ $flags}"
+    fi
+    if [[ "$flags" == *--dangerously-skip-permissions* ]] && ! harness_supports skip_permissions; then
+        flags="${flags//--dangerously-skip-permissions/}"
+        # stderr, since this runs inside the command substitution that captures the flags
+        _degrade skip_permissions "Harness has no skip-permissions flag — prompts stay on" >&2 || true
+    fi
+    printf '%s' "$flags"
+}
+
+# puts the account instructions file where the harness looks for it
+_install_account_instructions() {
+    local account="$1" harness="$2" dir="$3"
+    [[ -n "$account" && -d "$dir" ]] || return 0
+    [[ "${_CW_HARNESS_LOADED:-}" == "$harness" ]] || return 0
+    harness_supports instructions_file || return 0
+    local src; src="$(_account_root "$account")/CLAUDE.md"
+    [[ -f "$src" ]] || return 0
+    local dest
+    if [[ "$harness" == "claude" ]]; then
+        dest="$dir/CLAUDE.md"
+    elif [[ "$harness" == "codex" ]]; then
+        dest="$dir/AGENTS.md" # unverified: AGENTS.md as codex's user-level instructions file
+    else
+        return 0
+    fi
+    [[ "$src" -ef "$dest" ]] && return 0
+    # a file or link the user put there is theirs; never replace it
+    if [[ -e "$dest" || -L "$dest" ]]; then
+        _dim "  Keeping your own $dest — the account's CLAUDE.md is not linked over it"
+        return 0
+    fi
+    ln -s "$src" "$dest"
+}
+
+# sets the globals every driver reads
+_harness_context() {
+    CW_HARNESS="${CW_HARNESS:-$CW_HARNESS_DEFAULT}"
+    if [[ -z "${CW_HARNESS_DIR:-}" ]]; then
+        if [[ -n "${CW_ACCOUNT:-}" ]]; then
+            CW_HARNESS_DIR="$(_harness_dir "$CW_ACCOUNT" "$CW_HARNESS")"
+        else
+            CW_HARNESS_DIR="$CW_ACCOUNTS_DIR/"
+        fi
+    fi
+    # a one-off --harness must not launch against a credential dir that does not exist
+    if [[ -n "${CW_ACCOUNT:-}" && ! -d "$CW_HARNESS_DIR" && -d "$(_account_root "$CW_ACCOUNT")" ]]; then
+        mkdir -p "$CW_HARNESS_DIR"
+    fi
+    _install_account_instructions "${CW_ACCOUNT:-}" "$CW_HARNESS" "$CW_HARNESS_DIR"
+    CW_SESSION_NAME="${CW_SESSION_NAME:-}"
+    CW_SESSION_REF="${CW_SESSION_REF:-}"
+    CW_WORKDIR="$PWD"
+    CW_NOTES_FILE="${CW_NOTES_FILE:-}"
+    CW_CONTINUE_LAST_SAFE="${CW_CONTINUE_LAST_SAFE:-}"
+    CW_PROMPT="${CW_PROMPT:-}"
+    CW_MODEL="${CW_MODEL:-}"
+    CW_PROVIDER="${CW_PROVIDER:-native}"
+    CW_EXTRA_FLAGS="${CW_EXTRA_FLAGS-$(_harness_extra_flags)}"
+    CW_TEAM_ENV="${CW_TEAM_ENV:-}"
+    export CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
+}
+
+# prints one KEY=VALUE per line from a 600 env file, skipping blanks and comments
+_harness_env_file() {
+    local f="$1"
+    [[ -f "$f" ]] || return 0
+    grep -E '^[A-Z_][A-Z0-9_]*=' "$f"
+}
+
+# echoes the child's output through and emits the first url and code it sees
+_login_scrape() {
+    local url_seen=false code_seen=false line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        printf '%s\n' "$line"
+        if ! $url_seen && [[ "$line" =~ (https?://[^[:space:]\"\'\)]+) ]]; then
+            printf 'CW_LOGIN_URL=%s\n' "${BASH_REMATCH[1]}"
+            url_seen=true
+        fi
+        if ! $code_seen && [[ "$line" =~ ([A-Z0-9]{4}-[A-Z0-9]{4}) ]]; then
+            printf 'CW_LOGIN_CODE=%s\n' "${BASH_REMATCH[1]}"
+            code_seen=true
+        fi
+    done
+}
+
+# names the env var each harness reads its key from
+# unverified: pi and opencode key var names, no driver exists yet to confirm against
+_harness_api_key_var() {
+    case "$1" in
+        codex)    printf 'CODEX_API_KEY' ;;
+        claude)   printf 'ANTHROPIC_AUTH_TOKEN' ;;
+        pi)       printf 'PI_API_KEY' ;;
+        opencode) printf 'OPENCODE_API_KEY' ;;
+        *)        printf 'API_KEY' ;;
+    esac
+}
+
+# opt-in only — nothing in cw calls this on a user's behalf
+_account_migrate() {
+    local account="${1:?Usage: cw account migrate <account> [--dry-run|--undo]}"; shift || true
+    local dry=false undo=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run) dry=true; shift ;;
+            -n)        dry=true; shift ;;
+            --undo)    undo=true; shift ;;
+            *) _err "Unknown flag: $1"; return 1 ;;
+        esac
+    done
+    local root; root="$(_account_root "$account")"
+    [[ -d "$root" ]] || { _err "Account '$account' not found."; return 1; }
+    if $undo; then
+        _account_migrate_undo "$account" "$root" "$dry"
+    else
+        _account_migrate_split "$account" "$root" "$dry"
+    fi
+}
+
+# moves the claude state at an account root down into claude/
+_account_migrate_split() {
+    local account="$1" root="$2" dry="$3"
+    if [[ ! -d "$root/claude" ]] && ! _account_has_claude_state "$root"; then
+        _warn "Account '$account' has no claude state at its root — nothing to move."
+        return 0
+    fi
+    _account_claude_entries "$root"
+    local entries=(${CW_ACCOUNT_ENTRIES[@]+"${CW_ACCOUNT_ENTRIES[@]}"})
+    if [[ ${#entries[@]} -eq 0 ]]; then
+        _warn "Account '$account' is already split — nothing to move."
+        return 0
+    fi
+    [[ -d "$root/claude" ]] && \
+        _warn "Account '$account' has ${#entries[@]} entries left at its root — resuming the migration."
+    _warn "If you have CLAUDE_CONFIG_DIR=$root hardcoded anywhere, update it to $root/claude."
+    local entry base blocked=0 made=false
+    for entry in "${entries[@]}"; do
+        base="$(basename "$entry")"
+        if [[ -e "$root/claude/$base" || -L "$root/claude/$base" ]]; then
+            _warn "  skipping $base — claude/$base already exists"
+            blocked=1
+            continue
+        fi
+        if $dry; then
+            _dim "  would move $base -> claude/$base"
+            continue
+        fi
+        # created only once a move is certain, so an interrupted run resolves to the root
+        if [[ ! -d "$root/claude" ]]; then
+            mkdir "$root/claude" || { _err "Cannot create $root/claude."; return 1; }
+            made=true
+        fi
+        if ! mv "$entry" "$root/claude/$base"; then
+            _err "Failed to move $base. Everything already moved is in claude/; re-run to resume."
+            $made && rmdir "$root/claude" 2>/dev/null
+            return 1
+        fi
+    done
+    if $dry; then
+        _log "Dry run — nothing moved."
+        return 0
+    fi
+    [[ $blocked -eq 0 ]] || { _err "Some entries stayed at the root. Resolve the conflicts and re-run."; return 1; }
+    # the claim is that the root is clean, not that the loop ended
+    local left; left="$(_account_root_leftovers "$root")"
+    if [[ -n "$left" ]]; then
+        _err "Migration incomplete — these are still at the account root:"
+        while IFS= read -r base; do
+            _err "  $base"
+        done <<< "$left"
+        _err "Claude now resolves to $root/claude. Move them yourself or run --undo."
+        return 1
+    fi
+    _log "Account ${C}$account${NC} migrated to the split layout."
+}
+
+# moves a split account's claude/ contents back up to the root
+_account_migrate_undo() {
+    local account="$1" root="$2" dry="$3"
+    [[ -d "$root/claude" ]] || { _warn "Account '$account' is already flat."; return 0; }
+    _account_scan_dir "$root/claude"
+    local entries=(${CW_ACCOUNT_ENTRIES[@]+"${CW_ACCOUNT_ENTRIES[@]}"})
+    local entry base blocked=0
+    for entry in ${entries[@]+"${entries[@]}"}; do
+        base="$(basename "$entry")"
+        if [[ -L "$entry" && "$(readlink "$entry")" == "$root/$base" && -e "$root/$base" ]]; then
+            $dry && { _dim "  would drop the claude/$base link"; continue; }
+            rm -f "$entry"
+            continue
+        fi
+        if [[ -e "$root/$base" || -L "$root/$base" ]]; then
+            _warn "  skipping claude/$base — $base already exists at the root"
+            blocked=1
+            continue
+        fi
+        if $dry; then
+            _dim "  would move claude/$base up"
+            continue
+        fi
+        if ! mv "$entry" "$root/$base"; then
+            _err "Failed to move claude/$base. Everything already moved is at the root; re-run to resume."
+            return 1
+        fi
+    done
+    if $dry; then
+        _log "Dry run — nothing moved."
+        return 0
+    fi
+    [[ $blocked -eq 0 ]] || { _err "Some entries stayed in claude/. Resolve the conflicts and re-run."; return 1; }
+    rmdir "$root/claude" 2>/dev/null || { _err "Could not remove $root/claude."; return 1; }
+    _log "Account ${C}$account${NC} restored to the flat layout."
+}
+
+# authenticates an account against a harness, headless or via a stdin api key
+_account_login() {
+    local account="${1:?Usage: cw account login <account> --harness <h>}"; shift
+    local harness="" no_browser="" api_key_stdin=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --harness|-H)
+                [[ $# -ge 2 ]] || { _err "--harness requires a value"; return 1; }
+                harness="$2"; shift 2 ;;
+            --no-browser)   no_browser=1; shift ;;
+            --with-api-key)
+                [[ $# -ge 2 ]] || { _err "--with-api-key requires a trailing -"; return 1; }
+                api_key_stdin=1; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    [[ -d "$(_account_root "$account")" ]] || { _err "Account '$account' not found."; return 1; }
+    harness="${harness:-$(_account_default_harness "$account")}"
+
+    local dir; dir="$(_harness_dir "$account" "$harness")"
+    CW_HARNESS="$harness" CW_HARNESS_DIR="$dir"
+    _harness_load "$harness" || return 1
+
+    if [[ -n "$api_key_stdin" ]] && ! harness_supports api_key_login; then
+        _err "Harness '$harness' has no api-key import cw can drive."
+        return 1
+    fi
+    if [[ -n "$no_browser" && -z "$api_key_stdin" ]] && ! harness_supports headless_login; then
+        _err "Harness '$harness' has no headless login cw can drive, so --no-browser cannot be honoured."
+        _err "Run it without --no-browser to log in interactively, or use --with-api-key - if it takes a key."
+        return 1
+    fi
+    mkdir -p "$dir"
+
+    if [[ -n "$api_key_stdin" ]]; then
+        local key; IFS= read -r key
+        [[ -n "$key" ]] || { _err "No API key on stdin."; return 1; }
+        local envf="$dir/env"
+        ( umask 077; printf '%s\n' "$(_harness_api_key_var "$harness")=$key" > "$envf" )
+        chmod 600 "$envf"
+        _log "API key stored for ${C}$account${NC}/${Y}$harness${NC}"
+        CW_LOGIN_API_KEY_STDIN=1
+        printf '%s\n' "$key" | { harness_login && _harness_exec >/dev/null 2>&1; } || true
+        return 0
+    fi
+
+    CW_LOGIN_NO_BROWSER="$no_browser"
+    harness_login || { _err "Harness '$harness' has no login flow cw can drive."; return 1; }
+    # interactive logins keep the terminal; only a headless flow is piped for its url and code
+    if [[ -z "$no_browser" ]]; then
+        _harness_exec
+        return $?
+    fi
+    _harness_exec 2>&1 | _login_scrape
+    return "${PIPESTATUS[0]}"
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -201,6 +1106,7 @@ models:
   plan: opus
   create: haiku
   open: sonnet
+  loop: sonnet
 YAML
     fi
 
@@ -231,7 +1137,7 @@ YAML
     echo ""
     echo -e "  ${BOLD}Next steps:${NC}"
     echo -e "  ${Y}1.${NC} ${C}cw account add work${NC}              — Create account"
-    echo -e "  ${Y}2.${NC} ${C}CLAUDE_CONFIG_DIR=~/.cw/accounts/work claude /login${NC}"
+    echo -e "  ${Y}2.${NC} ${C}cw account login work --harness claude${NC}"
     echo -e "                                        — Authenticate"
     echo -e "  ${Y}3.${NC} ${C}cw project register --account work${NC}"
     echo -e "                                        — Register project (from project dir)"
@@ -247,17 +1153,49 @@ cmd_account() {
     local sub="${1:-list}"; shift || true
     case "$sub" in
         add)
-            local name="${1:?Usage: cw account add <name>}"
-            local dir="$CW_ACCOUNTS_DIR/$name"
+            local name="${1:?Usage: cw account add <name>}"; shift || true
+            local harness="" provider="" model=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --harness|-H)
+                        [[ $# -ge 2 ]] || { _err "--harness requires a value"; return 1; }
+                        harness="$2"; shift 2 ;;
+                    --provider|-p)
+                        [[ $# -ge 2 ]] || { _err "--provider requires a value"; return 1; }
+                        provider="$2"; shift 2 ;;
+                    --model|-m)
+                        [[ $# -ge 2 ]] || { _err "--model requires a value"; return 1; }
+                        model="$2"; shift 2 ;;
+                    *) _err "Unknown flag: $1"; return 1 ;;
+                esac
+            done
+            local dir; dir="$(_account_root "$name")"
             [[ -d "$dir" ]] && { _warn "Account '$name' already exists."; return 1; }
-            mkdir -p "$dir"
-            echo "{\"name\":\"$name\",\"created\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > "$dir/meta.json"
+            harness="${harness:-$CW_HARNESS_DEFAULT}"
+            mkdir -p "$dir" "$(_harness_dir "$name" "$harness")"
+            CW_A_NAME="$name" CW_A_H="$harness" CW_A_META="$dir/meta.json" python3 - <<'PY'
+import json, os
+from datetime import datetime, timezone
+meta = {
+    "name": os.environ["CW_A_NAME"],
+    "created": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "harness": os.environ["CW_A_H"],
+    "harnesses": {},
+}
+with open(os.environ["CW_A_META"], "w") as f: json.dump(meta, f, indent=2)
+PY
+            [[ -n "$provider" ]] && _account_meta_set "$name" "$harness" provider "$provider"
+            [[ -n "$model" ]]    && _account_meta_set "$name" "$harness" model "$model"
+            if [[ -n "$provider" && "$provider" != "native" ]] && _harness_load "$harness" 2>/dev/null \
+                && ! harness_supports custom_provider; then
+                _warn "The $harness driver cannot apply provider '$provider' yet — cw will refuse to launch this account on $harness until it is removed."
+            fi
 
             # Auto-install arcade hooks if setup was done
             if [[ -f "$CW_HOME/.arcade-hook" ]]; then
                 local hook_script; hook_script=$(cat "$CW_HOME/.arcade-hook")
                 if [[ -f "$hook_script" ]]; then
-                    _arcade_install_hooks_for "$dir/settings.json" "$hook_script"
+                    _arcade_install_hooks_for "$(_harness_dir "$name" "$harness")/settings.json" "$hook_script"
                     _log "  Activity hooks auto-installed."
                 fi
             fi
@@ -278,7 +1216,7 @@ with open('$CW_CONFIG', 'w') as f: f.write(text)
             echo ""
             echo -e "  ${BOLD}Next steps:${NC}"
             echo -e "  ${Y}1.${NC} Authenticate this account:"
-            echo -e "     ${BOLD}CLAUDE_CONFIG_DIR=$dir claude /login${NC}"
+            echo -e "     ${BOLD}cw account login $name --harness $harness${NC}"
             echo ""
             echo -e "  ${Y}2.${NC} Register a project:"
             echo -e "     ${C}cw project register <path> --account $name${NC}"
@@ -292,7 +1230,7 @@ with open('$CW_CONFIG', 'w') as f: f.write(text)
             for dir in "$CW_ACCOUNTS_DIR"/*/; do
                 [[ -d "$dir" ]] || continue
                 local n; n=$(basename "$dir")
-                local auth="${R}✗${NC}"; [[ -f "$dir/.claude.json" ]] && auth="${G}✓${NC}"
+                local auth="${R}✗${NC}"; _account_authenticated "$n" && auth="${G}✓${NC}"
                 echo -e "  ${C}$n${NC}  [$auth auth]"
             done; echo ""
             ;;
@@ -301,7 +1239,13 @@ with open('$CW_CONFIG', 'w') as f: f.write(text)
             read -rp "Delete account '$name'? [y/N] " c
             [[ "$c" =~ ^[yY]$ ]] && rm -rf "$CW_ACCOUNTS_DIR/$name" && _log "Removed."
             ;;
-        *) _err "Subcommands: add | list | remove" ;;
+        login)
+            _account_login "$@"
+            ;;
+        migrate)
+            _account_migrate "$@"
+            ;;
+        *) _err "Subcommands: add | list | remove | login | migrate" ;;
     esac
 }
 
@@ -323,7 +1267,7 @@ cmd_project() {
 }
 
 _project_register() {
-    local path="" alias_name=""
+    local path="" alias_name="" harness=""
     local account; account=$(_default_account)
     local ptype="fullstack"
 
@@ -333,6 +1277,7 @@ _project_register() {
             --account|-a) account="$2"; shift 2 ;;
             --type|-t)    ptype="$2"; shift 2 ;;
             --alias)      alias_name="$2"; shift 2 ;;
+            --harness|-H) harness="$2"; shift 2 ;;
             -*)           shift ;;
             *)
                 if [[ -z "$path" ]]; then
@@ -353,18 +1298,24 @@ _project_register() {
 
     local name="${alias_name:-$(basename "$path")}"
 
-    python3 -c "
-import json
-f = '$CW_REGISTRY'
+    CW_R_FILE="$CW_REGISTRY" CW_R_NAME="$name" CW_R_PATH="$path" CW_R_ACCOUNT="$account" \
+    CW_R_TYPE="$ptype" CW_R_HARNESS="$harness" CW_R_WHEN="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    python3 - <<'PYEOF'
+import json, os
+e = os.environ
+f = e['CW_R_FILE']
 try:
     with open(f) as fh: reg = json.load(fh)
 except: reg = {}
-reg['$name'] = {
-    'path': '$path', 'account': '$account', 'type': '$ptype',
-    'registered': '$(date -u +%Y-%m-%dT%H:%M:%SZ)'
+entry = {
+    'path': e['CW_R_PATH'], 'account': e['CW_R_ACCOUNT'], 'type': e['CW_R_TYPE'],
+    'registered': e['CW_R_WHEN']
 }
+if e['CW_R_HARNESS']:
+    entry['harness'] = e['CW_R_HARNESS']
+reg[e['CW_R_NAME']] = entry
 with open(f, 'w') as fh: json.dump(reg, fh, indent=2)
-"
+PYEOF
     mkdir -p "$path/.claude"
     if [[ ! -f "$path/CLAUDE.md" ]]; then
         _generate_claude_md "$path" "$ptype"
@@ -421,12 +1372,16 @@ _project_scaffold() {
 
 _project_setup_mcps() {
     local name="${1:?Usage: cw project setup-mcps <name>}"
+    _harness_load "${_CW_HARNESS_ENV:-$CW_HARNESS_DEFAULT}" || return 1
+    if ! harness_supports mcp; then
+        _err "Harness '${_CW_HARNESS_ENV:-$CW_HARNESS_DEFAULT}' has no MCP support that cw can configure."
+        return 1
+    fi
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local account; account=$(_get_field "$pj" account "$(_default_account)")
-    local acct_dir="$CW_ACCOUNTS_DIR/$account"
 
     # Check which MCPs are already installed (direct JSON read)
-    local settings_file="$acct_dir/settings.json"
+    local settings_file; settings_file="$(_harness_dir "$account" claude)/settings.json"
     local existing_mcps=""
     if [[ -f "$settings_file" ]]; then
         existing_mcps=$(python3 -c "
@@ -556,42 +1511,47 @@ with open(sf, 'w') as f:
     fi
 }
 
+# finds the --account/-a value or a project's account, without consuming args
+_mcp_peek_account() {
+    local account_flag="" positional=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --account|-a) account_flag="${2:?--account requires a value}"; shift 2 ;;
+            --transport|-t) shift 2 ;;
+            --) shift; break ;;
+            -*) shift ;;
+            *) [[ -z "$positional" ]] && positional="$1"; shift ;;
+        esac
+    done
+    if [[ -n "$account_flag" ]]; then
+        printf '%s' "$account_flag"; return 0
+    fi
+    if [[ -n "$positional" ]]; then
+        local pj
+        if pj=$(_get_project "$positional" 2>/dev/null); then
+            _get_field "$pj" account "$(_default_account)"
+            return 0
+        fi
+    fi
+    printf '%s' "$(_default_account)"
+}
+
 # ════════════════════════════════════════════════════════════════════════════
 # MCP — Manage MCPs per account
 # ════════════════════════════════════════════════════════════════════════════
-_resolve_account_dir() {
-    # Resolve account dir from --account flag or project name
-    # Usage: _resolve_account_dir [--account <acct>] [<project>]
-    local account="" project=""
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --account|-a) account="${2:?--account requires a value}"; shift 2 ;;
-            *) project="$1"; shift ;;
-        esac
-    done
-
-    if [[ -n "$account" ]]; then
-        local dir="$CW_ACCOUNTS_DIR/$account"
-        [[ -d "$dir" ]] || { _err "Account '$account' not found."; return 1; }
-        echo "$dir"
-        return
-    fi
-
-    if [[ -n "$project" ]]; then
-        local pj; pj=$(_get_project "$project") || { _err "Project '$project' not found."; return 1; }
-        account=$(_get_field "$pj" account "$(_default_account)")
-        echo "$CW_ACCOUNTS_DIR/$account"
-        return
-    fi
-
-    # Fallback: default account
-    account=$(_default_account)
-    [[ -n "$account" ]] || { _err "No account specified and no default account."; return 1; }
-    echo "$CW_ACCOUNTS_DIR/$account"
-}
-
 cmd_mcp() {
     local sub="${1:-list}"; shift || true
+    local mcp_harness="${_CW_HARNESS_ENV:-}"
+    if [[ -z "$mcp_harness" ]]; then
+        local mcp_account; mcp_account="$(_mcp_peek_account "$@")"
+        [[ -n "$mcp_account" ]] && mcp_harness="$(_account_default_harness "$mcp_account")"
+    fi
+    mcp_harness="${mcp_harness:-$CW_HARNESS_DEFAULT}"
+    _harness_load "$mcp_harness" || return 1
+    if ! harness_supports mcp; then
+        _err "Harness '$mcp_harness' has no MCP support that cw can configure."
+        return 1
+    fi
     case "$sub" in
         add)    _mcp_add "$@" ;;
         remove|rm) _mcp_remove "$@" ;;
@@ -659,18 +1619,11 @@ _mcp_add() {
         return 1
     fi
 
-    # Resolve account directory
-    local acct_dir
-    if [[ -n "$account_flag" ]]; then
-        acct_dir=$(_resolve_account_dir --account "$account_flag") || return 1
-    elif [[ -n "$project_flag" ]]; then
-        acct_dir=$(_resolve_account_dir "$project_flag") || return 1
-    else
-        acct_dir=$(_resolve_account_dir) || return 1
-    fi
-    local account; account=$(basename "$acct_dir")
+    # Resolve account name
+    local account
+    account=$(_resolve_account ${account_flag:+--account "$account_flag"} ${project_flag:+"$project_flag"}) || return 1
 
-    local settings_file="$acct_dir/settings.json"
+    local settings_file; settings_file="$(_harness_dir "$account" claude)/settings.json"
 
     # Check if already installed (direct JSON read)
     if [[ -f "$settings_file" ]]; then
@@ -746,17 +1699,10 @@ _mcp_remove() {
 
     [[ -n "$mcp_name" ]] || { _err "Usage: cw mcp remove <name> [--account <a> | <project>]"; return 1; }
 
-    local acct_dir
-    if [[ -n "$account_flag" ]]; then
-        acct_dir=$(_resolve_account_dir --account "$account_flag") || return 1
-    elif [[ -n "$project_flag" ]]; then
-        acct_dir=$(_resolve_account_dir "$project_flag") || return 1
-    else
-        acct_dir=$(_resolve_account_dir) || return 1
-    fi
-    local account; account=$(basename "$acct_dir")
+    local account
+    account=$(_resolve_account ${account_flag:+--account "$account_flag"} ${project_flag:+"$project_flag"}) || return 1
 
-    local settings_file="$acct_dir/settings.json"
+    local settings_file; settings_file="$(_harness_dir "$account" claude)/settings.json"
     if [[ ! -f "$settings_file" ]]; then
         _warn "No settings.json found for account '$account'."
         return 1
@@ -793,24 +1739,17 @@ _mcp_list() {
     local account_flag="" project_flag=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --account|-a) account_flag="$2"; shift 2 ;;
+            --account|-a) account_flag="${2:?--account requires a value}"; shift 2 ;;
             -*)           _err "Unknown flag: $1"; return 1 ;;
             *)            project_flag="$1"; shift ;;
         esac
     done
 
-    local acct_dir
-    if [[ -n "$account_flag" ]]; then
-        acct_dir=$(_resolve_account_dir --account "$account_flag") || return 1
-    elif [[ -n "$project_flag" ]]; then
-        acct_dir=$(_resolve_account_dir "$project_flag") || return 1
-    else
-        acct_dir=$(_resolve_account_dir) || return 1
-    fi
-    local account; account=$(basename "$acct_dir")
+    local account
+    account=$(_resolve_account ${account_flag:+--account "$account_flag"} ${project_flag:+"$project_flag"}) || return 1
 
     echo -e "\n${BOLD}MCPs for account ${Y}$account${NC}\n"
-    local settings_file="$acct_dir/settings.json"
+    local settings_file; settings_file="$(_harness_dir "$account" claude)/settings.json"
     if [[ ! -f "$settings_file" ]]; then
         _dim "  No MCPs installed."
         echo -e "\n  Add one: ${C}cw mcp add <name> --account $account -- <command> [args]${NC}"
@@ -899,10 +1838,11 @@ print()
 # ════════════════════════════════════════════════════════════════════════════
 cmd_open() {
     local name="${1:?Usage: cw open <project> [--mode X] [--account X] [--context X]}"; shift
-    local account="" context=""
+    local account="" context="" harness_override=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --account|-a) account="$2"; shift 2 ;;
+            --harness|-H) harness_override="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -912,13 +1852,23 @@ cmd_open() {
     [[ -d "$path" ]] || { _err "Path does not exist: $path"; return 1; }
 
     account="${account:-$(_get_field "$pj" account "$(_default_account)")}"
-    local acct_dir="$CW_ACCOUNTS_DIR/$account"
+    local harness; harness=$(_resolve_harness "$account" "$name" "" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
+    CW_HARNESS="$harness"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
     _log "Opening ${C}$name${NC}  account=${M}$account${NC}"
     _ensure_statusline "$acct_dir"
 
+    local model; model="$(_resolve_model "$account" "$harness" open "" "")"
+    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
+    local provider; provider="$(_resolve_provider "$account" "$harness")"
+
     cd "$path"
     _set_tab_title "$name"
-    CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS
+    CW_ACCOUNT="$account" CW_HARNESS_DIR="$acct_dir" CW_TASK_TYPE="open"
+    CW_PROJECT="$name" CW_TASK="" CW_SESSION_NAME="" CW_PROMPT="" CW_MODEL="$model" CW_PROVIDER="$provider"
+    _harness_load "$CW_HARNESS" || return 1
+    _harness_context
+    _harness_launch || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
 
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) OPEN $name account=$account" >> "$CW_SESSIONS_LOG"
 }
@@ -927,22 +1877,35 @@ cmd_open() {
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# LAUNCH — Quick Claude with account
+# LAUNCH — Quick agent session with an account
 # ════════════════════════════════════════════════════════════════════════════
 cmd_launch() {
     local account="${1:-$(_default_account)}"; shift || true
-    local dir="$CW_ACCOUNTS_DIR/$account"
-    [[ -d "$dir" ]] || { _err "Account '$account' does not exist."; return 1; }
-    _log "Launching Claude (${C}$account${NC})..."
+    [[ -d "$(_account_root "$account")" ]] || { _err "Account '$account' does not exist."; return 1; }
+    CW_HARNESS="${_CW_HARNESS_ENV:-$CW_HARNESS_DEFAULT}"
+    local dir; dir="$(_harness_dir "$account" "$CW_HARNESS")"
+    local label="$CW_HARNESS"; [[ "$label" == "claude" ]] && label="Claude"
+    _log "Launching $label (${C}$account${NC})..."
     _ensure_statusline "$dir"
-    CLAUDE_CONFIG_DIR="$dir" claude "$@"
+    local model; model="$(_resolve_model "$account" "$CW_HARNESS" launch "" "")"
+    [[ -n "$model" ]] || _use_platform_default_model "$dir"
+    local provider; provider="$(_resolve_provider "$account" "$CW_HARNESS")"
+    CW_ACCOUNT="$account" CW_HARNESS_DIR="$dir" CW_TASK_TYPE="launch" CW_MODEL="$model" CW_PROVIDER="$provider"
+    CW_PASSTHRU_ARGV=("$@")
+    CW_EXTRA_FLAGS=""
+    _harness_load "$CW_HARNESS" || return 1
+    _harness_context
+    _harness_launch
+    local rc=$?
+    unset CW_PASSTHRU_ARGV
+    return $rc
 }
 
 # ════════════════════════════════════════════════════════════════════════════
 # REVIEW — PR review with persistent session (no worktree)
 # ════════════════════════════════════════════════════════════════════════════
 cmd_review() {
-    local name="" pr="" done_flag=false cont_flag=false list_flag=false account_override="" model_override=""
+    local name="" pr="" done_flag=false cont_flag=false list_flag=false account_override="" model_override="" harness_override=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --pr)      pr="$2"; shift 2 ;;
@@ -951,6 +1914,7 @@ cmd_review() {
             --list)    list_flag=true; shift ;;
             --account|-a) account_override="$2"; shift 2 ;;
             --model|-m) model_override="$2"; shift 2 ;;
+            --harness|-H) harness_override="$2"; shift 2 ;;
             -*)        shift ;;
             *)         
                 if [[ -z "$name" ]]; then
@@ -973,16 +1937,6 @@ cmd_review() {
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
     local account; account=${account_override:-$(_get_field "$pj" account "$(_default_account)")}
-    local acct_dir="$CW_ACCOUNTS_DIR/$account"
-    _ensure_statusline "$acct_dir"
-
-    local model="${model_override:-$(_model_for_type review)}"
-    local model_args=()
-    if [[ -n "$model" ]]; then
-        model_args=("--model" "$model")
-    else
-        _use_platform_default_model "$acct_dir"
-    fi
 
     [[ -z "$pr" ]] && { _err "Missing PR. Usage: cw review $name 123"; return 1; }
 
@@ -1006,30 +1960,20 @@ cmd_review() {
     if $done_flag; then
         _log "Closing review: ${C}$name${NC} PR #${Y}$pr${NC}"
         if [[ -f "$session_dir/session.json" ]]; then
-            python3 -c "
-import json
-from datetime import datetime, timezone
-with open('$session_dir/session.json') as f: meta = json.load(f)
-meta['status'] = 'done'
-meta['closed'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
-"
+            _session_close "$session_dir/session.json"
         fi
         _log "${G}Review PR #$pr closed${NC}"
         echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) DONE $name review=pr-$pr" >> "$CW_SESSIONS_LOG"
         return
     fi
 
-    # ── Create or resume review ──────────────────────────────────────────
-    mkdir -p "$session_dir"
-
     local is_new=true
     [[ -f "$session_meta" ]] && is_new=false
 
-    # If session exists but is done, reset it for a fresh start
+    # If session exists but is done, reset it before resolving the harness
     if ! $is_new; then
         local session_status
-        session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
+        session_status=$(_session_field "$session_meta" status)
         if [[ "$session_status" == "done" ]]; then
             _log "Previous review for PR #${Y}$pr${NC} was closed — starting fresh"
             rm -f "$session_meta"
@@ -1037,50 +1981,53 @@ with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
         fi
     fi
 
-    if [[ -z "$model_override" ]] && ! $is_new && [[ -f "$session_meta" ]]; then
-        local stored_model
-        stored_model=$(python3 -c "import json; print(json.load(open('$session_meta')).get('model',''))" 2>/dev/null)
-        [[ -n "$stored_model" ]] && model="$stored_model"
+    local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
+    CW_HARNESS="$harness"
+    if ! $is_new && [[ -z "$account_override" && "$harness" != "claude" ]]; then
+        account="$(_session_account "$session_meta" "$account")" || return 1
     fi
+    local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
+    _ensure_statusline "$acct_dir"
+
+    local model; model="$(_resolve_model "$account" "$harness" review "$model_override" "$session_meta")"
+    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
+    local provider; provider="$(_resolve_provider "$account" "$harness")"
+
+    # ── Create or resume review ──────────────────────────────────────────
+    mkdir -p "$session_dir"
 
     if $is_new; then
         _log "New review: ${C}$name${NC} PR #${Y}$pr${NC}"
-        _dim "  Model: ${model:-claude default}"
+        _dim "  Model: ${model:-$harness default}"
 
         # Save session metadata
-        python3 -c "
-import json
+        CW_S_PROJECT="$name" CW_S_PR="$pr" CW_S_ACCOUNT="$account" CW_S_MODEL="$model" \
+        CW_S_NOTES="$notes_file" CW_S_HARNESS="$harness" CW_S_PROVIDER="$provider" \
+        CW_S_META="$session_meta" python3 - <<'PYEOF'
+import json, os
 from datetime import datetime, timezone
+e = os.environ
 meta = {
-    'project': '$name',
-    'pr': '$pr',
+    'project': e['CW_S_PROJECT'],
+    'pr': e['CW_S_PR'],
     'type': 'review',
-    'account': '$account',
-    'model': '$model',
-    'notes': '$notes_file',
+    'account': e['CW_S_ACCOUNT'],
+    'model': e['CW_S_MODEL'],
+    'notes': e['CW_S_NOTES'],
+    'harness': e['CW_S_HARNESS'],
+    'harness_session_id': '',
+    'provider': e['CW_S_PROVIDER'],
     'status': 'active',
     'created': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'last_opened': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'opens': 1
 }
-with open('$session_meta', 'w') as f:
+with open(e['CW_S_META'], 'w') as f:
     json.dump(meta, f, indent=2)
-"
+PYEOF
         _log "Session created: ${C}$session_dir${NC}"
 
-        # ── Account skills: symlink into ~/.claude/skills/ for discovery ──
-        local acct_skills_dir="$acct_dir/skills"
-        if [[ -d "$acct_skills_dir" ]]; then
-            for skill_dir in "$acct_skills_dir"/*/; do
-                [[ -d "$skill_dir" ]] || continue
-                local skill_name
-                skill_name=$(basename "$skill_dir")
-                # Skip already-prefixed entries to prevent recursive prefix accumulation
-                case "$skill_name" in acct--*) continue ;; esac
-                local target="$HOME/.claude/skills/acct--${account}--${skill_name}"
-                [[ -e "$target" ]] || ln -sf "$skill_dir" "$target"
-            done
-        fi
+        _link_account_skills "$account" "$(_account_root "$account")"
 
         # Create review notes
         {
@@ -1104,18 +2051,8 @@ with open('$session_meta', 'w') as f:
     else
         # Existing review - update metadata
         _log "Resuming review: ${C}$name${NC} PR #${Y}$pr${NC}"
-        _dim "  Model: ${model:-claude default}"
-        python3 -c "
-import json
-from datetime import datetime, timezone
-with open('$session_meta') as f: meta = json.load(f)
-meta['last_opened'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-meta['opens'] = meta.get('opens', 0) + 1
-if '$model_override':
-    meta['model'] = '$model_override'
-with open('$session_meta', 'w') as f:
-    json.dump(meta, f, indent=2)
-"
+        _dim "  Model: ${model:-$harness default}"
+        _session_touch "$session_meta" "$model_override"
     fi
 
     # ── Run Claude ────────────────────────────────────────────────────
@@ -1132,6 +2069,8 @@ with open('$session_meta', 'w') as f:
    \`gh api repos/{owner}/{repo}/pulls/$pr/comments\`"
         else
             pr_fetch_instructions="Fetch the latest review comments and requested changes using the GitHub MCP tools (get_pull_request_reviews, get_pull_request_comments, get_pull_request). If no GitHub MCP is available, check REVIEW_NOTES.md for your previous findings."
+            _harness_load "$CW_HARNESS" && ! harness_supports mcp && \
+                pr_fetch_instructions="gh is not installed and this harness has no GitHub MCP, so check REVIEW_NOTES.md for your previous findings and use git to inspect the latest commits on the PR branch."
         fi
 
         local recheck_prompt="This is a follow-up review of PR #$pr for project $name.
@@ -1162,10 +2101,16 @@ If I say 'none', do not post. If I say 'edit', let me modify before posting."
         local session_name="$account/$name/review-pr-$pr"
         local prompt_file="$session_dir/recheck_prompt.txt"
         printf '%s' "$recheck_prompt" > "$prompt_file"
-        CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account" \
-        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --resume "$session_name" "$(cat "$prompt_file")" \
-            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --continue "$(cat "$prompt_file")" \
-            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$prompt_file")"
+        CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
+        CW_PROMPT="$(cat "$prompt_file")"
+        CW_SESSION_REF="$(_read_harness_ref "$session_meta")"
+        # reviews run in the shared project root, so "the last conversation here" is never ours
+        CW_NOTES_FILE="$notes_file" CW_CONTINUE_LAST_SAFE=""
+        _harness_load "$CW_HARNESS" || return 1
+        _harness_context
+        _harness_resume || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
+        _record_harness_ref "$session_meta"
     else
         # Build review prompt: project skill > global skill > default
         # Search order:
@@ -1209,6 +2154,8 @@ If I say 'none', do not post. If I say 'edit', let me modify before posting."
    And the diff: \`gh pr diff $pr\`"
         else
             pr_detail_instructions="Fetch PR details using the GitHub MCP tools (get_pull_request, list_pull_request_files). If no GitHub MCP is available, use git commands only."
+            _harness_load "$CW_HARNESS" && ! harness_supports mcp && \
+                pr_detail_instructions="gh is not installed and this harness has no GitHub MCP, so use git commands only to inspect the PR branch."
         fi
 
         local review_prompt="Review PR #$pr for project $name.
@@ -1250,8 +2197,13 @@ If I say 'none', do not post. If I say 'edit', let me modify the findings before
         local session_name="$account/$name/review-pr-$pr"
         local prompt_file="$session_dir/init_prompt.txt"
         printf '%s' "$review_prompt" > "$prompt_file"
-        CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account" \
-        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$prompt_file")"
+        CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
+        CW_PROMPT="$(cat "$prompt_file")" CW_NOTES_FILE="$notes_file"
+        _harness_load "$CW_HARNESS" || return 1
+        _harness_context
+        _harness_launch || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
+        _record_harness_ref "$session_meta"
     fi
 
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) REVIEW $name pr=$pr account=$account" >> "$CW_SESSIONS_LOG"
@@ -1261,7 +2213,7 @@ If I say 'none', do not post. If I say 'edit', let me modify the findings before
 # LOOP — recurring/self-paced Claude session via /loop (no worktree)
 # ════════════════════════════════════════════════════════════════════════════
 cmd_loop() {
-    local name="" prompt="" slug="" interval="" done_flag=false list_flag=false account_override="" model_override=""
+    local name="" prompt="" slug="" interval="" done_flag=false list_flag=false account_override="" model_override="" harness_override=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --every|-e)   interval="$2"; shift 2 ;;
@@ -1270,6 +2222,7 @@ cmd_loop() {
             --list)       list_flag=true; shift ;;
             --account|-a) account_override="$2"; shift 2 ;;
             --model|-m)   model_override="$2"; shift 2 ;;
+            --harness|-H) harness_override="$2"; shift 2 ;;
             -*)           shift ;;
             *)
                 if [[ -z "$name" ]]; then
@@ -1292,8 +2245,6 @@ cmd_loop() {
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
     local account; account=${account_override:-$(_get_field "$pj" account "$(_default_account)")}
-    local acct_dir="$CW_ACCOUNTS_DIR/$account"
-    _ensure_statusline "$acct_dir"
 
     # ── Done: close loop session (second positional = slug) ─────────────
     if $done_flag; then
@@ -1306,15 +2257,7 @@ cmd_loop() {
         local session_dir="$CW_HOME/sessions/$name/loop-$slug"
         _log "Closing loop: ${C}$name${NC} ${Y}$slug${NC}"
         if [[ -f "$session_dir/session.json" ]]; then
-            CW_META_FILE="$session_dir/session.json" python3 - <<'PYEOF'
-import json, os
-from datetime import datetime, timezone
-p = os.environ['CW_META_FILE']
-with open(p) as f: meta = json.load(f)
-meta['status'] = 'done'
-meta['closed'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-with open(p, 'w') as f: json.dump(meta, f, indent=2)
-PYEOF
+            _session_close "$session_dir/session.json"
         fi
         _log "${G}Loop $slug closed${NC}"
         echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) DONE $name loop=$slug" >> "$CW_SESSIONS_LOG"
@@ -1345,15 +2288,13 @@ PYEOF
     local session_meta="$session_dir/session.json"
     local notes_file="$session_dir/LOOP_NOTES.md"
 
-    mkdir -p "$session_dir"
-
     local is_new=true
     [[ -f "$session_meta" ]] && is_new=false
 
-    # If session exists but is done, reset it for a fresh start
+    # If session exists but is done, reset it before resolving the harness
     if ! $is_new; then
         local session_status
-        session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
+        session_status=$(_session_field "$session_meta" status)
         if [[ "$session_status" == "done" ]]; then
             _log "Previous loop ${Y}$slug${NC} was closed — starting fresh"
             rm -f "$session_meta"
@@ -1361,26 +2302,35 @@ PYEOF
         fi
     fi
 
-    local model="${model_override:-$(_model_for_type loop)}"
-    if [[ -z "$model_override" ]] && ! $is_new && [[ -f "$session_meta" ]]; then
-        local stored_model
-        stored_model=$(python3 -c "import json; print(json.load(open('$session_meta')).get('model',''))" 2>/dev/null)
-        [[ -n "$stored_model" ]] && model="$stored_model"
+    local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
+    CW_HARNESS="$harness"
+    if ! $is_new && [[ -z "$account_override" && "$harness" != "claude" ]]; then
+        account="$(_session_account "$session_meta" "$account")" || return 1
     fi
-    local model_args=()
-    if [[ -n "$model" ]]; then
-        model_args=("--model" "$model")
-    else
-        _use_platform_default_model "$acct_dir"
+    # /loop is a Claude Code command; sending it to another harness would do nothing useful
+    _harness_load "$CW_HARNESS" || return 1
+    if ! harness_supports slash_commands; then
+        _err "cw loop drives Claude Code's /loop command, which $harness does not have."
+        _err "Run it on claude with --harness claude, or use cw work / cw review with $harness."
+        return 1
     fi
+    local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
+    _ensure_statusline "$acct_dir"
+    local provider; provider="$(_resolve_provider "$account" "$harness")"
+
+    mkdir -p "$session_dir"
+
+    local model; model="$(_resolve_model "$account" "$harness" loop "$model_override" "$session_meta")"
+    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
 
     if $is_new; then
         _log "New loop: ${C}$name${NC} ${Y}$slug${NC} (${interval:-self-paced})"
-        _dim "  Model: ${model:-claude default}"
+        _dim "  Model: ${model:-$harness default}"
 
         # Save session metadata (env vars → python, no quote injection)
         CW_L_PROJECT="$name" CW_L_SLUG="$slug" CW_L_ACCOUNT="$account" CW_L_MODEL="$model" \
         CW_L_PROMPT="$prompt" CW_L_INTERVAL="$interval" CW_L_NOTES="$notes_file" CW_L_META="$session_meta" \
+        CW_L_HARNESS="$harness" CW_L_PROVIDER="$provider" \
         python3 - <<'PYEOF'
 import json, os
 from datetime import datetime, timezone
@@ -1395,6 +2345,9 @@ meta = {
     'loop_prompt': os.environ['CW_L_PROMPT'],
     'loop_interval': os.environ['CW_L_INTERVAL'],
     'notes': os.environ['CW_L_NOTES'],
+    'harness': os.environ['CW_L_HARNESS'],
+    'harness_session_id': '',
+    'provider': os.environ['CW_L_PROVIDER'],
     'status': 'active',
     'created': now,
     'last_opened': now,
@@ -1405,19 +2358,7 @@ with open(os.environ['CW_L_META'], 'w') as f:
 PYEOF
         _log "Session created: ${C}$session_dir${NC}"
 
-        # ── Account skills: symlink into ~/.claude/skills/ for discovery ──
-        local acct_skills_dir="$acct_dir/skills"
-        if [[ -d "$acct_skills_dir" ]]; then
-            for skill_dir in "$acct_skills_dir"/*/; do
-                [[ -d "$skill_dir" ]] || continue
-                local skill_name
-                skill_name=$(basename "$skill_dir")
-                # Skip already-prefixed entries to prevent recursive prefix accumulation
-                case "$skill_name" in acct--*) continue ;; esac
-                local target="$HOME/.claude/skills/acct--${account}--${skill_name}"
-                [[ -e "$target" ]] || ln -sf "$skill_dir" "$target"
-            done
-        fi
+        _link_account_skills "$account" "$(_account_root "$account")"
 
         # Loop notes
         {
@@ -1437,7 +2378,7 @@ PYEOF
         } > "$notes_file"
     else
         _log "Resuming loop: ${C}$name${NC} ${Y}$slug${NC}"
-        _dim "  Model: ${model:-claude default}"
+        _dim "  Model: ${model:-$harness default}"
         CW_L_META="$session_meta" CW_L_MODEL="$model_override" python3 - <<'PYEOF'
 import json, os
 from datetime import datetime, timezone
@@ -1465,22 +2406,168 @@ PYEOF
             init_prompt="/loop $prompt"
         fi
         printf '%s' "$init_prompt" > "$session_dir/loop_prompt.txt"
-        CW_PROJECT="$name" CW_TASK="loop-$slug" CW_TASK_TYPE="loop" CW_ACCOUNT="$account" \
-        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$session_dir/loop_prompt.txt")"
+        CW_PROJECT="$name" CW_TASK="loop-$slug" CW_TASK_TYPE="loop" CW_ACCOUNT="$account"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
+        CW_PROMPT="$(cat "$session_dir/loop_prompt.txt")" CW_NOTES_FILE="$notes_file"
+        _harness_load "$CW_HARNESS" || return 1
+        _harness_context
+        _harness_launch || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
+        _record_harness_ref "$session_meta"
     else
         local resume_prompt="Resume the loop for this session: read $notes_file for the objective and interval, then re-invoke /loop with that same objective (and interval, if any)."
-        CW_PROJECT="$name" CW_TASK="loop-$slug" CW_TASK_TYPE="loop" CW_ACCOUNT="$account" \
-        CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --resume "$session_name" "$resume_prompt" \
-            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --continue "$resume_prompt" \
-            || CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$resume_prompt"
+        CW_PROJECT="$name" CW_TASK="loop-$slug" CW_TASK_TYPE="loop" CW_ACCOUNT="$account"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
+        CW_PROMPT="$resume_prompt"
+        CW_SESSION_REF="$(_read_harness_ref "$session_meta")"
+        # loops run in the shared project root, so "the last conversation here" is never ours
+        CW_NOTES_FILE="$notes_file" CW_CONTINUE_LAST_SAFE=""
+        _harness_load "$CW_HARNESS" || return 1
+        _harness_context
+        _harness_resume || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
+        _record_harness_ref "$session_meta"
     fi
+}
+
+# replaces the Context section of a notes file with fetched markdown, body via temp file
+_context_write_notes() {
+    local notes="$1" body="$2"
+    [[ -f "$notes" ]] || return 0
+    local tmp; tmp=$(mktemp) || return 1
+    trap 'rm -f "$tmp"' INT TERM
+    printf '%s' "$body" > "$tmp" || { rm -f "$tmp"; trap - INT TERM; return 1; }
+    CW_NOTES="$notes" CW_BODY_FILE="$tmp" python3 - <<'PY'
+import os, re
+p = os.environ["CW_NOTES"]
+with open(p) as f: text = f.read()
+with open(os.environ["CW_BODY_FILE"]) as f: body = f.read()
+# demote a bare "## " line so fetched text can never forge a sibling section
+body = re.sub(r"(?m)^##(?=\s|$)", "###", body)
+block = "## Context\n" + body + "\n"
+if "## Context" in text:
+    text = re.sub(r"## Context\n.*?(?=\n## |\Z)", lambda _m: block, text, count=1, flags=re.S)
+else:
+    text += "\n" + block
+with open(p, "w") as f: f.write(text)
+PY
+    local rc=$?
+    rm -f "$tmp"
+    trap - INT TERM
+    return $rc
+}
+
+# sources the context library for a source, first hit in search order
+_context_load() {
+    local src="$1" candidate
+    for candidate in "$CW_HOME/context/$src.sh" \
+                     "$SCRIPT_DIR/../lib/context/$src.sh" \
+                     "$SCRIPT_DIR/lib/context/$src.sh" \
+                     "$CW_HOME/lib/context/$src.sh"; do
+        # shellcheck disable=SC1090
+        [[ -f "$candidate" ]] && { source "$candidate"; return 0; }
+    done
+    return 1
+}
+
+# fetches a task URL's context into notes, and any branch it reports into _CW_CONTEXT_BRANCH
+_context_fetch_for_task() {
+    local src="$1" url="$2" notes="$3"
+    _CW_CONTEXT_BRANCH=""
+    [[ -n "$src" && "$src" != "url" ]] || return 1
+    _context_load "$src" || return 1
+    if ! "context_credential_$src"; then
+        _dim "  No $src credential — the agent will fetch it instead"
+        return 1
+    fi
+    local fetched meta
+    meta=$(mktemp) || return 1
+    fetched=$(CW_CONTEXT_META="$meta" "context_fetch_$src" "$url" 2>/dev/null) || fetched=""
+    [[ -n "$fetched" ]] && _CW_CONTEXT_BRANCH=$(CW_META_FILE="$meta" python3 -c '
+import json, os
+try:
+    print(json.load(open(os.environ["CW_META_FILE"])).get("branch") or "", end="")
+except Exception:
+    pass')
+    rm -f "$meta"
+    [[ -n "$fetched" ]] || return 1
+    _context_write_notes "$notes" "$fetched" || return 1
+    _dim "  Fetched context from $src"
+    return 0
+}
+
+# prints the branch the agent-driven setup would give a new task worktree
+_work_branch() {
+    local task="$1" src="$2" url="$3"
+    case "$src" in
+        linear) printf '%s' "${_CW_CONTEXT_BRANCH:-task/$task}" ;;
+        notion) printf 'task/%s' "$task" ;;
+        github)
+            if [[ "$url" == *"/pull/"* ]]; then
+                _context_load github && context_pr_branch_github "$url"
+                return
+            fi
+            printf 'task/%s' "$task" ;;
+        *) printf '%s' "$task" ;;
+    esac
+}
+
+# links the notes, the shared context, and the root's .env and .claude/ into a new worktree
+_work_worktree_link() {
+    local path="$1" wt_dir="$2" notes="$3" shared="$4"
+    ln -sf "$notes" "$wt_dir/TASK_NOTES.md" || return 1
+    ln -sf "$shared" "$wt_dir/SHARED_CONTEXT.md" || return 1
+    if [[ -f "$path/.env" && ! -e "$wt_dir/.env" && ! -L "$wt_dir/.env" ]]; then
+        ln -s "$path/.env" "$wt_dir/.env" || return 1
+    fi
+    if [[ -d "$path/.claude" && ! -e "$wt_dir/.claude" && ! -L "$wt_dir/.claude" ]]; then
+        ln -s "$path/.claude" "$wt_dir/.claude" || return 1
+    fi
+    return 0
+}
+
+# creates a task worktree, attaching an existing branch and never deleting one; sets _CW_WT_WHY on failure
+_work_worktree_create() {
+    local path="$1" wt_dir="$2" branch="$3" start="$4" notes="$5" shared="$6" err="" made_branch=false
+    _CW_WT_WHY=""
+    if [[ -z "$branch" || "$branch" == -* ]] || ! git -C "$path" check-ref-format --branch "$branch" >/dev/null 2>&1; then
+        _CW_WT_WHY="'$branch' is not a valid branch name"; return 1
+    fi
+    if [[ -e "$wt_dir" || -L "$wt_dir" ]]; then
+        _CW_WT_WHY="$wt_dir already exists"; return 1
+    fi
+    git -C "$path" fetch -q origin >/dev/null 2>&1 || { _CW_WT_WHY="git fetch origin failed"; return 1; }
+    local -a add=(worktree add -q "$wt_dir" "$branch")
+    if ! git -C "$path" show-ref --verify --quiet "refs/heads/$branch"; then
+        if ! git -C "$path" rev-parse --verify --quiet "$start^{commit}" >/dev/null; then
+            _CW_WT_WHY="$start does not exist"; return 1
+        fi
+        add=(worktree add -q -b "$branch" "$wt_dir" "$start")
+        made_branch=true
+    fi
+    # claims the path atomically, so a concurrent run of the same task is never rolled back here
+    if ! mkdir -p "$(dirname "$wt_dir")" || ! mkdir "$wt_dir" 2>/dev/null; then
+        _CW_WT_WHY="$wt_dir already exists"; return 1
+    fi
+    if ! err=$(git -C "$path" "${add[@]}" 2>&1 >/dev/null); then
+        _CW_WT_WHY="${err:-git worktree add failed}"
+    elif ! _work_worktree_link "$path" "$wt_dir" "$notes" "$shared"; then
+        _CW_WT_WHY="could not link the task files into it"
+    else
+        return 0
+    fi
+    _CW_WT_WHY="${_CW_WT_WHY%%$'\n'*}"
+    # removes only the directory this call claimed, never another worktree's registration
+    git -C "$path" worktree remove --force "$wt_dir" >/dev/null 2>&1 || rm -rf "$wt_dir"
+    if $made_branch && git -C "$path" show-ref --verify --quiet "refs/heads/$branch"; then
+        _CW_WT_WHY="$_CW_WT_WHY; kept branch $branch, which cw had just created"
+    fi
+    return 1
 }
 
 # ════════════════════════════════════════════════════════════════════════════
 # WORK — Feature/bugfix with worktree + persistent session
 # ════════════════════════════════════════════════════════════════════════════
 cmd_work() {
-    local name="" task="" done_flag=false list_flag=false team_flag=false team_prompt="" base_branch="" workflow="" account_override="" model_override=""
+    local name="" task="" done_flag=false list_flag=false team_flag=false team_prompt="" base_branch="" workflow="" account_override="" model_override="" harness_override=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --task|-t)   task="$2"; shift 2 ;;
@@ -1490,6 +2577,7 @@ cmd_work() {
             --workflow|-w) workflow="$2"; shift 2 ;;
             --account|-a) account_override="$2"; shift 2 ;;
             --model|-m) model_override="$2"; shift 2 ;;
+            --harness|-H) harness_override="$2"; shift 2 ;;
             --team)      team_flag=true; shift
                          # Capture optional team prompt (rest of args in quotes)
                          if [[ $# -gt 0 && "$1" != -* ]]; then
@@ -1543,16 +2631,6 @@ cmd_work() {
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
     local account; account=${account_override:-$(_get_field "$pj" account "$(_default_account)")}
-    local acct_dir="$CW_ACCOUNTS_DIR/$account"
-    _ensure_statusline "$acct_dir"
-
-    local model="${model_override:-$(_model_for_type work)}"
-    local model_args=()
-    if [[ -n "$model" ]]; then
-        model_args=("--model" "$model")
-    else
-        _use_platform_default_model "$acct_dir"
-    fi
 
     local session_dir="$CW_HOME/sessions/$name/task-$task"
     local session_meta="$session_dir/session.json"
@@ -1574,16 +2652,13 @@ cmd_work() {
         return
     fi
 
-    # ── Create or resume ─────────────────────────────────────────────────
-    mkdir -p "$session_dir"
-
     local is_new=true
     [[ -f "$session_meta" ]] && is_new=false
 
-    # If session exists but is done, reset it for a fresh start
+    # If session exists but is done, reset it before resolving the harness
     if ! $is_new; then
         local session_status
-        session_status=$(python3 -c "import json; print(json.load(open('$session_meta')).get('status',''))" 2>/dev/null)
+        session_status=$(_session_field "$session_meta" status)
         if [[ "$session_status" == "done" ]]; then
             _log "Previous session for ${Y}$task${NC} was closed — starting fresh"
             rm -f "$session_meta"
@@ -1591,22 +2666,133 @@ cmd_work() {
         fi
     fi
 
-    if [[ -z "$model_override" ]] && ! $is_new && [[ -f "$session_meta" ]]; then
-        local stored_model
-        stored_model=$(python3 -c "import json; print(json.load(open('$session_meta')).get('model',''))" 2>/dev/null)
-        [[ -n "$stored_model" ]] && model="$stored_model"
+    local harness; harness=$(_resolve_harness "$account" "$name" "$session_meta" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
+    CW_HARNESS="$harness"
+    if ! $is_new && [[ -z "$account_override" && "$harness" != "claude" ]]; then
+        account="$(_session_account "$session_meta" "$account")" || return 1
     fi
+    local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
+    _ensure_statusline "$acct_dir"
+
+    local model; model="$(_resolve_model "$account" "$harness" work "$model_override" "$session_meta")"
+    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
+    local provider; provider="$(_resolve_provider "$account" "$harness")"
+
+    # ── Create or resume ─────────────────────────────────────────────────
+    mkdir -p "$session_dir"
 
     if $is_new; then
         _log "New task: ${C}$name${NC} task=${Y}$task${NC}"
-        _dim "  Model: ${model:-claude default}"
+        _dim "  Model: ${model:-$harness default}"
+
+        # Create notes file in session dir (skip if Forge already pre-wrote one with description)
+        if [[ ! -f "$notes_file" ]]; then
+            {
+                echo "# Task: $task"
+                echo "**Project:** $name"
+                echo "**Created:** $(date +%Y-%m-%d)"
+                if [[ -n "$task_url" ]]; then
+                    echo "**Source:** $task_url"
+                fi
+                echo ""
+                echo "## Context"
+                echo "<!-- Claude fills this after fetching from source -->"
+                echo ""
+                echo "## Objective"
+                echo "<!-- Describe what needs to be done -->"
+                echo ""
+                echo "## Decisions"
+                echo "<!-- Claude and you log important decisions here -->"
+                echo ""
+                echo "## Status"
+                echo "- [ ] Pending"
+                echo ""
+                echo "## Notes"
+                echo "<!-- Findings, context, references -->"
+            } > "$notes_file"
+        fi
+
+        # ── Fetch external context before the init prompt is built ────────
+        local context_fetched=false
+        _context_fetch_for_task "$task_source" "$task_url" "$notes_file" && context_fetched=true
+
+        # ── Shared context (per-project, visible to all worktrees) ────────
+        local shared_context="$CW_HOME/sessions/$name/SHARED_CONTEXT.md"
+        if [[ ! -f "$shared_context" ]]; then
+            {
+                echo "# Shared Context: $name"
+                echo "**Project:** $name"
+                echo ""
+                echo "## Cross-Task Notes"
+                echo "<!-- Notes visible to all active worktrees for this project -->"
+                echo "<!-- Update this when you discover something relevant to other tasks -->"
+                echo ""
+                echo "## Decisions"
+                echo "<!-- Architecture decisions, conventions, important context -->"
+                echo ""
+                echo "## Known Issues"
+                echo "<!-- Bugs, tech debt, things to watch out for -->"
+            } > "$shared_context"
+        fi
+
+        local cw_worktree=false wt_branch=""
+        # claude keeps its legacy agent-driven worktree setup for backward compatibility
+        if [[ "$CW_HARNESS" != "claude" ]]; then
+            local wt_start="$base_branch"
+            _CW_WT_WHY="gh could not resolve the pull request's branch"
+            if wt_branch=$(_work_branch "$task" "$task_source" "$task_url"); then
+                [[ "$task_source" == "github" && "$task_url" == *"/pull/"* ]] && wt_start="origin/$wt_branch"
+                _work_worktree_create "$path" "$wt_dir" "$wt_branch" "$wt_start" "$notes_file" "$shared_context" \
+                    && cw_worktree=true
+            fi
+            $cw_worktree || _warn "Could not create the worktree ($_CW_WT_WHY) — falling back to agent-driven setup"
+        fi
 
         # Build initial prompt for Claude based on source
         local init_prompt=""
-        if [[ "$task_source" == "linear" ]]; then
-            init_prompt="Fetch Linear issue $task using the Linear MCP (get_issue tool). Also fetch the issue comments (list_comments tool) to check for discussion, decisions, or additional context.
+        # step N text + the following step's number, or "" when context was already fetched
+        local _fill_linear="" _fill_notion="" _fill_issue="" _fill_pr="" _after_fill=7 _after_fill_pr=8
+        if ! $context_fetched; then
+            _fill_linear="
+7. Fill in the TASK_NOTES.md Context section with the issue details (title, description, acceptance criteria, priority). If there are comments, include a summary of relevant decisions or clarifications."
+            _fill_notion="
+7. Fill in the TASK_NOTES.md Context section with the page content."
+            _fill_issue="
+7. Fill in the TASK_NOTES.md Context section with the issue details."
+            _fill_pr="
+8. Fill in the TASK_NOTES.md Context section with the PR details."
+            _after_fill=8
+            _after_fill_pr=9
+        fi
+        # a harness without MCP is pointed at TASK_NOTES.md, never at an MCP tool
+        _harness_load "$CW_HARNESS" || return 1
+        local _linear_head="Fetch Linear issue $task using the Linear MCP (get_issue tool). Also fetch the issue comments (list_comments tool) to check for discussion, decisions, or additional context.
 
-IMPORTANT: Use the git branch name from the Linear issue response (the branchName field) for the git branch. Do NOT use the issue ID ($task) as the branch name.
+IMPORTANT: Use the git branch name from the Linear issue response (the branchName field) for the git branch. Do NOT use the issue ID ($task) as the branch name."
+        local _notion_lead="Fetch this Notion page using the Notion MCP: $task_url"
+        local _issue_lead="Fetch this GitHub issue using gh or the GitHub MCP: $task_url"
+        local _pr_lead=""
+        if ! harness_supports mcp; then
+            local _read_notes="Read it first: it is the source of truth for this task."
+            if $context_fetched; then
+                _linear_head="The Linear issue $task has already been fetched into $notes_file. $_read_notes
+
+IMPORTANT: Use the git branch name from the Branch line in TASK_NOTES.md for the git branch. Do NOT use the issue ID ($task) as the branch name."
+                _notion_lead="The Notion page $task_url has already been fetched into $notes_file. $_read_notes"
+                _issue_lead="The GitHub issue $task_url has already been fetched into $notes_file. $_read_notes"
+                _pr_lead="The PR details have already been fetched into $notes_file. $_read_notes
+
+"
+            else
+                _linear_head="The Linear issue $task ($task_url) could not be fetched: no LINEAR_API_KEY is configured and this harness has no Linear MCP. Ask the user for the issue details, including its git branch name, before starting.
+
+IMPORTANT: Use the git branch name the user gives you for the git branch. If there is none, use task/$task."
+                _notion_lead="The Notion page $task_url could not be fetched: no NOTION_TOKEN is configured and this harness has no Notion MCP. Ask the user for the page content before starting."
+                _issue_lead="Fetch this GitHub issue using gh: $task_url"
+            fi
+        fi
+        if [[ "$task_source" == "linear" ]]; then
+            init_prompt="$_linear_head
 
 Set up the workspace using the Linear branch name:
 1. Run: git fetch origin
@@ -1614,26 +2800,24 @@ Set up the workspace using the Linear branch name:
 3. Create a worktree using the Linear branch name: git worktree add .tasks/$task -b <linear_branch_name> $base_branch
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
-6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
-7. Fill in the TASK_NOTES.md Context section with the issue details (title, description, acceptance criteria, priority). If there are comments, include a summary of relevant decisions or clarifications.
-8. Then start working from the .tasks/$task/ directory.
+6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude$_fill_linear
+$_after_fill. Then start working from the .tasks/$task/ directory.
 
 Source URL: $task_url"
         elif [[ "$task_source" == "notion" ]]; then
-            init_prompt="Fetch this Notion page using the Notion MCP: $task_url
+            init_prompt="$_notion_lead
 Then:
 1. Run: git fetch origin
 2. If branch task/$task exists locally, delete it: git branch -D task/$task (ignore errors)
 3. Create a worktree from $base_branch: git worktree add .tasks/$task -b task/$task $base_branch
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
-6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
-7. Fill in the TASK_NOTES.md Context section with the page content.
-8. Then start working from the .tasks/$task/ directory."
+6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude$_fill_notion
+$_after_fill. Then start working from the .tasks/$task/ directory."
         elif [[ "$task_source" == "github" ]] && [[ "$task_url" == *"/pull/"* ]]; then
             local _pr_num
             _pr_num=$(echo "$task_url" | grep -oE '[0-9]+$')
-            init_prompt="Set up the workspace for GitHub PR #$_pr_num ($task_url):
+            init_prompt="${_pr_lead}Set up the workspace for GitHub PR #$_pr_num ($task_url):
 1. Run: git fetch origin
 2. Get the PR branch name: \`gh pr view $_pr_num --json headRefName -q .headRefName\`
 3. If the PR branch already exists locally, delete it: \`git branch -D <pr_branch>\` (ignore errors)
@@ -1641,20 +2825,18 @@ Then:
    IMPORTANT: Use \`origin/<pr_branch>\` as the start point, NOT $base_branch — you need the PR's actual commits.
 5. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 6. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
-7. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
-8. Fill in the TASK_NOTES.md Context section with the PR details.
-9. Then start working from the .tasks/$task/ directory."
+7. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude$_fill_pr
+$_after_fill_pr. Then start working from the .tasks/$task/ directory."
         elif [[ "$task_source" == "github" ]]; then
-            init_prompt="Fetch this GitHub issue using gh or the GitHub MCP: $task_url
+            init_prompt="$_issue_lead
 Then:
 1. Run: git fetch origin
 2. If branch task/$task exists locally, delete it: git branch -D task/$task (ignore errors)
 3. Create a worktree from $base_branch: git worktree add .tasks/$task -b task/$task $base_branch
 4. Symlink notes: ln -sf $notes_file .tasks/$task/TASK_NOTES.md
 5. Symlink .env if it exists in repo root: [ -f .env ] && ln -sf \"\$(pwd)/.env\" .tasks/$task/.env
-6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude
-7. Fill in the TASK_NOTES.md Context section with the issue details.
-8. Then start working from the .tasks/$task/ directory."
+6. Symlink .claude/ if it exists in repo root but not in worktree: [ -d .claude ] && [ ! -d .tasks/$task/.claude ] && ln -sf \"\$(pwd)/.claude\" .tasks/$task/.claude$_fill_issue
+$_after_fill. Then start working from the .tasks/$task/ directory."
         else
             # No URL — just a branch/task name
             # Check if Forge pre-wrote a description in TASK_NOTES.md
@@ -1689,33 +2871,70 @@ Set up the workspace:
             fi
         fi
 
-        # ── Shared context (per-project, visible to all worktrees) ────────
-        local shared_context="$CW_HOME/sessions/$name/SHARED_CONTEXT.md"
-        if [[ ! -f "$shared_context" ]]; then
-            {
-                echo "# Shared Context: $name"
-                echo "**Project:** $name"
-                echo ""
-                echo "## Cross-Task Notes"
-                echo "<!-- Notes visible to all active worktrees for this project -->"
-                echo "<!-- Update this when you discover something relevant to other tasks -->"
-                echo ""
-                echo "## Decisions"
-                echo "<!-- Architecture decisions, conventions, important context -->"
-                echo ""
-                echo "## Known Issues"
-                echo "<!-- Bugs, tech debt, things to watch out for -->"
-            } > "$shared_context"
+        # a non-claude fallback prompt attaches an existing branch instead of deleting it
+        if [[ "$CW_HARNESS" != "claude" ]] && ! $cw_worktree; then
+            init_prompt=$(CW_P="$init_prompt" CW_T="$task" python3 -c '
+import os, re
+t = os.environ["CW_T"]
+def attach(m):
+    n, what, branch = m.group(1), m.group(2), m.group(3)
+    return (f"{n}. If {what} exists locally, do not delete or reset it: attach the worktree to it "
+            f"with `git worktree add .tasks/{t} {branch}` and skip step {int(n) + 1}.")
+step = r"^(\d+)\. If (.+?) exists locally, delete it: `?git branch -D (\S+?)`? \(ignore errors\)$"
+print(re.sub(step, attach, os.environ["CW_P"], flags=re.M), end="")')
         fi
+
+        # a worktree cw already created gets a prompt with no setup steps in it
+        if $cw_worktree; then
+            local _lead="" _fill="" _read="Read TASK_NOTES.md for context."
+            case "$task_source" in
+                linear)
+                    if harness_supports mcp; then
+                        _lead="Fetch Linear issue $task using the Linear MCP (get_issue tool). Also fetch the issue comments (list_comments tool) to check for discussion, decisions, or additional context."
+                    elif $context_fetched; then
+                        _lead="The Linear issue $task has already been fetched into $notes_file. Read it first: it is the source of truth for this task."
+                    else
+                        _lead="The Linear issue $task ($task_url) could not be fetched: no LINEAR_API_KEY is configured and this harness has no Linear MCP. Ask the user for the issue details before starting."
+                    fi
+                    _fill="the issue details (title, description, acceptance criteria, priority) and a summary of any relevant comments" ;;
+                notion) _lead="$_notion_lead"; _fill="the page content" ;;
+                github)
+                    if [[ "$task_url" == *"/pull/"* ]]; then
+                        _lead="This task is GitHub PR #$_pr_num: $task_url"
+                        [[ -n "$_pr_lead" ]] && _lead="$_lead
+The PR details have already been fetched into $notes_file. Read it first: it is the source of truth for this task."
+                        _fill="the PR details"
+                    else
+                        _lead="$_issue_lead"; _fill="the issue details"
+                    fi ;;
+                *)
+                    [[ -n "${prewritten_desc:-}" ]] && _lead="Task description:
+$prewritten_desc" ;;
+            esac
+            [[ -n "$_fill" ]] && _read=""
+            [[ -n "$_fill" ]] && ! $context_fetched && _read="Fill in the Context section of TASK_NOTES.md with $_fill."
+            init_prompt="${_lead:+$_lead
+
+}The workspace is already set up. You are in this task's git worktree, $wt_dir, on branch $wt_branch. Work only in this directory, and do not create another worktree or branch.
+TASK_NOTES.md in the worktree links to $notes_file.${_read:+
+$_read}"
+        fi
+
+        # /simplify is a Claude Code command; other harnesses get the same ask in plain words
+        local _quality_step="When you finish implementing the task (before committing), run /simplify to review the code for reuse, quality, and efficiency. Fix any issues found before considering the task done."
+        harness_supports slash_commands || _quality_step="When you finish implementing the task (before committing), review your own changes for reuse, quality, and efficiency. Fix any issues found before considering the task done."
+
+        local _shared_step="Also symlink shared context: ln -sf $shared_context .tasks/$task/SHARED_CONTEXT.md
+If SHARED_CONTEXT.md exists in the worktree, read it for cross-task context from other worktrees."
+        $cw_worktree && _shared_step="SHARED_CONTEXT.md in the worktree links to $shared_context. Read it for cross-task context from other worktrees."
         init_prompt="$init_prompt
 
-Also symlink shared context: ln -sf $shared_context .tasks/$task/SHARED_CONTEXT.md
-If SHARED_CONTEXT.md exists in the worktree, read it for cross-task context from other worktrees.
+$_shared_step
 When you discover something relevant to other tasks (schema changes, API changes, conventions), update SHARED_CONTEXT.md.
 
 IMPORTANT — Project rules: Before writing any code, read the project's CLAUDE.md at the worktree root if it exists. Also check .claude/rules/ for coding rules (e.g. backend.md, frontend.md, tests.md) — these have glob patterns in their frontmatter that specify which files they apply to. Follow all coding rules, conventions, and restrictions defined in these files when writing code.
 
-IMPORTANT — Code quality: When you finish implementing the task (before committing), run /simplify to review the code for reuse, quality, and efficiency. Fix any issues found before considering the task done."
+IMPORTANT — Code quality: $_quality_step"
 
         # ── Workflow template ─────────────────────────────────────────────
         if [[ -n "$workflow" ]]; then
@@ -1732,7 +2951,7 @@ $(cat "$wf_file")"
         fi
 
         # ── Account work context (init) ──────────────────────────────────
-        local acct_init_tpl="$acct_dir/templates/work_init.md"
+        local acct_init_tpl="$(_account_root "$account")/templates/work_init.md"
         if [[ -f "$acct_init_tpl" ]]; then
             local acct_ctx
             acct_ctx=$(cat "$acct_init_tpl")
@@ -1745,37 +2964,11 @@ $acct_ctx"
             _dim "  Account context: $account"
         fi
 
-        # Create notes file in session dir (skip if Forge already pre-wrote one with description)
-        if [[ ! -f "$notes_file" ]]; then
-            {
-                echo "# Task: $task"
-                echo "**Project:** $name"
-                echo "**Created:** $(date +%Y-%m-%d)"
-                if [[ -n "$task_url" ]]; then
-                    echo "**Source:** $task_url"
-                fi
-                echo ""
-                echo "## Context"
-                echo "<!-- Claude fills this after fetching from source -->"
-                echo ""
-                echo "## Objective"
-                echo "<!-- Describe what needs to be done -->"
-                echo ""
-                echo "## Decisions"
-                echo "<!-- Claude and you log important decisions here -->"
-                echo ""
-                echo "## Status"
-                echo "- [ ] Pending"
-                echo ""
-                echo "## Notes"
-                echo "<!-- Findings, context, references -->"
-            } > "$notes_file"
-        fi
-
         # Exclude .tasks from git (but DON'T pre-create the task dir — worktree needs it empty)
         mkdir -p "$path/.tasks"
         local proj_git_dir
-        proj_git_dir=$(cd "$path" && git rev-parse --git-dir 2>/dev/null) || true
+        # the project's own shared git dir, whichever directory cw was run from
+        proj_git_dir=$(cd "$path" && d=$(git rev-parse --git-common-dir 2>/dev/null) && cd "$d" && pwd) || true
         if [[ -n "$proj_git_dir" ]]; then
             local proj_exclude="$proj_git_dir/info/exclude"
             mkdir -p "$(dirname "$proj_exclude")" 2>/dev/null || true
@@ -1785,50 +2978,36 @@ $acct_ctx"
         fi
 
         # Save session
-        python3 -c "
-import json
+        CW_S_PROJECT="$name" CW_S_TASK="$task" CW_S_ACCOUNT="$account" CW_S_WORKFLOW="$workflow" \
+        CW_S_WORKTREE="$wt_dir" CW_S_NOTES="$notes_file" CW_S_SOURCE="$task_source" \
+        CW_S_SOURCE_URL="$task_url" CW_S_MODEL="$model" CW_S_HARNESS="$harness" \
+        CW_S_PROVIDER="$provider" CW_S_META="$session_meta" python3 - <<'PYEOF'
+import json, os
 from datetime import datetime, timezone
+e = os.environ
 meta = {
-    'project': '$name', 'task': '$task', 'type': 'task',
-    'account': '$account', 'workflow': '$workflow',
-    'worktree': '$wt_dir', 'notes': '$notes_file',
-    'source': '$task_source', 'source_url': '$task_url',
-    'model': '$model',
+    'project': e['CW_S_PROJECT'], 'task': e['CW_S_TASK'], 'type': 'task',
+    'account': e['CW_S_ACCOUNT'], 'workflow': e['CW_S_WORKFLOW'],
+    'worktree': e['CW_S_WORKTREE'], 'notes': e['CW_S_NOTES'],
+    'source': e['CW_S_SOURCE'], 'source_url': e['CW_S_SOURCE_URL'],
+    'model': e['CW_S_MODEL'],
+    'harness': e['CW_S_HARNESS'],
+    'harness_session_id': '',
+    'provider': e['CW_S_PROVIDER'],
     'status': 'active',
     'created': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'last_opened': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'opens': 1
 }
-with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
-"
+with open(e['CW_S_META'], 'w') as f: json.dump(meta, f, indent=2)
+PYEOF
 
-        # ── Account skills: symlink into ~/.claude/skills/ for discovery ──
-        local acct_skills_dir="$acct_dir/skills"
-        if [[ -d "$acct_skills_dir" ]]; then
-            for skill_dir in "$acct_skills_dir"/*/; do
-                [[ -d "$skill_dir" ]] || continue
-                local skill_name
-                skill_name=$(basename "$skill_dir")
-                # Skip already-prefixed entries to prevent recursive prefix accumulation
-                case "$skill_name" in acct--*) continue ;; esac
-                local target="$HOME/.claude/skills/acct--${account}--${skill_name}"
-                [[ -e "$target" ]] || ln -sf "$skill_dir" "$target"
-            done
-        fi
+        _link_account_skills "$account" "$(_account_root "$account")"
 
     else
         _log "Resuming task: ${C}$name${NC} task=${Y}$task${NC}"
-        _dim "  Model: ${model:-claude default}"
-        python3 -c "
-import json
-from datetime import datetime, timezone
-with open('$session_meta') as f: meta = json.load(f)
-meta['last_opened'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-meta['opens'] = meta.get('opens', 0) + 1
-if '$model_override':
-    meta['model'] = '$model_override'
-with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
-"
+        _dim "  Model: ${model:-$harness default}"
+        _session_touch "$session_meta" "$model_override"
     fi
 
     # ── Run Claude ──────────────────────────────────────────────────────
@@ -1844,8 +3023,13 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
     # ── Agent teams ────────────────────────────────────────────────────
     local team_env=""
     if $team_flag; then
-        team_env="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1"
-        _log "Agent teams ${G}enabled${NC}"
+        _harness_load "$CW_HARNESS" || return 1
+        if harness_supports agent_teams; then
+            team_env="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1"
+            _log "Agent teams ${G}enabled${NC}"
+        else
+            _degrade agent_teams "Agent teams not supported — running without a team" || true
+        fi
     fi
 
     if $is_new && [[ -n "$init_prompt" ]]; then
@@ -1870,7 +3054,12 @@ After setting up the workspace, analyze the task scope and create an agent team 
 
 MANDATORY — Comment & notes style: Keep every comment to a single short line. Never write multi-line comment blocks or docstring-style explanations. This applies both to comments in code and to notes you write in TASK_NOTES.md or any task file. Comments must never reference task IDs, branch names, or GitHub/Linear issue or PR numbers — that context belongs in the PR description, not in the code. This rule is not optional; follow it in every file you touch."
         printf '%s' "$init_prompt" > "$prompt_file"
-        env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$(cat "$prompt_file")"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
+        CW_TEAM_ENV="$team_env" CW_PROMPT="$(cat "$prompt_file")" CW_NOTES_FILE="$notes_file"
+        _harness_load "$CW_HARNESS" || return 1
+        _harness_context
+        _harness_launch || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
+        _record_harness_ref "$session_meta"
     elif ! $is_new; then
         # ── Resume context (worktree + branch awareness) ─────────────
         local current_branch=""
@@ -1884,7 +3073,7 @@ Your feature branch is: \`${current_branch:-$task}\`
 IMPORTANT: Verify you are in the worktree directory and on the correct feature branch before making any changes. If not, \`cd $wt_dir\` and \`git checkout ${current_branch:-$task}\`."
 
         # ── Account-specific resume template ─────────────────────────
-        local acct_resume_tpl="$acct_dir/templates/work_resume.md"
+        local acct_resume_tpl="$(_account_root "$account")/templates/work_resume.md"
         if [[ -f "$acct_resume_tpl" ]]; then
             local acct_resume
             acct_resume=$(cat "$acct_resume_tpl")
@@ -1900,18 +3089,29 @@ $acct_resume"
         local session_name="$account/$name/$task"
 
         # Try to resume named session; fall back to --continue, then start fresh
-        env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --resume "$session_name" "$resume_msg" \
-            || env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --continue "$resume_msg" \
-            || env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "$resume_msg"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
+        CW_TEAM_ENV="$team_env" CW_PROMPT="$resume_msg"
+        CW_SESSION_REF="$(_read_harness_ref "$session_meta")"
+        CW_NOTES_FILE="$notes_file" CW_CONTINUE_LAST_SAFE=""
+        # only the task's own worktree, already used by this session, holds nothing but ours
+        if [[ "$open_dir" == "$wt_dir" && "$(_session_field "$session_meta" harness_workdir)" == "$wt_dir" ]]; then
+            CW_CONTINUE_LAST_SAFE=1
+        fi
+        _harness_load "$CW_HARNESS" || return 1
+        _harness_context
+        _harness_resume || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
+        _record_harness_ref "$session_meta"
     else
         local session_name="$account/$name/$task"
+        CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
+        CW_TEAM_ENV="$team_env" CW_PROMPT=""
         if $team_flag && [[ -n "$team_prompt" ]]; then
-            env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name" "Create an agent team for this task: $team_prompt"
-        elif $team_flag; then
-            env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name"
-        else
-            CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$session_name"
+            CW_PROMPT="Create an agent team for this task: $team_prompt"
         fi
+        _harness_load "$CW_HARNESS" || return 1
+        _harness_context
+        _harness_launch || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
+        _record_harness_ref "$session_meta"
     fi
 
     unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
@@ -1922,7 +3122,19 @@ $acct_resume"
 # SPACES — Show all active spaces
 # ════════════════════════════════════════════════════════════════════════════
 cmd_spaces() {
-    local filter="${1:-}"
+    local filter="" json_out=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) json_out=true; shift ;;
+            *) filter="$1"; shift ;;
+        esac
+    done
+
+    if $json_out; then
+        _spaces_json "$filter"
+        return 0
+    fi
+
     local sessions_dir="$CW_HOME/sessions"
 
     echo -e "\n${BOLD}Active spaces${NC}\n"
@@ -1967,6 +3179,11 @@ for proj in sorted(os.listdir(sessions_dir)):
         stype = m.get("type", "?")
         opens = m.get("opens", 0)
         last = m.get("last_opened", "?")[:10]
+        harness = m.get("harness") or "claude"
+        provider = m.get("provider") or "native"
+        model = m.get("model") or ""
+        proj_acct = reg.get(proj, {}).get("account", "")
+        acct = m.get("account") or proj_acct
 
         if stype == "task":
             sid = m.get("task", "?")
@@ -1977,13 +3194,22 @@ for proj in sorted(os.listdir(sessions_dir)):
             label = f"review: PR #{sid}"
             cmd = f"cw review {proj} {sid}"
         else: continue
-        spaces.append((label, opens, last, cmd))
+        # name the account whenever it is not the one the project would pick
+        if acct and acct != proj_acct:
+            cmd = f"{cmd} --account {acct}"
+
+        label_extra = harness
+        if provider and provider != "native":
+            label_extra = f"{harness} · {model or provider}"
+        if acct and acct != proj_acct:
+            label_extra = f"{label_extra}  @{acct}"
+        spaces.append((label, opens, last, cmd, label_extra))
 
     if spaces:
         acct = reg.get(proj, {}).get("account", "")
         print(f"  {C}{proj}{NC}  {DIM}({acct}){NC}")
-        for label, opens, last, cmd in spaces:
-            print(f"    {Y}{label}{NC}  {DIM}({opens}x, {last}){NC}")
+        for label, opens, last, cmd, label_extra in spaces:
+            print(f"    {Y}{label}{NC}  {DIM}({opens}x, {last}){NC}  {label_extra}")
             print(f"      {DIM}resume:{NC} {cmd}")
             print(f"      {DIM}close:{NC}  {cmd} --done")
         print()
@@ -1996,6 +3222,70 @@ PYEOF
     echo -e "$output"
     echo -e "  ${DIM}Close all for a project: cw work <proy> --task <t> --done${NC}"
     echo -e "  ${DIM}                            cw review <proy> --pr <n> --done${NC}\n"
+}
+
+# builds the machine-readable spaces payload as a single json object
+_spaces_json() {
+    local filter="$1"
+    local sessions_dir="$CW_HOME/sessions"
+    python3 - "$sessions_dir" "$filter" "$CW_REGISTRY" <<'PYEOF'
+import json, os, sys
+
+sessions_dir, filter_proj, registry = sys.argv[1], sys.argv[2], sys.argv[3]
+
+reg = {}
+try:
+    with open(registry) as f: reg = json.load(f)
+except Exception: pass
+
+spaces = []
+if os.path.isdir(sessions_dir):
+    for proj in sorted(os.listdir(sessions_dir)):
+        proj_dir = os.path.join(sessions_dir, proj)
+        if not os.path.isdir(proj_dir): continue
+        if filter_proj and proj != filter_proj: continue
+        # Walk recursively to find session.json (task names with slashes create nested dirs)
+        for root, dirs, files in os.walk(proj_dir):
+            dirs.sort()
+            if "session.json" not in files: continue
+            meta_file = os.path.join(root, "session.json")
+            try:
+                with open(meta_file) as f: m = json.load(f)
+            except Exception: continue
+            if m.get("status") != "active": continue
+
+            stype = m.get("type", "?")
+            if stype == "task":
+                sid = m.get("task", "?")
+                resume = f"cw work {proj} {sid}"
+            elif stype == "review":
+                sid = m.get("pr", "?")
+                resume = f"cw review {proj} {sid}"
+            else:
+                continue
+            proj_acct = reg.get(proj, {}).get("account", "")
+            acct = m.get("account") or proj_acct
+            # name the account whenever it is not the one the project would pick
+            if acct and acct != proj_acct:
+                resume = f"{resume} --account {acct}"
+
+            spaces.append({
+                "project": proj,
+                "account": acct,
+                "type": stype,
+                "id": sid,
+                "harness": m.get("harness") or "claude",
+                "provider": m.get("provider") or "native",
+                "model": m.get("model") or None,
+                "opens": m.get("opens", 0),
+                "last_opened": m.get("last_opened", ""),
+                "worktree": m.get("worktree", ""),
+                "resume": resume,
+                "close": f"{resume} --done",
+            })
+
+print(json.dumps({"schema": 1, "spaces": spaces}))
+PYEOF
 }
 
 # ── Shared: close space ──────────────────────────────────────────────────
@@ -2019,14 +3309,7 @@ _space_done() {
 
     # Update session
     if [[ -f "$session_dir/session.json" ]]; then
-        python3 -c "
-import json
-from datetime import datetime, timezone
-with open('$session_dir/session.json') as f: meta = json.load(f)
-meta['status'] = 'done'
-meta['closed'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-with open('$session_dir/session.json', 'w') as f: json.dump(meta, f, indent=2)
-"
+        _session_close "$session_dir/session.json"
     fi
 
     # Clean up account skill symlinks (both target and source dirs, in case
@@ -2196,7 +3479,8 @@ for proj in sorted(os.listdir(sessions_dir)):
         if m.get("status") != "active": continue
         sid = m.get("task", "") or m.get("pr", "?")
         opens = m.get("opens", 0)
-        print(f"  {C}{proj}{NC}  {Y}{sid}{NC}  {DIM}({opens}x){NC}")
+        harness = m.get("harness") or "claude"
+        print(f"  {C}{proj}{NC}  {Y}{sid}{NC}  {DIM}({opens}x){NC}  {harness}")
 PYEOF
     )
     [[ -n "$output" ]] && echo -e "$output"
@@ -2213,6 +3497,15 @@ cmd_status() {
     echo -e "  Accounts:     ${C}$accts${NC}"
     echo -e "  Projects:   ${C}$projs${NC}"
 
+    if [[ -d "$CW_ACCOUNTS_DIR" ]]; then
+        for dir in "$CW_ACCOUNTS_DIR"/*/; do
+            [[ -d "$dir" ]] || continue
+            local n; n=$(basename "$dir")
+            local h; h="$(_account_default_harness "$n")"
+            echo -e "    ${DIM}$n — $h${NC}"
+        done
+    fi
+
     # Recent sessions
     if [[ -f "$CW_SESSIONS_LOG" ]]; then
         local recent; recent=$(tail -5 "$CW_SESSIONS_LOG" 2>/dev/null)
@@ -2227,9 +3520,14 @@ cmd_status() {
 # ════════════════════════════════════════════════════════════════════════════
 # DOCTOR — Health check
 # ════════════════════════════════════════════════════════════════════════════
-cmd_doctor() {
-    echo -e "\n${BOLD}CW Doctor${NC}\n"
-    local issues=0 warnings=0
+# records one doctor finding: level (ok, warn, issue), code, the human line, plain text, count
+_doctor_add() {
+    DOCTOR_RECORDS+=("$1"$'\x1f'"$2"$'\x1f'"$3"$'\x1f'"${4:-}"$'\x1f'"${5:-}")
+}
+
+# runs every doctor check once, so the human report and --json can never disagree
+_doctor_checks() {
+    DOCTOR_RECORDS=()
 
     # ── Git ──────────────────────────────────────────────────────────────
     if command -v git &>/dev/null; then
@@ -2238,83 +3536,96 @@ cmd_doctor() {
         major=$(echo "$git_ver" | cut -d. -f1)
         minor=$(echo "$git_ver" | cut -d. -f2)
         if [[ $major -lt 2 ]] || [[ $major -eq 2 && $minor -lt 15 ]]; then
-            echo -e "  ${R}✗${NC} git $git_ver (need 2.15+)"
-            issues=$((issues+1))
+            _doctor_add issue git_too_old "  ${R}✗${NC} git $git_ver (need 2.15+)" "git $git_ver (need 2.15+)"
         else
-            echo -e "  ${G}✓${NC} git $git_ver"
+            _doctor_add ok git "  ${G}✓${NC} git $git_ver"
         fi
     else
-        echo -e "  ${R}✗${NC} git not found"
-        issues=$((issues+1))
+        _doctor_add issue git_missing "  ${R}✗${NC} git not found" "git not found"
     fi
 
     # ── Python3 ──────────────────────────────────────────────────────────
     if command -v python3 &>/dev/null; then
         local py_ver; py_ver=$(python3 --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
-        echo -e "  ${G}✓${NC} python3 $py_ver"
+        _doctor_add ok python3 "  ${G}✓${NC} python3 $py_ver"
     else
-        echo -e "  ${R}✗${NC} python3 not found"
-        issues=$((issues+1))
+        _doctor_add issue python3_missing "  ${R}✗${NC} python3 not found" "python3 not found"
     fi
 
     # ── Claude CLI ───────────────────────────────────────────────────────
     if command -v claude &>/dev/null; then
-        echo -e "  ${G}✓${NC} claude CLI found"
+        _doctor_add ok claude "  ${G}✓${NC} claude CLI found"
     else
-        echo -e "  ${Y}!${NC} claude CLI not found"
-        warnings=$((warnings+1))
+        _doctor_add warn claude_missing "  ${Y}!${NC} claude CLI not found" "claude CLI not found"
     fi
+
+    # ── Harness drivers ──────────────────────────────────────────────────
+    local drv drv_list=""
+    for drv in $(_harness_names); do
+        [[ -f "$CW_HOME/harnesses/$drv.sh" ]] && drv="$drv (user)"
+        drv_list="${drv_list:+$drv_list, }$drv"
+    done
+    _doctor_add ok harness_drivers "  ${G}✓${NC} harness drivers: ${DIM}$drv_list${NC}"
 
     # ── CW initialized ──────────────────────────────────────────────────
     if [[ -f "$CW_CONFIG" ]]; then
-        echo -e "  ${G}✓${NC} CW initialized ($CW_HOME)"
+        _doctor_add ok initialized "  ${G}✓${NC} CW initialized ($CW_HOME)"
     else
-        echo -e "  ${Y}!${NC} CW not initialized — run ${C}cw init${NC}"
-        warnings=$((warnings+1))
+        _doctor_add warn not_initialized "  ${Y}!${NC} CW not initialized — run ${C}cw init${NC}" \
+            "CW not initialized — run cw init"
     fi
 
     # ── Accounts ─────────────────────────────────────────────────────────
-    local acct_count=0
+    local acct_count=0 dir
     if [[ -d "$CW_ACCOUNTS_DIR" ]]; then
         for dir in "$CW_ACCOUNTS_DIR"/*/; do
             [[ -d "$dir" ]] && acct_count=$((acct_count+1))
         done
     fi
     if [[ $acct_count -gt 0 ]]; then
-        echo -e "  ${G}✓${NC} $acct_count account(s)"
+        _doctor_add ok accounts "  ${G}✓${NC} $acct_count account(s)"
         for dir in "$CW_ACCOUNTS_DIR"/*/; do
             [[ -d "$dir" ]] || continue
             local n; n=$(basename "$dir")
-            if [[ -f "$dir/.claude.json" ]]; then
-                echo -e "    ${G}✓${NC} $n — authenticated"
+            local hstatus; hstatus="$(_account_harness_status "$n")"
+            if [[ "$hstatus" == "connected" ]]; then
+                _doctor_add ok account "    ${G}✓${NC} $n — authenticated"
+            elif [[ "$hstatus" == "local" ]]; then
+                _doctor_add ok account "    ${G}✓${NC} $n — local (no login needed)"
+            elif [[ "$hstatus" == "not_installed" ]]; then
+                local nh; nh="$(_account_default_harness "$n")"
+                _doctor_add warn harness_not_installed \
+                    "    ${Y}!${NC} $n — ${Y}$nh not installed${NC} (install the $nh CLI first)" \
+                    "$n — $nh not installed (install the $nh CLI first)"
             else
-                echo -e "    ${Y}!${NC} $n — ${Y}not authenticated${NC} (run ${C}cw launch $n${NC} then /login)"
-                warnings=$((warnings+1))
+                _doctor_add warn not_authenticated \
+                    "    ${Y}!${NC} $n — ${Y}not authenticated${NC} (run ${C}cw launch $n${NC} then /login)" \
+                    "$n — not authenticated (run cw launch $n then /login)"
             fi
         done
     else
-        echo -e "  ${Y}!${NC} No accounts — run ${C}cw account add <name>${NC}"
-        warnings=$((warnings+1))
+        _doctor_add warn no_accounts "  ${Y}!${NC} No accounts — run ${C}cw account add <name>${NC}" \
+            "No accounts — run cw account add <name>"
     fi
 
     # ── Projects ─────────────────────────────────────────────────────────
     local proj_count=0
     [[ -f "$CW_REGISTRY" ]] && proj_count=$(python3 -c "import json; print(len(json.load(open('$CW_REGISTRY'))))" 2>/dev/null || echo 0)
     if [[ "$proj_count" -gt 0 ]]; then
-        echo -e "  ${G}✓${NC} $proj_count project(s) registered"
-        # Check for projects with missing paths
-        python3 -c "
+        _doctor_add ok projects "  ${G}✓${NC} $proj_count project(s) registered"
+        local p
+        while IFS= read -r p; do
+            [[ -n "$p" ]] || continue
+            _doctor_add warn project_path_missing "    ${Y}!${NC} $p — path missing" "$p — path missing"
+        done < <(python3 -c "
 import json, os
 with open('$CW_REGISTRY') as f: reg = json.load(f)
 for n, i in reg.items():
     if not os.path.isdir(i.get('path', '')): print(n)
-" 2>/dev/null | while IFS= read -r p; do
-            echo -e "    ${Y}!${NC} $p — path missing"
-            warnings=$((warnings+1))
-        done
+" 2>/dev/null)
     else
-        echo -e "  ${Y}!${NC} No projects — run ${C}cw project register${NC}"
-        warnings=$((warnings+1))
+        _doctor_add warn no_projects "  ${Y}!${NC} No projects — run ${C}cw project register${NC}" \
+            "No projects — run cw project register"
     fi
 
     # ── Workflow templates ───────────────────────────────────────────────
@@ -2322,10 +3633,10 @@ for n, i in reg.items():
     if [[ -d "$wf_dir" ]] && ls "$wf_dir"/*.md &>/dev/null; then
         local wf_count; wf_count=$(ls "$wf_dir"/*.md 2>/dev/null | wc -l | tr -d ' ')
         local wf_names; wf_names=$(ls "$wf_dir"/*.md 2>/dev/null | xargs -I{} basename {} .md | tr '\n' ' ')
-        echo -e "  ${G}✓${NC} $wf_count workflow(s): ${DIM}$wf_names${NC}"
+        _doctor_add ok workflows "  ${G}✓${NC} $wf_count workflow(s): ${DIM}$wf_names${NC}"
     else
-        echo -e "  ${Y}!${NC} No workflow templates — run ${C}cw init${NC}"
-        warnings=$((warnings+1))
+        _doctor_add warn no_workflows "  ${Y}!${NC} No workflow templates — run ${C}cw init${NC}" \
+            "No workflow templates — run cw init"
     fi
 
     # ── Stack definitions ─────────────────────────────────────────────
@@ -2333,20 +3644,20 @@ for n, i in reg.items():
     if [[ -d "$stack_dir" ]] && ls "$stack_dir"/*.sh &>/dev/null; then
         local st_count; st_count=$(ls "$stack_dir"/*.sh 2>/dev/null | wc -l | tr -d ' ')
         local st_names; st_names=$(ls "$stack_dir"/*.sh 2>/dev/null | xargs -I{} basename {} .sh | tr '\n' ' ')
-        echo -e "  ${G}✓${NC} $st_count stack(s): ${DIM}$st_names${NC}"
+        _doctor_add ok stacks "  ${G}✓${NC} $st_count stack(s): ${DIM}$st_names${NC}"
     else
-        echo -e "  ${Y}!${NC} No stack definitions — run ${C}cw init${NC}"
-        warnings=$((warnings+1))
+        _doctor_add warn no_stacks "  ${Y}!${NC} No stack definitions — run ${C}cw init${NC}" \
+            "No stack definitions — run cw init"
     fi
 
     # ── Stale sessions ───────────────────────────────────────────────────
     local stale; stale=$(_find_stale_spaces)
     if [[ -n "$stale" ]]; then
         local stale_count; stale_count=$(echo "$stale" | wc -l | tr -d ' ')
-        echo -e "  ${Y}!${NC} $stale_count stale session(s) — run ${C}cw clean${NC}"
-        warnings=$((warnings+1))
+        _doctor_add warn stale_sessions "  ${Y}!${NC} $stale_count stale session(s) — run ${C}cw clean${NC}" \
+            "$stale_count stale session(s) — run cw clean" "$stale_count"
     else
-        echo -e "  ${G}✓${NC} No stale sessions"
+        _doctor_add ok stale_sessions "  ${G}✓${NC} No stale sessions"
     fi
 
     # ── Orphaned worktrees ───────────────────────────────────────────────
@@ -2370,9 +3681,57 @@ print(count)
 " 2>/dev/null || echo 0)
     fi
     if [[ "$orphaned" -gt 0 ]]; then
-        echo -e "  ${Y}!${NC} $orphaned orphaned worktree dir(s)"
-        warnings=$((warnings+1))
+        _doctor_add warn orphaned_worktrees "  ${Y}!${NC} $orphaned orphaned worktree dir(s)" \
+            "$orphaned orphaned worktree dir(s)" "$orphaned"
     fi
+}
+
+# the issues and warnings arrays for doctor --json, built from the same checks
+_doctor_findings_json() {
+    _doctor_checks
+    local rec out=""
+    for rec in ${DOCTOR_RECORDS[@]+"${DOCTOR_RECORDS[@]}"}; do
+        out+="$rec"$'\x1e'
+    done
+    CW_DOCTOR_RECORDS="$out" python3 - <<'PY'
+import json, os
+issues, warnings = [], []
+for rec in filter(None, os.environ["CW_DOCTOR_RECORDS"].split("\x1e")):
+    level, code, _human, plain, count = rec.split("\x1f")
+    if level == "ok":
+        continue
+    item = {"code": code, "message": plain}
+    if count:
+        item["count"] = int(count)
+    (issues if level == "issue" else warnings).append(item)
+print('"issues":%s,"warnings":%s' % (json.dumps(issues), json.dumps(warnings)), end="")
+PY
+}
+
+cmd_doctor() {
+    local json_out=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in --json) json_out=true; shift ;; *) shift ;; esac
+    done
+
+    if $json_out; then
+        printf '{"schema":1,"cw_version":"%s","cw_home":%s,"generated":"%s",' \
+            "$CW_VERSION" "$(_json_str "$CW_HOME")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '"harnesses":%s,' "$(_harness_inventory_json)"
+        printf '"accounts":%s,' "$(_doctor_matrix_json)"
+        printf '%s}\n' "$(_doctor_findings_json)"
+        return 0
+    fi
+
+    echo -e "\n${BOLD}CW Doctor${NC}\n"
+    local issues=0 warnings=0 rec level human
+    _doctor_checks
+    for rec in ${DOCTOR_RECORDS[@]+"${DOCTOR_RECORDS[@]}"}; do
+        IFS=$'\x1f' read -r level _ human _ _ <<< "$rec"
+        echo -e "$human"
+        [[ "$level" == "issue" ]] && issues=$((issues+1))
+        [[ "$level" == "warn" ]] && warnings=$((warnings+1))
+    done
 
     # ── Summary ──────────────────────────────────────────────────────────
     echo ""
@@ -2384,6 +3743,27 @@ print(count)
         echo -e "  ${R}$issues issue(s)${NC}, ${Y}$warnings warning(s)${NC}"
     fi
     echo ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# HARNESS — inspect and manage the installed coding-agent drivers
+# ════════════════════════════════════════════════════════════════════════════
+cmd_harness() {
+    local sub="${1:-list}"; shift || true
+    case "$sub" in
+        list|ls)
+            echo -e "\n${BOLD}Harnesses${NC}\n"
+            local h mark src
+            for h in $(_harness_names); do
+                if command -v "$h" &>/dev/null; then mark="${G}✓${NC}"; else mark="${DIM}—${NC}"; fi
+                src=""; [[ -f "$CW_HOME/harnesses/$h.sh" ]] && src="  ${DIM}(user driver)${NC}"
+                echo -e "  $mark ${C}$h${NC}$src"
+            done
+            echo ""
+            ;;
+        doctor) cmd_doctor "$@" ;;
+        *) _err "Usage: cw harness <list|doctor>" ;;
+    esac
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -2518,11 +3898,12 @@ PYEOF
 # PLAN — Auto-split tasks with Claude
 # ════════════════════════════════════════════════════════════════════════════
 cmd_plan() {
-    local name="" description="" model_override=""
+    local name="" description="" account_override="" model_override="" harness_override=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --model|-m) model_override="$2"; shift 2 ;;
-            --account|-a) shift 2 ;;
+            --account|-a) account_override="$2"; shift 2 ;;
+            --harness|-H) harness_override="$2"; shift 2 ;;
             -*) shift ;;
             *)
                 if [[ -z "$name" ]]; then
@@ -2539,18 +3920,16 @@ cmd_plan() {
 
     local pj; pj=$(_get_project "$name") || { _err "'$name' not found."; return 1; }
     local path; path=$(_get_field "$pj" path "")
-    local account; account=$(_get_field "$pj" account "$(_default_account)")
-    local acct_dir="$CW_ACCOUNTS_DIR/$account"
-    local model="${model_override:-$(_model_for_type plan)}"
-    local model_args=()
-    if [[ -n "$model" ]]; then
-        model_args=("--model" "$model")
-    else
-        _use_platform_default_model "$acct_dir"
-    fi
+    local account; account=${account_override:-$(_get_field "$pj" account "$(_default_account)")}
+    local harness; harness=$(_resolve_harness "$account" "$name" "" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
+    CW_HARNESS="$harness"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
+    local model; model="$(_resolve_model "$account" "$harness" plan "$model_override" "")"
+    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
+    local provider; provider="$(_resolve_provider "$account" "$harness")"
 
     _log "Planning: ${C}$name${NC} — ${Y}$description${NC}"
-    _dim "  Model: ${model:-claude default}"
+    _dim "  Model: ${model:-$harness default}"
     _ensure_statusline "$acct_dir"
 
     local plan_prompt="You are a technical project planner. Analyze this project and create an implementation plan.
@@ -2583,7 +3962,11 @@ IMPORTANT: Keep the plan focused and practical. Don't over-split — 2-4 tasks i
     cd "$path"
     _set_tab_title "plan: $name"
     export CW_PROJECT="$name" CW_TASK="plan" CW_TASK_TYPE="plan" CW_ACCOUNT="$account"
-    CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$account/$name/plan" "$plan_prompt"
+    CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$account/$name/plan" CW_MODEL="$model" CW_PROVIDER="$provider"
+    CW_PROMPT="$plan_prompt"
+    _harness_load "$CW_HARNESS" || return 1
+    _harness_context
+    _harness_launch || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
     unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
 }
 
@@ -2714,10 +4097,15 @@ _arcade_setup_hooks() {
 
     _log "Setting up live activity hooks..."
 
+    _harness_load "${_CW_HARNESS_ENV:-$CW_HARNESS_DEFAULT}" || return 1
     for acct_dir in "$CW_ACCOUNTS_DIR"/*/; do
         [[ -d "$acct_dir" ]] || continue
         local acct; acct=$(basename "$acct_dir")
-        _arcade_install_hooks_for "$acct_dir/settings.json" "$hook_script"
+        if ! harness_supports hooks; then
+            _dim "  ${C}$acct${NC} — harness has no hooks, skipping"
+            continue
+        fi
+        _arcade_install_hooks_for "$(_harness_dir "$acct" claude)/settings.json" "$hook_script"
         _log "  ${C}$acct${NC} — hooks installed"
     done
 
@@ -2760,7 +4148,7 @@ cmd_dashboard() {
         for dir in "$CW_ACCOUNTS_DIR"/*/; do
             [[ -d "$dir" ]] || continue
             local n; n=$(basename "$dir")
-            local auth="${R}✗${NC}"; [[ -f "$dir/.claude.json" ]] && auth="${G}✓${NC}"
+            local auth="${R}✗${NC}"; _account_authenticated "$n" && auth="${G}✓${NC}"
             echo -e "  ${C}$n${NC}  [$auth]"
         done
     fi
@@ -3958,6 +5346,9 @@ _stack_apply() {
 
     [[ ${#stacks[@]} -eq 0 ]] && return
 
+    CW_HARNESS="${CW_HARNESS:-$CW_HARNESS_DEFAULT}"
+    _harness_load "$CW_HARNESS" || return 1
+
     # Generate agent templates if needed
     _generate_stack_agents
 
@@ -3979,16 +5370,28 @@ _stack_apply() {
                 if $dry_run; then
                     _log "  ${DIM}[dry-run]${NC} Would install plugin: ${C}$plugin${NC}"
                 else
-                    # Check if plugin already installed
-                    if command -v claude &>/dev/null && claude plugin list 2>/dev/null | grep -q "$plugin"; then
+                    if ! harness_supports plugins; then
+                        _dim "  $CW_HARNESS has no plugin support — skipping $plugin"
+                        continue
+                    fi
+                    CW_HARNESS_DIR="$acct_dir"
+                    HARNESS_ARGV=(); HARNESS_ENV=()
+                    if ! harness_plugin list; then
+                        _warn "  Could not list plugins for $CW_HARNESS — skip $plugin"
+                        continue
+                    fi
+                    if ! _harness_available; then
+                        _warn "  $CW_HARNESS not installed — skip plugin $plugin"
+                        continue
+                    fi
+                    if _harness_exec 2>/dev/null | grep -q "$plugin"; then
                         _dim "  Plugin $plugin already installed"
                     else
                         _log "  Installing plugin: ${C}$plugin${NC}"
-                        if command -v claude &>/dev/null; then
-                            CLAUDE_CONFIG_DIR="$acct_dir" claude plugin add "$plugin" 2>/dev/null || _warn "  Could not install plugin $plugin"
-                        else
-                            _warn "  claude CLI not found — skip plugin $plugin"
-                        fi
+                        HARNESS_ARGV=(); HARNESS_ENV=()
+                        harness_plugin add "$plugin" \
+                            && _harness_exec 2>/dev/null \
+                            || _warn "  Could not install plugin $plugin"
                     fi
                 fi
             done
@@ -4217,7 +5620,8 @@ for n, i in reg.items():
 
     [[ -d "$proj_path" ]] || { _err "Project path not found: $proj_path"; return 1; }
 
-    local acct_dir="$CW_ACCOUNTS_DIR/${account:-$(_default_account)}"
+    account="${account:-$(_default_account)}"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "${CW_HARNESS:-$CW_HARNESS_DEFAULT}")"
 
     # --reset: clear stack state
     if $reset_flag; then
@@ -4316,9 +5720,9 @@ _gsd_sync() {
             local meta="$space_dir/session.json"
             [[ -f "$meta" ]] || continue
             local status worktree
-            status=$(python3 -c "import json; print(json.load(open('$meta')).get('status',''))" 2>/dev/null)
+            status=$(_session_field "$meta" status)
             [[ "$status" != "active" ]] && continue
-            worktree=$(python3 -c "import json; print(json.load(open('$meta')).get('worktree',''))" 2>/dev/null)
+            worktree=$(_session_field "$meta" worktree)
             [[ -d "$worktree" ]] || continue
             if [[ -f "$worktree/STATE.md" ]]; then
                 _log "GSD already present: ${DIM}$worktree${NC}"
@@ -4336,7 +5740,7 @@ _gsd_sync() {
 # CREATE — Bootstrap a new project from a description
 # ════════════════════════════════════════════════════════════════════════════
 cmd_create() {
-    local description="" account="" team_flag=false team_prompt="" proj_name="" base_dir="" model_override=""
+    local description="" account="" team_flag=false team_prompt="" proj_name="" base_dir="" model_override="" harness_override=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -4344,6 +5748,7 @@ cmd_create() {
             --account|-a)  account="$2"; shift 2 ;;
             --name|-n)     proj_name="$2"; shift 2 ;;
             --dir|-d)      base_dir="$2"; shift 2 ;;
+            --harness|-H)  harness_override="$2"; shift 2 ;;
             --team)        team_flag=true; shift
                            if [[ $# -gt 0 && "$1" != -* && "$1" != http* ]]; then
                                team_prompt="$1"; shift
@@ -4395,15 +5800,7 @@ cmd_create() {
             account="${accounts[$((choice - 1))]}"
         fi
     fi
-    local acct_dir="$CW_ACCOUNTS_DIR/$account"
-    [[ -d "$acct_dir" ]] || { _err "Account '$account' not found."; return 1; }
-    local model="${model_override:-$(_model_for_type create)}"
-    local model_args=()
-    if [[ -n "$model" ]]; then
-        model_args=("--model" "$model")
-    else
-        _use_platform_default_model "$acct_dir"
-    fi
+    [[ -d "$(_account_root "$account")" ]] || { _err "Account '$account' not found."; return 1; }
 
     # ── Project name ──────────────────────────────────────────────────
     if [[ -z "$proj_name" ]]; then
@@ -4417,6 +5814,14 @@ cmd_create() {
     [[ -z "$proj_name" ]] && { _err "Project name required."; return 1; }
     # Sanitize name
     proj_name=$(echo "$proj_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
+
+    local session_meta="$CW_HOME/sessions/$proj_name/task-init/session.json"
+    local harness; harness=$(_resolve_harness "$account" "$proj_name" "$session_meta" "${harness_override:-$_CW_HARNESS_ENV}") || return 1
+    CW_HARNESS="$harness"
+    local acct_dir; acct_dir="$(_harness_dir "$account" "$CW_HARNESS")"
+    local model; model="$(_resolve_model "$account" "$harness" create "$model_override" "$session_meta")"
+    [[ -n "$model" ]] || _use_platform_default_model "$acct_dir"
+    local provider; provider="$(_resolve_provider "$account" "$harness")"
 
     # ── Create directory ──────────────────────────────────────────────
     base_dir="${base_dir:-${CW_WORKSPACE:-$HOME/workspace}}"
@@ -4438,18 +5843,20 @@ cmd_create() {
     fi
 
     # ── Register in CW ────────────────────────────────────────────────
-    python3 -c "
-import json
-f = '$CW_REGISTRY'
+    CW_R_FILE="$CW_REGISTRY" CW_R_NAME="$proj_name" CW_R_PATH="$proj_path" CW_R_ACCOUNT="$account" \
+    CW_R_WHEN="$(date -u +%Y-%m-%dT%H:%M:%SZ)" python3 - <<'PYEOF'
+import json, os
+e = os.environ
+f = e['CW_R_FILE']
 try:
     with open(f) as fh: reg = json.load(fh)
 except: reg = {}
-reg['$proj_name'] = {
-    'path': '$proj_path', 'account': '$account', 'type': 'fullstack',
-    'registered': '$(date -u +%Y-%m-%dT%H:%M:%SZ)'
+reg[e['CW_R_NAME']] = {
+    'path': e['CW_R_PATH'], 'account': e['CW_R_ACCOUNT'], 'type': 'fullstack',
+    'registered': e['CW_R_WHEN']
 }
 with open(f, 'w') as fh: json.dump(reg, fh, indent=2)
-"
+PYEOF
     _log "Registered project ${C}$proj_name${NC} (account=${Y}$account${NC})"
 
     # ── Setup .claude dir & CLAUDE.md template ───────────────────────
@@ -4461,7 +5868,23 @@ with open(f, 'w') as fh: json.dump(reg, fh, indent=2)
 
     # ── Build init prompt ─────────────────────────────────────────────
     local init_prompt=""
-    if [[ -n "$source_url" ]]; then
+    _harness_load "$CW_HARNESS" || return 1
+    if [[ -n "$source_url" ]] && ! harness_supports mcp; then
+        case "$source" in
+            linear)
+                init_prompt="The project specification is the Linear issue/epic at $source_url. This harness has no Linear MCP, so if you cannot open it, ask the user to paste the specification." ;;
+            notion)
+                init_prompt="The project specification is the Notion page at $source_url. This harness has no Notion MCP, so if you cannot open it, ask the user to paste the specification." ;;
+            github)
+                init_prompt="Fetch this GitHub page for context: $source_url
+Use it as reference for the project." ;;
+            *)
+                init_prompt="Reference URL: $source_url" ;;
+        esac
+        init_prompt="$init_prompt
+
+"
+    elif [[ -n "$source_url" ]]; then
         case "$source" in
             linear)
                 init_prompt="Fetch this Linear issue/epic using the Linear MCP: $source_url
@@ -4513,22 +5936,27 @@ Create an agent team to build this project in parallel. Analyze the scope and sp
     local session_dir="$CW_HOME/sessions/$proj_name/task-init"
     mkdir -p "$session_dir"
 
-    local session_meta="$session_dir/session.json"
-    python3 -c "
-import json
+    CW_S_PROJECT="$proj_name" CW_S_ACCOUNT="$account" CW_S_WORKTREE="$proj_path" \
+    CW_S_SOURCE="$source" CW_S_SOURCE_URL="$source_url" CW_S_HARNESS="$harness" \
+    CW_S_PROVIDER="$provider" CW_S_META="$session_meta" python3 - <<'PYEOF'
+import json, os
 from datetime import datetime, timezone
+e = os.environ
 meta = {
-    'project': '$proj_name', 'task': 'init', 'type': 'task',
-    'account': '$account',
-    'worktree': '$proj_path',
-    'source': '$source', 'source_url': '$source_url',
+    'project': e['CW_S_PROJECT'], 'task': 'init', 'type': 'task',
+    'account': e['CW_S_ACCOUNT'],
+    'worktree': e['CW_S_WORKTREE'],
+    'source': e['CW_S_SOURCE'], 'source_url': e['CW_S_SOURCE_URL'],
+    'harness': e['CW_S_HARNESS'],
+    'harness_session_id': '',
+    'provider': e['CW_S_PROVIDER'],
     'status': 'active',
     'created': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'last_opened': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'opens': 1
 }
-with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
-"
+with open(e['CW_S_META'], 'w') as f: json.dump(meta, f, indent=2)
+PYEOF
 
     # ── Launch Claude ─────────────────────────────────────────────────
     cd "$proj_path"
@@ -4537,17 +5965,29 @@ with open('$session_meta', 'w') as f: json.dump(meta, f, indent=2)
     export CW_PROJECT="$proj_name" CW_TASK="init" CW_TASK_TYPE="task" CW_ACCOUNT="$account"
 
     local team_env=""
-    $team_flag && team_env="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1"
+    if $team_flag; then
+        _harness_load "$CW_HARNESS" || return 1
+        if harness_supports agent_teams; then
+            team_env="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1"
+        else
+            _degrade agent_teams "Agent teams not supported — running without a team" || true
+        fi
+    fi
 
     local prompt_file="$session_dir/init_prompt.txt"
     printf '%s' "$init_prompt" > "$prompt_file"
 
     _log "Launching Claude..."
-    _dim "  Model: ${model:-claude default}"
-    $team_flag && _log "Agent teams ${G}enabled${NC}"
+    _dim "  Model: ${model:-$harness default}"
+    [[ -n "$team_env" ]] && _log "Agent teams ${G}enabled${NC}"
     _ensure_statusline "$acct_dir"
 
-    env $team_env CLAUDE_CONFIG_DIR="$acct_dir" claude $CW_CLAUDE_FLAGS "${model_args[@]}" --name "$account/$proj_name/init" "$(cat "$prompt_file")"
+    CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$account/$proj_name/init" CW_MODEL="$model" CW_PROVIDER="$provider"
+    CW_TEAM_ENV="$team_env" CW_PROMPT="$(cat "$prompt_file")"
+    _harness_load "$CW_HARNESS" || return 1
+    _harness_context
+    _harness_launch || { [[ -n "${_CW_LAUNCH_REFUSED:-}" ]] && return 1; }
+    _record_harness_ref "$session_meta"
 
     unset CW_PROJECT CW_TASK CW_TASK_TYPE CW_ACCOUNT
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) CREATE $proj_name account=$account" >> "$CW_SESSIONS_LOG"
@@ -4583,8 +6023,9 @@ ${BOLD}MAIN COMMANDS${NC}
     --every, -e <interval>            Fixed interval (30s, 5m, 2h); omit = self-paced
     --name <slug>                     Explicit session name (default: derived from prompt)
   open <project>                      Open project quick (no worktree)
-  launch [account]                    Open Claude with account (no project needed)
-  spaces                              Show active spaces
+  launch [account]                    Open the account's agent (no project; CW_HARNESS picks it)
+  spaces [project]                    Show active spaces
+    --json                            Machine-readable list of active spaces
   clean                               Remove stale worktrees/sessions
     --days, -d <N>                    Stale threshold (default: 7)
     --dry-run, -n                     Show what would be cleaned
@@ -4599,6 +6040,12 @@ ${BOLD}SETUP${NC}
   account add <name>                  Create account profile
   account list                        List accounts
   account remove <name>               Remove account
+  account login <name> --harness <h>  Authenticate an account
+    --no-browser                      Headless / device-code login
+    --with-api-key -                  Read an api key from stdin
+  account migrate <name>              Move root claude state into <account>/claude/
+    --dry-run, -n                     Show what would move, touch nothing
+    --undo                            Move it back up to the account root
   project register [path] [opts]       Register project (path defaults to cwd)
     --account, -a <account>
     --type, -t <type>                 fullstack | api | knowledge | infra | agents
@@ -4625,6 +6072,9 @@ ${BOLD}INFO${NC}
   status                              Quick status
   stats [project]                     Session metrics and productivity stats
   doctor                              Health check — verify setup and diagnose issues
+    --json                            Machine-readable account x harness matrix
+  harness list                        Show installed coding-agent drivers
+  harness doctor                      Alias for cw doctor
   help                                This help
   version                             Show version
 
@@ -4634,6 +6084,11 @@ ${BOLD}GLOBAL FLAGS${NC}
                                       Can also be set permanently in ~/.cw/config.yaml:
                                         skip_permissions: true
                                       Or via env: CW_CLAUDE_FLAGS="--dangerously-skip-permissions"
+  --harness, -H <name>                 Run this command on a specific harness
+                                      (claude | codex | pi | opencode)
+                                      Accepted by work, review, loop, plan,
+                                      create, open, account login/add and
+                                      project register
 
 ${BOLD}EXAMPLES${NC}
   cw create "SaaS de analytics con Stripe"          # New project from description
@@ -4684,6 +6139,8 @@ EOF
 main() {
     # Parse global flags before command
     _CW_SKIP_PERMS="false"
+    # capture the caller's CW_HARNESS before any command starts resolving it
+    _CW_HARNESS_ENV="${CW_HARNESS:-}"
     local args=()
     for arg in "$@"; do
         case "$arg" in
@@ -4715,6 +6172,7 @@ main() {
         status)     cmd_status "$@" ;;
         stats)      cmd_stats "$@" ;;
         doctor)     cmd_doctor "$@" ;;
+        harness)    cmd_harness "$@" ;;
         stack)      cmd_stack "$@" ;;
         mcp)        cmd_mcp "$@" ;;
         gsd|gsd:init|gsd:sync) cmd_gsd "${cmd#gsd:}" "$@" ;;
@@ -4724,4 +6182,5 @@ main() {
     esac
 }
 
-main "$@"
+# only run when executed, so tests can source the script
+[[ "${BASH_SOURCE[0]}" == "$0" ]] && main "$@"

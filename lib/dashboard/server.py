@@ -25,6 +25,42 @@ CW_HOME = os.environ.get("CW_HOME", os.path.expanduser("~/.cw"))
 DASHBOARD_DIR = os.path.dirname(os.path.abspath(__file__))
 ACTIVITY_FILE = os.path.join(CW_HOME, "activity.jsonl")
 
+# per-harness marker files that indicate a logged-in credential dir
+HARNESS_AUTH_MARKERS = {
+    "claude": [".claude.json"],
+    "codex": ["auth.json", "env"],
+    "pi": ["auth.json", "env"],
+    "opencode": ["auth.json", "env"],
+}
+
+
+def harness_dir(account_path, harness):
+    """claude keeps the flat dir unless a claude subdir exists"""
+    sub = os.path.join(account_path, "claude")
+    if harness == "claude" and not os.path.isdir(sub):
+        return account_path
+    return os.path.join(account_path, harness)
+
+
+def account_harness(account_path):
+    """the account's default harness, mirroring _account_default_harness"""
+    meta_file = os.path.join(account_path, "meta.json")
+    if os.path.isfile(meta_file):
+        try:
+            with open(meta_file) as f:
+                h = json.load(f).get("harness")
+            if h:
+                return h
+        except Exception:
+            pass
+    return "claude"
+
+
+def harness_authenticated(account_path, harness):
+    hdir = harness_dir(account_path, harness)
+    markers = HARNESS_AUTH_MARKERS.get(harness, [])
+    return any(os.path.isfile(os.path.join(hdir, m)) for m in markers)
+
 
 def collect_data():
     data = {
@@ -44,9 +80,13 @@ def collect_data():
             acct_path = os.path.join(accounts_dir, name)
             if not os.path.isdir(acct_path) or name.startswith("."):
                 continue
-            auth_file = os.path.join(acct_path, ".claude.json")
+            harness = account_harness(acct_path)
             data["accounts"].append(
-                {"name": name, "authenticated": os.path.isfile(auth_file)}
+                {
+                    "name": name,
+                    "harness": harness,
+                    "authenticated": harness_authenticated(acct_path, harness),
+                }
             )
 
     # ── Projects ──────────────────────────────────────────────
@@ -107,6 +147,8 @@ def collect_data():
                     try:
                         with open(meta_file) as f:
                             meta = json.load(f)
+                        meta["harness"] = meta.get("harness") or "claude"
+                        meta["provider"] = meta.get("provider") or "native"
                         data["sessions"].append(meta)
                     except Exception:
                         pass

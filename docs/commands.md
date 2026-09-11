@@ -1,5 +1,14 @@
 # Commands Reference
 
+## Harnesses
+
+Most commands below accept `--harness, -H <name>` to run on a specific coding-agent CLI instead
+of the account's default one: `claude`, `codex`, `pi`, or `opencode`. **Only `claude` has been
+run against a real installed binary.** `codex`, `pi` and `opencode` each have a driver
+(`lib/harnesses/<name>.sh`) that is tested against recording fakes, not a live install of that
+CLI — treat their commands below as reviewed, not field-proven, until you run them yourself.
+`cw harness list` shows which of the four are actually installed on your machine.
+
 ## Main Commands
 
 ### `cw work <project> <task|URL> [--done]`
@@ -10,6 +19,7 @@ Work on a feature or bug with an isolated worktree and persistent session.
 - `project` — registered project name
 - `task` — branch name, ticket ID, or URL (Linear, Notion, GitHub)
 - `--workflow, -w <type>` — apply workflow template (`feature`, `bugfix`, `refactor`, `security-audit`, `docs`)
+- `--harness, -H <name>` — run this task on a specific harness (`claude` \| `codex` \| `pi` \| `opencode`); resuming an existing session with a different `--harness` than it was created with fails instead of switching agents mid-session
 - `--done` — close the task, remove worktree, archive session
 - `--list` — list active tasks (optionally filtered by project)
 
@@ -29,9 +39,52 @@ cw work my-app --list                          # list tasks for project
 
 | URL Source | What happens |
 |-----------|-------------|
-| Linear | Extracts issue ID, Claude fetches branch name + description via MCP |
-| GitHub | Extracts issue/PR number, Claude fetches details via MCP |
-| Notion | Extracts page slug, Claude fetches content via MCP |
+| Linear | Extracts issue ID; `cw` fetches title, description and comments via `LINEAR_API_KEY` and writes them into `TASK_NOTES.md` before launching |
+| GitHub | Extracts issue/PR number; `cw` fetches it via the `gh` CLI's own auth |
+| Notion | Extracts page slug; `cw` fetches page content via `NOTION_TOKEN` |
+
+Credentials can be set as env vars or in `~/.cw/tokens.env` (`LINEAR_API_KEY=...`,
+`NOTION_TOKEN=...`; GitHub uses whatever account `gh` is already logged into). If none is
+configured for that source, `cw` falls back to asking the agent to fetch the content itself over
+MCP, same as before this fetch existed — so MCP connectors are still worth setting up as a
+fallback, not required.
+
+**Worktree creation:**
+
+On `claude`, the init prompt asks the agent to create the worktree, as in the previous release:
+Claude starts in the project root, and `cw` opens later sessions in `.tasks/<task>` once it
+exists. On every other harness (`codex`, `pi`, `opencode`, and any user driver), a new
+`cw work` session creates the worktree itself before launching:
+
+| Task | Branch | Started from |
+|------|--------|--------------|
+| Plain name | `<task>` | the base branch (`--base`, else `origin/HEAD`, else `origin/main`) |
+| GitHub issue | `task/<task>` | the base branch |
+| GitHub PR | the PR's head branch, from `gh pr view <url> --json headRefName` | `origin/<head branch>` |
+| Notion page | `task/<task>` | the base branch |
+| Linear issue | the issue's `branchName` when `cw` fetched it, else `task/<task>` | the base branch |
+
+`cw` runs `git fetch origin` first, links `TASK_NOTES.md`, `SHARED_CONTEXT.md`, and the
+repository root's `.env` and `.claude/` (each only when the worktree does not already have it)
+into the worktree, and launches the harness there with a prompt that carries no setup steps.
+
+- **On these harnesses a branch is never deleted or reset.** `cw` attaches an existing branch to
+  the new worktree as it is. When it falls back, the setup prompt's "delete it:
+  `git branch -D`" step is replaced by an instruction to attach the existing branch, so neither
+  `cw` nor its prompt removes a branch holding unpushed work. (Claude's prompt keeps its
+  `git branch -D` step, unchanged from the previous release.)
+- **If the worktree cannot be created** — no `origin` remote, a failed fetch, a missing start
+  point, an invalid branch name, the branch checked out in another worktree, an unresolvable PR
+  branch, or anything already at `.tasks/<task>` (including another run of the same task that
+  claimed it first) — `cw` prints one `Could not create the worktree (...)` line and falls back
+  to the agent-driven setup. `cw` claims `.tasks/<task>` with an atomic `mkdir` before
+  `git worktree add` and, on failure, removes only that directory, so it never touches another
+  run's worktree or any other worktree's registration. A branch `cw` had just created is kept,
+  and the warning names it.
+- Only `cw work` creates worktrees. `review`, `loop`, `plan`, `create` and `open` do not.
+
+This is tested against real git with a local bare `origin`, and against recording fakes of
+`codex`, `pi` and `opencode`, not the real binaries.
 
 ---
 
@@ -42,6 +95,7 @@ Review a PR with an isolated worktree.
 **Arguments:**
 - `project` — registered project name
 - `PR` — PR number or GitHub PR URL
+- `--harness, -H <name>` — run this review on a specific harness
 - `--done` — close the review, remove worktree, archive session
 - `--list` — list active reviews
 
@@ -57,21 +111,31 @@ cw review my-app 42 --done                     # close
 
 ### `cw open <project>`
 
-Quick-open Claude in a project. No worktree, no session tracking.
+Quick-open the project's harness. No worktree, no session tracking.
 
 ```bash
 cw open my-app
+cw open my-app --harness codex     # open on a specific harness instead
 ```
 
 ---
 
-### `cw spaces`
+### `cw spaces [project] [--json]`
 
 Show all active tasks and reviews across all projects, grouped by project.
 
 ```bash
 cw spaces
+cw spaces --json     # machine-readable list, for scripts/dashboards
 ```
+
+`--json` prints `{"schema": 1, "spaces": [...]}`, one object per active task/review with
+`project`, `account`, `type`, `id`, `harness`, `provider`, `model`, `opens`, `last_opened`,
+`worktree`, `resume` and `close` (the two commands to run). A session with no `harness` recorded
+(pre-0.3.0 sessions) reports `"claude"`; no `provider` recorded reports `"native"`. `account` is
+the account the session was created on (the project's account for sessions that recorded none),
+and when it differs from the project's, `resume` and `close` carry `--account <name>` so the
+suggested command runs on the right credentials under every harness.
 
 ---
 
@@ -106,13 +170,15 @@ Plan a large task by having Claude analyze the codebase and split the goal into 
 ```bash
 cw plan my-app "migrate auth to OAuth2"
 cw plan my-app "add payment processing with Stripe"
+cw plan my-app "migrate auth to OAuth2" --harness codex   # plan on a specific harness
+cw plan my-app "migrate auth to OAuth2" --account personal # plan on another account
 ```
 
-Claude reads the project structure, proposes 2-6 sub-tasks with branch names, key files, dependencies, and suggested workflows. Then asks if you want to create worktrees for each.
+Claude (or the chosen harness) reads the project structure, proposes 2-6 sub-tasks with branch names, key files, dependencies, and suggested workflows. Then asks if you want to create worktrees for each.
 
 ---
 
-### `cw doctor`
+### `cw doctor [--json]`
 
 Health check for your CW setup. Verifies:
 - Required tools (git, python3, claude CLI)
@@ -124,7 +190,65 @@ Health check for your CW setup. Verifies:
 
 ```bash
 cw doctor
+cw doctor --json | python3 -m json.tool
 ```
+
+`--json` prints a stable schema instead of the human report:
+
+```json
+{
+  "schema": 1,
+  "cw_version": "0.3.0",
+  "cw_home": "/Users/you/.cw",
+  "generated": "2026-09-10T00:00:00Z",
+  "harnesses": [
+    {"name": "claude", "installed": true, "path": "/usr/local/bin/claude", "version": "...", "source": "builtin"}
+  ],
+  "accounts": [
+    {
+      "name": "work", "root": "/Users/you/.cw/accounts/work",
+      "layout": "legacy", "default_harness": "claude",
+      "harnesses": [
+        {"harness": "claude", "status": "connected", "detail": null,
+         "config_env": "CLAUDE_CONFIG_DIR", "config_dir": "...",
+         "provider": "native", "provider_kind": "native", "model": null,
+         "has_api_key": false, "unofficial": false}
+      ]
+    }
+  ],
+  "issues": [], "warnings": []
+}
+```
+
+**`layout` is three-valued, not a boolean, and it describes only claude's own state** — it says
+nothing about whether other harnesses on the same account have their own subdirectories:
+
+| Value | Meaning |
+|---|---|
+| `split` | a `claude/` subdirectory exists under the account root |
+| `legacy` | no `claude/` subdirectory, but recognized Claude state sits at the account root — `cw account migrate` has work to do |
+| `none` | no `claude/` subdirectory and no recognized Claude state at the root |
+
+`none` is new in 0.3.0. A consumer that used to treat `layout` as `legacy ? flat : split` must
+now handle `none` explicitly — it does **not** mean "flat"; it means the account has no Claude
+config in either place. An account created with `--harness codex`/`pi`/`opencode` and never
+touched by claude reports `none` even though it has its own `codex/`/`pi/`/`opencode/`
+subdirectory — that subdirectory is not what `layout` is reporting on.
+
+`legacy`/`none` are decided by whether the account root contains a name from a fixed marker list
+(`.claude.json`, `.credentials.json`, `settings.json`, `projects`, `todos`, `statsig`,
+`shell-snapshots`, `history.jsonl`, `ide`, `plugins` — `CW_CLAUDE_MARKERS` in `cw`). If Claude
+ever renames or adds to these files, an account with only the new name(s) will incorrectly
+report `none` (and `cw account migrate` will report there's nothing to move and exit 0, rather
+than actually migrating anything) until `CW_CLAUDE_MARKERS` is updated — that constant is the
+single place to fix. This is a known, accepted gap: reporting `none` is the safe failure
+direction (it never invents an empty
+`claude/` that credential resolution would then trust), and any account that has actually
+completed a Claude login always writes `.claude.json`, so it doesn't apply in practice.
+
+Each harness's `status` in the matrix is one of `connected`, `not_logged_in`, `not_installed`,
+`local` (a local provider like Ollama — no login needed), or `error` (no driver for that
+harness, or the driver produced no output).
 
 ---
 
@@ -147,14 +271,25 @@ Shows: total/active/done sessions, task/review counts, average opens, average du
 
 Initialize CW directory structure at `~/.cw/`.
 
-### `cw account add <name>`
+### `cw account add <name> [options]`
 
-Create a new Claude account profile. After creation, authenticate:
+Create a new account profile.
+
+**Options:**
+- `--harness, -H <name>` — harness this account uses by default (`claude` \| `codex` \| `pi` \| `opencode`); defaults to `claude`
+- `--provider, -p <name>` — provider for that harness (`native`, `ollama`, `lmstudio`, `llamacpp`, or any other name — anything not `native`/local is treated as a remote API provider). Only the codex and opencode drivers apply a provider today; for claude or pi, `cw` warns here and refuses to launch that account until the provider is removed
+- `--model, -m <name>` — default model for that harness/provider
 
 ```bash
-cw account add work
-cw launch work
-# Then: /login
+cw account add work                                          # claude, native provider
+cw account add glm --harness opencode --provider zai --model glm-5.1
+cw account add local --harness opencode --provider ollama --model qwen3-coder:14b
+```
+
+After creation, authenticate it (skip this for a `local` provider like Ollama — no login needed):
+
+```bash
+cw account login work --harness claude
 ```
 
 ### `cw account list`
@@ -165,16 +300,78 @@ List all configured accounts.
 
 Remove an account profile.
 
+### `cw account login <name> [options]`
+
+Authenticate an account against a harness.
+
+**Options:**
+- `--harness, -H <name>` — which harness to log in; defaults to the account's own default harness
+- `--no-browser` — print a URL or device code instead of opening a browser, plus `CW_LOGIN_URL=` / `CW_LOGIN_CODE=` lines. Only a harness with a headless login accepts it (Codex, which adds `--device-auth`); claude, pi and opencode refuse it with an error rather than silently running their interactive login. Without this flag the login runs attached to your terminal, untouched
+- `--with-api-key -` — read an API key from stdin instead of an interactive login; only works on a harness with an API-key import path (Codex today)
+
+```bash
+cw account login work --harness claude
+cw account login monoku --harness codex --no-browser
+printf '%s' "$API_KEY" | cw account login monoku --harness codex --with-api-key -
+```
+
+An API key given this way is written to `<harness dir>/env` with `chmod 600` and never appears
+in `config.yaml`, `meta.json`, or process argv.
+
+### `cw account migrate <name> [--dry-run|-n] [--undo]`
+
+Move a flat account's Claude state (everything at the account root that isn't cw's own
+`meta.json`/`CLAUDE.md`/`templates`/`skills` or another harness's own subdirectory) into
+`<account>/claude/`, so claude's credentials sit in their own subdirectory the same way every
+other harness's already do. An account does **not** need this to run more than one harness —
+`codex`/`pi`/`opencode` each always get their own subdirectory regardless of claude's layout —
+so `migrate` is purely cosmetic tidying that only affects where claude's own state lives.
+
+```bash
+cw account migrate work --dry-run    # list what would move, touch nothing
+cw account migrate work              # move it
+cw account migrate work --undo       # move it back to the flat layout
+```
+
+Resolution (`_harness_dir`) already understands both of claude's layouts, forever — an account
+that stays flat keeps working exactly as before, so running `migrate` is entirely optional. When
+it finds no recognized Claude state at the root, it reports there's nothing to move and exits 0
+(an idempotent no-op, not an error) rather than inventing an empty `claude/` — see the
+`layout: "none"` note under `cw doctor --json` above for what "recognized" means and its one
+known edge case.
+
+**A maintenance note for anyone extending `cw` itself:** the deny-list of names migration never
+touches (`meta.json`, `CLAUDE.md`, `templates`, `skills`, plus every harness's own subdirectory
+name) must only ever contain things `cw` genuinely owns. If a future change starts writing a new
+file into the account root and that name isn't added to the deny-list, `migrate` will neither
+move it into `claude/` nor report it as a leftover — it will just look like it isn't there.
+
+### `cw harness list`
+
+Show the four harnesses `cw` knows about and whether each is installed on this machine (found on
+`PATH`).
+
+```bash
+cw harness list
+```
+
+### `cw harness doctor`
+
+Alias for `cw doctor` — see its `--json` section above for the per-account, per-harness detail.
+
 ### `cw project register <path> [options]`
 
 Register a project directory.
 
 **Options:**
-- `--account, -a <name>` — Claude account to use
+- `--account, -a <name>` — account to use
 - `--type, -t <type>` — Project type: `fullstack`, `api`, `knowledge`, `infra`, `agents`
+- `--alias <name>` — custom project name (default: folder name)
+- `--harness, -H <name>` — pin this project to a harness, overriding the account's default; a session created for this project uses this harness unless `cw work ... --harness` overrides it again
 
 ```bash
 cw project register ~/code/my-app --account work --type fullstack
+cw project register ~/code/api-service --account work --harness codex
 ```
 
 ### `cw project list`
@@ -199,12 +396,19 @@ Show detailed project information.
 
 ### `cw launch <account> [args]`
 
-Quick-launch Claude with a specific account. Useful for authentication.
+Quick-launch a harness with a specific account, passing `[args]` straight through. Useful for
+poking at an account interactively.
 
 ```bash
 cw launch work
 cw launch personal
+CW_HARNESS=codex cw launch work    # launch a different harness (no --harness flag here)
 ```
+
+`cw launch` does not take `--harness` — it only reads the `CW_HARNESS` environment variable
+(falling back to `claude`, not to the account's own configured default harness). For
+authentication, prefer `cw account login <name> --harness <h>`, which does resolve the account's
+default and drives the harness's own login flow.
 
 ### `cw status`
 

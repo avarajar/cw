@@ -2,11 +2,16 @@
 
 ## Overview
 
-CW is a Bash CLI that orchestrates Claude Code sessions with iTerm2. It manages three concerns:
+CW is a Bash CLI that orchestrates coding-agent sessions (Claude Code and others) with iTerm2.
+It manages four concerns:
 
-1. **Account routing** — maps projects to Claude accounts
-2. **Workspace isolation** — uses git worktrees for parallel work
-3. **Session persistence** — notes files survive conversation loss
+1. **Account routing** — maps projects to accounts
+2. **Harness routing** — maps each account to a coding-agent CLI ("harness") through a driver
+   layer, so `cw work`/`review`/`loop`/`plan`/`create`/`open` run the same way on Claude Code,
+   Codex CLI, Pi or OpenCode. See [harness-drivers.md](harness-drivers.md) for the driver
+   contract and capability enumeration.
+3. **Workspace isolation** — uses git worktrees for parallel work
+4. **Session persistence** — notes files survive conversation loss
 
 ## Directory Structure
 
@@ -16,10 +21,14 @@ CW is a Bash CLI that orchestrates Claude Code sessions with iTerm2. It manages 
 │   └── cw                          # main script (~2500 lines bash)
 ├── cw-shell-integration.sh         # PATH, completions, aliases
 ├── accounts/
-│   ├── work/                       # CLAUDE_CONFIG_DIR for "work"
+│   ├── work/                       # claude-only account, still flat
 │   │   ├── settings.json
+│   │   ├── meta.json               # harness, provider, model per harness (cw-owned)
 │   │   └── ...
-│   └── personal/
+│   └── personal/                   # uses claude and codex side by side
+│       ├── meta.json
+│       ├── claude/                 # CLAUDE_CONFIG_DIR for "personal" on claude
+│       └── codex/                  # CODEX_HOME for "personal" on codex
 ├── sessions/
 │   └── <project>/
 │       ├── SHARED_CONTEXT.md       # shared across all worktrees
@@ -37,9 +46,31 @@ CW is a Bash CLI that orchestrates Claude Code sessions with iTerm2. It manages 
 └── cw.log                          # session open log
 ```
 
+Every harness other than `claude` always gets its own subdirectory under the account root:
+`_harness_dir <account> <harness>` resolves to `<root>/<harness>`, created the moment that
+harness is first used (`cw account add glm --harness opencode` creates `glm/opencode/`
+immediately). `claude` is the one exception, kept for backward compatibility with every
+pre-0.3.0 account: its credentials live at the account root itself unless a `claude/`
+subdirectory exists, in which case that subdirectory wins. Nothing but `cw account migrate` (or
+a user creating `claude/` by hand) makes that subdirectory appear.
+
+`cw doctor --json`'s `layout` field describes **only** that claude-specific question — it says
+nothing about whether other harnesses have their own subdirectories:
+
+| Value | Meaning |
+|---|---|
+| `split` | a `claude/` subdirectory exists |
+| `legacy` | no `claude/` subdirectory, but recognized claude state sits at the account root — `cw account migrate` has work to do |
+| `none` | no `claude/` subdirectory and no recognized claude state at the root |
+
+An account created with `--harness codex` (or `pi`, or `opencode`) and never touched by claude at
+all reports `none`, even though it has its own `codex/` subdirectory — `layout` isn't tracking
+that subdirectory, only claude's. See `docs/commands.md`'s `cw doctor --json` section for how
+"recognized claude state" is decided.
+
 ## Worktree Strategy
 
-Each task/review gets its own [git worktree](https://git-scm.com/docs/git-worktree) — a physical directory linked to a branch, sharing the same `.git` history.
+Each task gets its own [git worktree](https://git-scm.com/docs/git-worktree) — a physical directory linked to a branch, sharing the same `.git` history. Reviews and loops run in the project directory, in their own session, without one.
 
 ```
 my-app/                             # main branch (untouched)
@@ -51,10 +82,6 @@ my-app/                             # main branch (untouched)
 │   └── PROJ-123/                   # worktree → branch from Linear
 │       ├── src/
 │       └── TASK_NOTES.md → symlink
-└── .reviews/
-    └── pr-42/                      # worktree → PR branch
-        ├── src/
-        └── REVIEW_NOTES.md → symlink
 ```
 
 **Why worktrees?**
@@ -63,31 +90,38 @@ my-app/                             # main branch (untouched)
 - Shared object store — no disk duplication of git history
 - Proper isolation — one broken build doesn't affect another
 
-**Git exclude:** `.tasks/`, `.reviews/`, and `*_NOTES.md` are added to `.git/info/exclude` (per-repo, not committed to `.gitignore`).
+**Git exclude:** `.tasks`, `TASK_NOTES.md` and `SHARED_CONTEXT.md` are added to the project's `info/exclude` (per-repo, not committed to `.gitignore`). The file is resolved from the project's own shared git dir, whichever directory `cw` runs from, so it also covers every worktree.
 
 ## Session Persistence
 
-Claude Code's `--continue` flag resumes the last conversation. But sessions can be lost if:
-- Too much time passes
-- Claude is opened elsewhere with the same account
-- The conversation exceeds context limits
+A resumed session reopens the agent's own conversation when it can:
 
-CW provides a fallback: `TASK_NOTES.md` / `REVIEW_NOTES.md` files that Claude reads on startup. Even if the conversation is gone, the context survives.
+- **Claude Code** resumes the session by name. If that fails, it runs `claude --continue` in the directory it opens in, and then starts a new session under the same name. Until the agent has created the task's worktree, that directory is the shared project root, so `--continue` can reopen another task's Claude conversation. This is the previous release's behaviour, kept on purpose so that commands without `--harness` behave exactly as before.
+- **Codex, Pi and OpenCode** reopen only a conversation CW can tie to the session: a recorded session id, or for Codex the last conversation in the task's own worktree once the session has run there. With neither, CW says so on one line and starts a fresh conversation pointed at `TASK_NOTES.md`, rather than reopen another task's. The Codex step rests on one unverified assumption — that `codex resume --last` only looks at the current directory. If that is wrong, the step can reopen another task's conversation; see the CHANGELOG.
+
+Conversations can also be lost outright: too much time passes, the agent is opened elsewhere with the same account, or the conversation outgrows its context. `TASK_NOTES.md` / `REVIEW_NOTES.md` are the fallback: the agent reads them on start, so the context survives even when the conversation doesn't.
 
 ### Session Lifecycle
 
 ```
 NEW: cw work app fix-auth
   → create session dir + session.json
-  → create TASK_NOTES.md (symlinked to worktree)
+  → create TASK_NOTES.md (symlinked to worktree), fetch the ticket into it when a key is set
   → save init_prompt.txt
   → open Claude with init prompt
-  → Claude creates worktree + fetches context
+  → Claude creates the worktree, and fetches the ticket via MCP if CW could not
+
+NEW on codex, pi or opencode: cw work app fix-auth --harness codex
+  → create session dir, TASK_NOTES.md, fetch context
+  → git fetch origin + git worktree add .tasks/fix-auth (existing branch attached, never deleted)
+  → symlink TASK_NOTES.md, SHARED_CONTEXT.md, and the root's .env and .claude/ into it
+  → open the harness inside the worktree, with a prompt that has no setup steps
+  → if any of that fails: one warning, no half-created worktree, and the agent-driven flow above
 
 RESUME: cw work app fix-auth (2nd time)
   → update session.json (opens++, last_opened)
-  → open Claude with --continue
-  → Claude reads TASK_NOTES.md if session is lost
+  → reopen the agent's conversation (see above)
+  → the agent reads TASK_NOTES.md if the conversation is lost
 
 DONE: cw work app fix-auth --done
   → remove worktree
@@ -103,6 +137,9 @@ DONE: cw work app fix-auth --done
   "task": "fix-auth",
   "type": "task",
   "account": "work",
+  "harness": "claude",
+  "provider": "native",
+  "model": "sonnet",
   "workflow": "bugfix",
   "branch": "joselito/proj-123-fix-auth",
   "worktree": "/path/to/.tasks/fix-auth",
@@ -129,13 +166,13 @@ When working on multiple tasks for the same project, worktrees can share context
     └── ...
 ```
 
-The file is auto-created on the first `cw work` for a project and symlinked into every worktree. When one worktree discovers something relevant to others (schema changes, API changes, conventions), Claude updates `SHARED_CONTEXT.md` — and other worktrees see it immediately.
+The file is auto-created on the first `cw work` for a project and symlinked into every worktree. When one worktree discovers something relevant to others (schema changes, API changes, conventions), the agent updates `SHARED_CONTEXT.md` — and other worktrees see it immediately.
 
 This is inspired by multi-agent memory sharing, adapted for CW's worktree-per-task model.
 
 ## Workflow Templates
 
-Workflows provide structured instructions for different types of work. When you run `cw work my-app fix-auth --workflow bugfix`, the bugfix workflow template is appended to the init prompt, guiding Claude through a reproduce → root cause → fix → test → verify process.
+Workflows provide structured instructions for different types of work. When you run `cw work my-app fix-auth --workflow bugfix`, the bugfix workflow template is appended to the init prompt, guiding the agent through a reproduce → root cause → fix → test → verify process.
 
 Templates live in `~/.cw/templates/workflows/`:
 
@@ -156,31 +193,61 @@ When a URL is passed as the task argument, CW detects the source and adjusts the
 
 | Source | Detection | Extracted ID | Branch Strategy |
 |--------|-----------|-------------|----------------|
-| Linear | `linear.app` in URL | `ABC-123` regex | Fetched from Linear issue via MCP |
-| GitHub | `github.com` + `issues`/`pull` | Issue/PR number | PR branch or `task/<id>` |
+| Linear | `linear.app` in URL | `ABC-123` regex | the issue's `branchName`, else `task/<id>` |
+| GitHub | `github.com` + `issues`/`pull` | Issue/PR number | PR head branch (from `origin/<branch>`) or `task/<id>` |
 | Notion | `notion.so` or `notion.site` | Page slug | `task/<slug>` |
 | Plain text | No URL detected | Used as-is | Used as branch name directly |
 
-Claude handles the actual MCP calls and worktree creation via the init prompt.
+`cw` fetches the ticket content itself, before launching any harness — Linear via
+`LINEAR_API_KEY`, GitHub via the `gh` CLI's own auth, Notion via `NOTION_TOKEN` — and writes it
+straight into `TASK_NOTES.md`. This is what makes the URL flow harness-agnostic: the context is
+already on disk by the time the agent starts, so it doesn't depend on that harness having a
+matching MCP connector. If no credential is configured for that source, `cw` falls back to its
+older behavior and asks the agent to fetch it and fill in `TASK_NOTES.md` itself via MCP.
+
+Who creates the worktree depends on the harness, not on the fetch. On claude the init prompt
+asks the agent to create it, same as before, so claude's first launch is in the project root.
+On every other harness `cw` creates it before launch, on the branch in the table above, and the
+harness starts inside it, so its working directory belongs to that one task, which codex's
+`resume --last` relies on (whether `--last` is scoped to the directory is unverified; see the
+CHANGELOG). `_work_branch` picks the branch, `_work_worktree_create` claims `.tasks/<task>` with
+an atomic `mkdir`, creates the worktree and links the task files, and on any failure removes
+only the directory it claimed (a branch it had just created stays, and the warning names it)
+and returns so `cw work` can fall back to the agent-driven flow with one warning. It never
+deletes a branch: an existing one is attached to the new worktree as it is, and on a non-claude
+harness the fallback prompt's `git branch -D` step is rewritten to attach the branch instead.
+The Linear fetcher hands `branchName` to `cw` as JSON
+through the file named by `CW_CONTEXT_META`, so `cw` never parses it back out of the markdown.
 
 ## Account Routing
 
-Each project maps to an account in `projects.json`:
+Each project maps to an account in `projects.json`, with an optional `harness` override:
 
 ```json
 {
   "my-app": {
     "path": "/Users/you/code/my-app",
     "account": "work",
-    "type": "fullstack"
+    "type": "fullstack",
+    "harness": "codex"
   }
 }
 ```
 
 When you run `cw work my-app fix-auth`, CW:
 1. Looks up `my-app` in `projects.json`
-2. Finds `account: "work"`
-3. Sets `CLAUDE_CONFIG_DIR=~/.cw/accounts/work`
-4. Launches Claude with that config
+2. Finds `account: "work"` (and `harness: "codex"`, or the account's own default harness if the
+   project doesn't set one; `--harness` on the command line overrides both)
+3. Resolves the credential directory with `_harness_dir <account> <harness>` — for `claude` on a
+   flat account this is the account root itself (`~/.cw/accounts/work`), otherwise it's
+   `~/.cw/accounts/work/<harness>`
+4. Sets that harness's config-dir env var (`CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME` for
+   codex, and so on — each driver declares its own in `<h>_config_env`) and launches it through
+   the driver layer
 
-No manual account switching needed.
+No manual account switching, and no hard-coded `CLAUDE_CONFIG_DIR`, needed.
+
+A running session remembers the harness it was created with (`session.json`'s `harness` field)
+and resuming it always uses that harness — `--harness` on a later `cw work` for the same task is
+only honored if it matches, otherwise `cw` refuses rather than silently switching agents
+mid-session.

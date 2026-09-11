@@ -1,0 +1,1 @@
+{"title":"Login button does nothing","body":"Clicking Sign in on /login is a no-op in Safari 17.","number":1,"state":"open","labels":[{"name":"bug"}]}
