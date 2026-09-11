@@ -9,14 +9,18 @@ setup() {
 
 @test "opencode launches with OPENCODE_DATA_DIR and OPENCODE_CONFIG set" {
     run "$CW_BIN" work app fix-auth
+    [ "$status" -eq 0 ]
+    [ "$(call_count)" -eq 1 ]
     [ "$(call_field 1 bin)" = "opencode" ]
     [ "$(call_field 1 'env:OPENCODE_DATA_DIR')" = "$CW_HOME/accounts/glm/opencode" ]
+    [ "$(call_field 1 'env:OPENCODE_CONFIG')" = "$CW_HOME/accounts/glm/opencode/opencode.json" ]
 }
 
 @test "opencode receives the account model" {
     run "$CW_BIN" work app fix-auth
-    run bash -c "'$CW_BIN' spaces --json >/dev/null; grep -c 'glm-5.1' '$CW_FAKE_LOG'"
-    [ "$output" != "0" ]
+    [ "$status" -eq 0 ]
+    [ "$(call_count)" -eq 1 ]
+    [ "$(call_argv 1 | awk 'p{print; exit} $0=="--model"{p=1}')" = "zai/glm-5.1" ]
 }
 
 @test "opencode resume never uses --continue" {

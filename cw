@@ -764,21 +764,27 @@ _degrade() {
     return 1
 }
 
-# translates the skip-permissions request to whatever the harness calls it
+# true when --skip-permissions or skip_permissions: true in config.yaml asked for it
+_skip_permissions_requested() {
+    [[ "${_CW_SKIP_PERMS:-}" == "true" ]] && return 0
+    [[ -f "$CW_CONFIG" ]] && grep -qE '^skip_permissions:[[:space:]]*true' "$CW_CONFIG"
+}
+
+# CW_CLAUDE_FLAGS is claude's alone; every other harness reads CW_<HARNESS>_FLAGS
 _harness_extra_flags() {
-    local flags="${CW_CLAUDE_FLAGS:-}"
-    local per_harness_var="CW_$(echo "$CW_HARNESS" | tr '[:lower:]' '[:upper:]')_FLAGS"
-    if [[ "$per_harness_var" != "CW_CLAUDE_FLAGS" ]]; then
-        local per_harness_val="${!per_harness_var:-}"
-        if [[ -n "$flags" && -n "$per_harness_val" ]]; then
-            flags="$flags $per_harness_val"
-        else
-            flags="$flags$per_harness_val"
-        fi
+    local flags
+    if [[ "$CW_HARNESS" == "claude" ]]; then
+        flags="${CW_CLAUDE_FLAGS:-}"
+    else
+        local per_harness_var
+        per_harness_var="CW_$(printf '%s' "$CW_HARNESS" | tr '[:lower:]-' '[:upper:]_')_FLAGS"
+        flags="${!per_harness_var:-}"
+        _skip_permissions_requested && flags="--dangerously-skip-permissions${flags:+ $flags}"
     fi
     if [[ "$flags" == *--dangerously-skip-permissions* ]] && ! harness_supports skip_permissions; then
         flags="${flags//--dangerously-skip-permissions/}"
-        _degrade skip_permissions "Harness has no skip-permissions flag — prompts stay on" || true
+        # stderr, since this runs inside the command substitution that captures the flags
+        _degrade skip_permissions "Harness has no skip-permissions flag — prompts stay on" >&2 || true
     fi
     printf '%s' "$flags"
 }
@@ -817,6 +823,10 @@ _harness_context() {
         else
             CW_HARNESS_DIR="$CW_ACCOUNTS_DIR/"
         fi
+    fi
+    # a one-off --harness must not launch against a credential dir that does not exist
+    if [[ -n "${CW_ACCOUNT:-}" && ! -d "$CW_HARNESS_DIR" && -d "$(_account_root "$CW_ACCOUNT")" ]]; then
+        mkdir -p "$CW_HARNESS_DIR"
     fi
     _install_account_instructions "${CW_ACCOUNT:-}" "$CW_HARNESS" "$CW_HARNESS_DIR"
     CW_SESSION_NAME="${CW_SESSION_NAME:-}"

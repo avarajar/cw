@@ -8,6 +8,7 @@
     printf 'env:CODEX_HOME=%s\n' "${CODEX_HOME:-}"
     printf 'env:PI_CODING_AGENT_DIR=%s\n' "${PI_CODING_AGENT_DIR:-}"
     printf 'env:OPENCODE_DATA_DIR=%s\n' "${OPENCODE_DATA_DIR:-}"
+    printf 'env:OPENCODE_CONFIG=%s\n' "${OPENCODE_CONFIG:-}"
     printf 'env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=%s\n' "${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-}"
     printf 'env:CW_PROJECT=%s\n' "${CW_PROJECT:-}"
     printf 'env:CW_TASK=%s\n' "${CW_TASK:-}"
