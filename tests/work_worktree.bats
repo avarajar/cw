@@ -9,7 +9,11 @@ setup() {
     export PATH="$BATS_TEST_TMPDIR/fakes:$PATH"
 }
 
-teardown() { stop_context_stub; }
+teardown() {
+    stop_context_stub
+    [[ -n "${BG_PID:-}" ]] && kill "$BG_PID" 2>/dev/null
+    true
+}
 
 # a registered project whose origin is a local bare repo, so fetch and origin/main work offline
 make_origin_project() {
@@ -189,6 +193,8 @@ no_setup_steps() {
     [ ! -e "$path/.tasks/fix-auth" ]
     [ "$(worktree_count "$path")" -eq 1 ]
     [ -z "$(ls -A "$path/.git/worktrees" 2>/dev/null)" ]
+    [[ "$output" == *"kept branch fix-auth, which cw had just created"* ]]
+    git -C "$path" show-ref --verify --quiet refs/heads/fix-auth
     [[ "$(call 1)" == *"git worktree add .tasks/fix-auth"* ]]
     [ "$(call_field 1 cwd)" = "$path" ]
 }
@@ -225,6 +231,7 @@ no_setup_steps() {
     run "$CW_BIN" work app https://github.com/org/repo/pull/42 --harness codex
     [ "$status" -eq 0 ]
     [ "$(warnings)" -eq 1 ]
+    [[ "$output" == *"Could not create the worktree (gh could not resolve the pull request's branch)"* ]]
     [[ "$(call 1)" == *"Set up the workspace for GitHub PR #42"* ]]
     [ "$(call_field 1 cwd)" = "$path" ]
     [ ! -e "$path/.tasks/pull-42" ]
@@ -290,4 +297,64 @@ no_setup_steps() {
     [ "$(call_count)" -eq 3 ]
     [ "$(worktree_count "$path")" -eq 1 ]
     [ -z "$(ls -A "$path/.tasks" 2>/dev/null)" ]
+}
+
+@test "two overlapping new runs of one task never remove the first run's worktree or its uncommitted work" {
+    local path; path="$(make_origin_project app)"
+    local hold="$BATS_TEST_TMPDIR/hold"
+    # holds a fetch in upload-pack until released, the way a credential prompt would
+    cat > "$BATS_TEST_TMPDIR/slow-upload-pack" <<SLOW
+#!/usr/bin/env bash
+if [[ -n "\${CW_TEST_HOLD:-}" ]]; then
+    touch "$hold.waiting"
+    while [[ ! -e "$hold.release" ]]; do sleep 0.05; done
+fi
+exec git upload-pack "\$@"
+SLOW
+    chmod +x "$BATS_TEST_TMPDIR/slow-upload-pack"
+    git -C "$path" config remote.origin.uploadpack "$BATS_TEST_TMPDIR/slow-upload-pack"
+    CW_TEST_HOLD=1 "$CW_BIN" work app fix-auth --harness codex > "$BATS_TEST_TMPDIR/second.out" 2>&1 3>&- &
+    BG_PID=$!
+    local i
+    for i in $(seq 1 200); do [[ -e "$hold.waiting" ]] && break; sleep 0.05; done
+    [ -e "$hold.waiting" ]
+    run "$CW_BIN" work app fix-auth --harness codex
+    [ "$status" -eq 0 ]
+    local wt="$path/.tasks/fix-auth"
+    [ "$(branch_of "$wt")" = "fix-auth" ]
+    printf 'unsaved\n' > "$wt/agent-work.txt"
+    touch "$hold.release"
+    wait "$BG_PID"
+    BG_PID=""
+    [ "$(cat "$wt/agent-work.txt")" = "unsaved" ]
+    [ "$(branch_of "$wt")" = "fix-auth" ]
+    [ "$(worktree_count "$path")" -eq 2 ]
+    [ "$(grep -c 'Could not create the worktree' "$BATS_TEST_TMPDIR/second.out")" -eq 1 ]
+}
+
+@test "a fallback never unregisters another worktree, even one whose directory is missing" {
+    local path; path="$(make_origin_project app)"
+    git -C "$path" worktree add -q -b side "$BATS_TEST_TMPDIR/unmounted" main
+    commit_on "$path" fix-auth
+    git -C "$path" worktree add -q "$BATS_TEST_TMPDIR/elsewhere" fix-auth
+    mv "$BATS_TEST_TMPDIR/unmounted" "$BATS_TEST_TMPDIR/unmounted.away"
+    run "$CW_BIN" work app fix-auth --harness codex
+    [ "$status" -eq 0 ]
+    [ "$(warnings)" -eq 1 ]
+    mv "$BATS_TEST_TMPDIR/unmounted.away" "$BATS_TEST_TMPDIR/unmounted"
+    [ "$(branch_of "$BATS_TEST_TMPDIR/unmounted")" = "side" ]
+    [ "$(worktree_count "$path")" -eq 3 ]
+}
+
+@test "a branch name git would reject is refused before cw fetches or runs git with it" {
+    local path; path="$(make_origin_project app)"
+    local body
+    body=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["data"]["issue"]["branchName"]="bad..name"; print(json.dumps(d))' \
+        "$BATS_TEST_DIRNAME/fixtures/linear-issue.json")
+    start_context_stub 200 "$body"
+    git -C "$path" remote set-url origin "$BATS_TEST_TMPDIR/no-such-origin.git"
+    CW_LINEAR_API="$CTX_STUB_URL" LINEAR_API_KEY=lin_test run "$CW_BIN" work app https://linear.app/x/issue/SEI-214 --harness codex
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Could not create the worktree ('bad..name' is not a valid branch name)"* ]]
+    [ ! -e "$path/.tasks/SEI-214" ]
 }

@@ -2525,13 +2525,13 @@ _work_worktree_link() {
 
 # creates a task worktree, attaching an existing branch and never deleting one; sets _CW_WT_WHY on failure
 _work_worktree_create() {
-    local path="$1" wt_dir="$2" branch="$3" start="$4" notes="$5" shared="$6" err=""
+    local path="$1" wt_dir="$2" branch="$3" start="$4" notes="$5" shared="$6" err="" made_branch=false
     _CW_WT_WHY=""
-    if [[ -e "$wt_dir" || -L "$wt_dir" ]]; then
-        _CW_WT_WHY="$wt_dir already exists"; return 1
-    fi
     if [[ -z "$branch" || "$branch" == -* ]] || ! git -C "$path" check-ref-format --branch "$branch" >/dev/null 2>&1; then
         _CW_WT_WHY="'$branch' is not a valid branch name"; return 1
+    fi
+    if [[ -e "$wt_dir" || -L "$wt_dir" ]]; then
+        _CW_WT_WHY="$wt_dir already exists"; return 1
     fi
     git -C "$path" fetch -q origin >/dev/null 2>&1 || { _CW_WT_WHY="git fetch origin failed"; return 1; }
     local -a add=(worktree add -q "$wt_dir" "$branch")
@@ -2540,6 +2540,11 @@ _work_worktree_create() {
             _CW_WT_WHY="$start does not exist"; return 1
         fi
         add=(worktree add -q -b "$branch" "$wt_dir" "$start")
+        made_branch=true
+    fi
+    # claims the path atomically, so a concurrent run of the same task is never rolled back here
+    if ! mkdir -p "$(dirname "$wt_dir")" || ! mkdir "$wt_dir" 2>/dev/null; then
+        _CW_WT_WHY="$wt_dir already exists"; return 1
     fi
     if ! err=$(git -C "$path" "${add[@]}" 2>&1 >/dev/null); then
         _CW_WT_WHY="${err:-git worktree add failed}"
@@ -2549,11 +2554,11 @@ _work_worktree_create() {
         return 0
     fi
     _CW_WT_WHY="${_CW_WT_WHY%%$'\n'*}"
-    # the path did not exist before this call, so whatever is there now is ours to remove
-    if [[ -e "$wt_dir" || -L "$wt_dir" ]]; then
-        git -C "$path" worktree remove --force "$wt_dir" >/dev/null 2>&1 || rm -rf "$wt_dir"
+    # removes only the directory this call claimed, never another worktree's registration
+    git -C "$path" worktree remove --force "$wt_dir" >/dev/null 2>&1 || rm -rf "$wt_dir"
+    if $made_branch && git -C "$path" show-ref --verify --quiet "refs/heads/$branch"; then
+        _CW_WT_WHY="$_CW_WT_WHY; kept branch $branch, which cw had just created"
     fi
-    git -C "$path" worktree prune >/dev/null 2>&1
     return 1
 }
 
