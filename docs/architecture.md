@@ -70,7 +70,7 @@ that subdirectory, only claude's. See `docs/commands.md`'s `cw doctor --json` se
 
 ## Worktree Strategy
 
-Each task/review gets its own [git worktree](https://git-scm.com/docs/git-worktree) — a physical directory linked to a branch, sharing the same `.git` history.
+Each task gets its own [git worktree](https://git-scm.com/docs/git-worktree) — a physical directory linked to a branch, sharing the same `.git` history. Reviews and loops run in the project directory, in their own session, without one.
 
 ```
 my-app/                             # main branch (untouched)
@@ -82,10 +82,6 @@ my-app/                             # main branch (untouched)
 │   └── PROJ-123/                   # worktree → branch from Linear
 │       ├── src/
 │       └── TASK_NOTES.md → symlink
-└── .reviews/
-    └── pr-42/                      # worktree → PR branch
-        ├── src/
-        └── REVIEW_NOTES.md → symlink
 ```
 
 **Why worktrees?**
@@ -98,22 +94,22 @@ my-app/                             # main branch (untouched)
 
 ## Session Persistence
 
-Claude Code's `--continue` flag resumes the last conversation. But sessions can be lost if:
-- Too much time passes
-- Claude is opened elsewhere with the same account
-- The conversation exceeds context limits
+A resumed session reopens the agent's own conversation when it can:
 
-CW provides a fallback: `TASK_NOTES.md` / `REVIEW_NOTES.md` files that Claude reads on startup. Even if the conversation is gone, the context survives.
+- **Claude Code** resumes the session by name. If that fails, it runs `claude --continue` in the directory it opens in, and then starts a new session under the same name. Until the agent has created the task's worktree, that directory is the shared project root, so `--continue` can reopen another task's Claude conversation. This is the previous release's behaviour, kept on purpose so that commands without `--harness` behave exactly as before.
+- **Codex, Pi and OpenCode** reopen only a conversation CW can tie to the session: a recorded session id, or for Codex the last conversation in the task's own worktree once the session has run there. With neither, CW says so on one line and starts a fresh conversation pointed at `TASK_NOTES.md`, rather than reopen another task's. The Codex step rests on one unverified assumption — that `codex resume --last` only looks at the current directory. If that is wrong, the step can reopen another task's conversation; see the CHANGELOG.
+
+Conversations can also be lost outright: too much time passes, the agent is opened elsewhere with the same account, or the conversation outgrows its context. `TASK_NOTES.md` / `REVIEW_NOTES.md` are the fallback: the agent reads them on start, so the context survives even when the conversation doesn't.
 
 ### Session Lifecycle
 
 ```
 NEW: cw work app fix-auth
   → create session dir + session.json
-  → create TASK_NOTES.md (symlinked to worktree)
+  → create TASK_NOTES.md (symlinked to worktree), fetch the ticket into it when a key is set
   → save init_prompt.txt
   → open Claude with init prompt
-  → Claude creates worktree + fetches context
+  → Claude creates the worktree, and fetches the ticket via MCP if CW could not
 
 NEW on codex, pi or opencode: cw work app fix-auth --harness codex
   → create session dir, TASK_NOTES.md, fetch context
@@ -124,8 +120,8 @@ NEW on codex, pi or opencode: cw work app fix-auth --harness codex
 
 RESUME: cw work app fix-auth (2nd time)
   → update session.json (opens++, last_opened)
-  → open Claude with --continue
-  → Claude reads TASK_NOTES.md if session is lost
+  → reopen the agent's conversation (see above)
+  → the agent reads TASK_NOTES.md if the conversation is lost
 
 DONE: cw work app fix-auth --done
   → remove worktree
@@ -170,13 +166,13 @@ When working on multiple tasks for the same project, worktrees can share context
     └── ...
 ```
 
-The file is auto-created on the first `cw work` for a project and symlinked into every worktree. When one worktree discovers something relevant to others (schema changes, API changes, conventions), Claude updates `SHARED_CONTEXT.md` — and other worktrees see it immediately.
+The file is auto-created on the first `cw work` for a project and symlinked into every worktree. When one worktree discovers something relevant to others (schema changes, API changes, conventions), the agent updates `SHARED_CONTEXT.md` — and other worktrees see it immediately.
 
 This is inspired by multi-agent memory sharing, adapted for CW's worktree-per-task model.
 
 ## Workflow Templates
 
-Workflows provide structured instructions for different types of work. When you run `cw work my-app fix-auth --workflow bugfix`, the bugfix workflow template is appended to the init prompt, guiding Claude through a reproduce → root cause → fix → test → verify process.
+Workflows provide structured instructions for different types of work. When you run `cw work my-app fix-auth --workflow bugfix`, the bugfix workflow template is appended to the init prompt, guiding the agent through a reproduce → root cause → fix → test → verify process.
 
 Templates live in `~/.cw/templates/workflows/`:
 
