@@ -2454,30 +2454,107 @@ PY
     return $rc
 }
 
-# fetches context for a task URL, writes it into notes, returns 0 on success
-_context_fetch_for_task() {
-    local src="$1" url="$2" notes="$3"
-    [[ -n "$src" && "$src" != "url" ]] || return 1
-    local candidate ctx_lib=""
+# sources the context library for a source, first hit in search order
+_context_load() {
+    local src="$1" candidate
     for candidate in "$CW_HOME/context/$src.sh" \
                      "$SCRIPT_DIR/../lib/context/$src.sh" \
                      "$SCRIPT_DIR/lib/context/$src.sh" \
                      "$CW_HOME/lib/context/$src.sh"; do
-        [[ -f "$candidate" ]] && { ctx_lib="$candidate"; break; }
+        # shellcheck disable=SC1090
+        [[ -f "$candidate" ]] && { source "$candidate"; return 0; }
     done
-    [[ -n "$ctx_lib" ]] || return 1
-    # shellcheck disable=SC1090
-    source "$ctx_lib"
+    return 1
+}
+
+# fetches a task URL's context into notes, and any branch it reports into _CW_CONTEXT_BRANCH
+_context_fetch_for_task() {
+    local src="$1" url="$2" notes="$3"
+    _CW_CONTEXT_BRANCH=""
+    [[ -n "$src" && "$src" != "url" ]] || return 1
+    _context_load "$src" || return 1
     if ! "context_credential_$src"; then
         _dim "  No $src credential — the agent will fetch it instead"
         return 1
     fi
-    local fetched
-    fetched=$("context_fetch_$src" "$url" 2>/dev/null) || fetched=""
+    local fetched meta
+    meta=$(mktemp) || return 1
+    fetched=$(CW_CONTEXT_META="$meta" "context_fetch_$src" "$url" 2>/dev/null) || fetched=""
+    [[ -n "$fetched" ]] && _CW_CONTEXT_BRANCH=$(CW_META_FILE="$meta" python3 -c '
+import json, os
+try:
+    print(json.load(open(os.environ["CW_META_FILE"])).get("branch") or "", end="")
+except Exception:
+    pass')
+    rm -f "$meta"
     [[ -n "$fetched" ]] || return 1
     _context_write_notes "$notes" "$fetched" || return 1
     _dim "  Fetched context from $src"
     return 0
+}
+
+# prints the branch the agent-driven setup would give a new task worktree
+_work_branch() {
+    local task="$1" src="$2" url="$3"
+    case "$src" in
+        linear) printf '%s' "${_CW_CONTEXT_BRANCH:-task/$task}" ;;
+        notion) printf 'task/%s' "$task" ;;
+        github)
+            if [[ "$url" == *"/pull/"* ]]; then
+                _context_load github && context_pr_branch_github "$url"
+                return
+            fi
+            printf 'task/%s' "$task" ;;
+        *) printf '%s' "$task" ;;
+    esac
+}
+
+# links the notes, the shared context, and the root's .env and .claude/ into a new worktree
+_work_worktree_link() {
+    local path="$1" wt_dir="$2" notes="$3" shared="$4"
+    ln -sf "$notes" "$wt_dir/TASK_NOTES.md" || return 1
+    ln -sf "$shared" "$wt_dir/SHARED_CONTEXT.md" || return 1
+    if [[ -f "$path/.env" && ! -e "$wt_dir/.env" && ! -L "$wt_dir/.env" ]]; then
+        ln -s "$path/.env" "$wt_dir/.env" || return 1
+    fi
+    if [[ -d "$path/.claude" && ! -e "$wt_dir/.claude" && ! -L "$wt_dir/.claude" ]]; then
+        ln -s "$path/.claude" "$wt_dir/.claude" || return 1
+    fi
+    return 0
+}
+
+# creates a task worktree, attaching an existing branch and never deleting one; sets _CW_WT_WHY on failure
+_work_worktree_create() {
+    local path="$1" wt_dir="$2" branch="$3" start="$4" notes="$5" shared="$6" err=""
+    _CW_WT_WHY=""
+    if [[ -e "$wt_dir" || -L "$wt_dir" ]]; then
+        _CW_WT_WHY="$wt_dir already exists"; return 1
+    fi
+    if [[ -z "$branch" || "$branch" == -* ]] || ! git -C "$path" check-ref-format --branch "$branch" >/dev/null 2>&1; then
+        _CW_WT_WHY="'$branch' is not a valid branch name"; return 1
+    fi
+    git -C "$path" fetch -q origin >/dev/null 2>&1 || { _CW_WT_WHY="git fetch origin failed"; return 1; }
+    local -a add=(worktree add -q "$wt_dir" "$branch")
+    if ! git -C "$path" show-ref --verify --quiet "refs/heads/$branch"; then
+        if ! git -C "$path" rev-parse --verify --quiet "$start^{commit}" >/dev/null; then
+            _CW_WT_WHY="$start does not exist"; return 1
+        fi
+        add=(worktree add -q -b "$branch" "$wt_dir" "$start")
+    fi
+    if ! err=$(git -C "$path" "${add[@]}" 2>&1 >/dev/null); then
+        _CW_WT_WHY="${err:-git worktree add failed}"
+    elif ! _work_worktree_link "$path" "$wt_dir" "$notes" "$shared"; then
+        _CW_WT_WHY="could not link the task files into it"
+    else
+        return 0
+    fi
+    _CW_WT_WHY="${_CW_WT_WHY%%$'\n'*}"
+    # the path did not exist before this call, so whatever is there now is ours to remove
+    if [[ -e "$wt_dir" || -L "$wt_dir" ]]; then
+        git -C "$path" worktree remove --force "$wt_dir" >/dev/null 2>&1 || rm -rf "$wt_dir"
+    fi
+    git -C "$path" worktree prune >/dev/null 2>&1
+    return 1
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -2633,6 +2710,38 @@ cmd_work() {
         local context_fetched=false
         _context_fetch_for_task "$task_source" "$task_url" "$notes_file" && context_fetched=true
 
+        # ── Shared context (per-project, visible to all worktrees) ────────
+        local shared_context="$CW_HOME/sessions/$name/SHARED_CONTEXT.md"
+        if [[ ! -f "$shared_context" ]]; then
+            {
+                echo "# Shared Context: $name"
+                echo "**Project:** $name"
+                echo ""
+                echo "## Cross-Task Notes"
+                echo "<!-- Notes visible to all active worktrees for this project -->"
+                echo "<!-- Update this when you discover something relevant to other tasks -->"
+                echo ""
+                echo "## Decisions"
+                echo "<!-- Architecture decisions, conventions, important context -->"
+                echo ""
+                echo "## Known Issues"
+                echo "<!-- Bugs, tech debt, things to watch out for -->"
+            } > "$shared_context"
+        fi
+
+        local cw_worktree=false wt_branch=""
+        # claude keeps its legacy agent-driven worktree setup for backward compatibility
+        if [[ "$CW_HARNESS" != "claude" ]]; then
+            local wt_start="$base_branch"
+            _CW_WT_WHY="gh could not resolve the pull request's branch"
+            if wt_branch=$(_work_branch "$task" "$task_source" "$task_url"); then
+                [[ "$task_source" == "github" && "$task_url" == *"/pull/"* ]] && wt_start="origin/$wt_branch"
+                _work_worktree_create "$path" "$wt_dir" "$wt_branch" "$wt_start" "$notes_file" "$shared_context" \
+                    && cw_worktree=true
+            fi
+            $cw_worktree || _warn "Could not create the worktree ($_CW_WT_WHY) — falling back to agent-driven setup"
+        fi
+
         # Build initial prompt for Claude based on source
         local init_prompt=""
         # step N text + the following step's number, or "" when context was already fetched
@@ -2756,32 +2865,52 @@ Set up the workspace:
             fi
         fi
 
+        # a worktree cw already created gets a prompt with no setup steps in it
+        if $cw_worktree; then
+            local _lead="" _fill="" _read="Read TASK_NOTES.md for context."
+            case "$task_source" in
+                linear)
+                    if harness_supports mcp; then
+                        _lead="Fetch Linear issue $task using the Linear MCP (get_issue tool). Also fetch the issue comments (list_comments tool) to check for discussion, decisions, or additional context."
+                    elif $context_fetched; then
+                        _lead="The Linear issue $task has already been fetched into $notes_file. Read it first: it is the source of truth for this task."
+                    else
+                        _lead="The Linear issue $task ($task_url) could not be fetched: no LINEAR_API_KEY is configured and this harness has no Linear MCP. Ask the user for the issue details before starting."
+                    fi
+                    _fill="the issue details (title, description, acceptance criteria, priority) and a summary of any relevant comments" ;;
+                notion) _lead="$_notion_lead"; _fill="the page content" ;;
+                github)
+                    if [[ "$task_url" == *"/pull/"* ]]; then
+                        _lead="This task is GitHub PR #$_pr_num: $task_url"
+                        [[ -n "$_pr_lead" ]] && _lead="$_lead
+The PR details have already been fetched into $notes_file. Read it first: it is the source of truth for this task."
+                        _fill="the PR details"
+                    else
+                        _lead="$_issue_lead"; _fill="the issue details"
+                    fi ;;
+                *)
+                    [[ -n "${prewritten_desc:-}" ]] && _lead="Task description:
+$prewritten_desc" ;;
+            esac
+            [[ -n "$_fill" ]] && _read=""
+            [[ -n "$_fill" ]] && ! $context_fetched && _read="Fill in the Context section of TASK_NOTES.md with $_fill."
+            init_prompt="${_lead:+$_lead
+
+}The workspace is already set up. You are in this task's git worktree, $wt_dir, on branch $wt_branch. Work only in this directory, and do not create another worktree or branch.
+TASK_NOTES.md in the worktree links to $notes_file.${_read:+
+$_read}"
+        fi
+
         # /simplify is a Claude Code command; other harnesses get the same ask in plain words
         local _quality_step="When you finish implementing the task (before committing), run /simplify to review the code for reuse, quality, and efficiency. Fix any issues found before considering the task done."
         harness_supports slash_commands || _quality_step="When you finish implementing the task (before committing), review your own changes for reuse, quality, and efficiency. Fix any issues found before considering the task done."
 
-        # ── Shared context (per-project, visible to all worktrees) ────────
-        local shared_context="$CW_HOME/sessions/$name/SHARED_CONTEXT.md"
-        if [[ ! -f "$shared_context" ]]; then
-            {
-                echo "# Shared Context: $name"
-                echo "**Project:** $name"
-                echo ""
-                echo "## Cross-Task Notes"
-                echo "<!-- Notes visible to all active worktrees for this project -->"
-                echo "<!-- Update this when you discover something relevant to other tasks -->"
-                echo ""
-                echo "## Decisions"
-                echo "<!-- Architecture decisions, conventions, important context -->"
-                echo ""
-                echo "## Known Issues"
-                echo "<!-- Bugs, tech debt, things to watch out for -->"
-            } > "$shared_context"
-        fi
+        local _shared_step="Also symlink shared context: ln -sf $shared_context .tasks/$task/SHARED_CONTEXT.md
+If SHARED_CONTEXT.md exists in the worktree, read it for cross-task context from other worktrees."
+        $cw_worktree && _shared_step="SHARED_CONTEXT.md in the worktree links to $shared_context. Read it for cross-task context from other worktrees."
         init_prompt="$init_prompt
 
-Also symlink shared context: ln -sf $shared_context .tasks/$task/SHARED_CONTEXT.md
-If SHARED_CONTEXT.md exists in the worktree, read it for cross-task context from other worktrees.
+$_shared_step
 When you discover something relevant to other tasks (schema changes, API changes, conventions), update SHARED_CONTEXT.md.
 
 IMPORTANT — Project rules: Before writing any code, read the project's CLAUDE.md at the worktree root if it exists. Also check .claude/rules/ for coding rules (e.g. backend.md, frontend.md, tests.md) — these have glob patterns in their frontmatter that specify which files they apply to. Follow all coding rules, conventions, and restrictions defined in these files when writing code.

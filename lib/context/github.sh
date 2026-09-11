@@ -30,3 +30,22 @@ print()
 print(d.get("body") or "_No description._")
 PY
 }
+
+# prints a pull request's head branch, asking gh with the canonical url
+context_pr_branch_github() {
+    local url="$1"
+    local re='^https?://(www\.)?github\.com/([^/[:space:]]+)/([^/[:space:]]+)/pull/([0-9]+)([/?#].*)?$'
+    [[ "$url" =~ $re ]] || return 1
+    local canonical="https://github.com/${BASH_REMATCH[2]}/${BASH_REMATCH[3]}/pull/${BASH_REMATCH[4]}"
+    local json
+    json=$(gh pr view "$canonical" --json headRefName 2>/dev/null) || return 1
+    CW_GH_JSON="$json" python3 -c '
+import json, os, sys
+try:
+    branch = json.loads(os.environ["CW_GH_JSON"]).get("headRefName") or ""
+except Exception:
+    sys.exit(1)
+if not branch:
+    sys.exit(1)
+print(branch, end="")'
+}

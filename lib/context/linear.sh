@@ -13,7 +13,7 @@ context_fetch_linear() {
         key=$(sed -n 's/^LINEAR_API_KEY=//p' "$CW_HOME/tokens.env" | head -1)
     [[ -n "$key" ]] || return 1
     local api="${CW_LINEAR_API:-https://api.linear.app/graphql}"
-    CW_LINEAR_KEY="$key" CW_LINEAR_ID="$id" CW_LINEAR_URL="$api" python3 - <<'PY'
+    CW_LINEAR_KEY="$key" CW_LINEAR_ID="$id" CW_LINEAR_URL="$api" CW_LINEAR_META="${CW_CONTEXT_META:-}" python3 - <<'PY'
 import json, os, sys, urllib.request
 q = """query($id:String!){issue(id:$id){identifier title description branchName priority
       comments{nodes{body}}}}"""
@@ -31,6 +31,10 @@ except Exception as e:
 i = (d.get("data") or {}).get("issue")
 if not i:
     sys.exit(1)
+# the branch goes to cw as json too, so it never has to parse the markdown
+if os.environ["CW_LINEAR_META"] and i.get("branchName"):
+    with open(os.environ["CW_LINEAR_META"], "w") as f:
+        json.dump({"branch": i["branchName"]}, f)
 print(f"**{i['identifier']} — {i['title']}**")
 if i.get("branchName"):
     print(f"Branch: `{i['branchName']}`")
