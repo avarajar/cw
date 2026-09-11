@@ -41,16 +41,20 @@ cw account add work
 This creates a config directory at `~/.cw/accounts/work/`. Then authenticate:
 
 ```bash
-cw launch work
-# In the Claude session: /login
+cw account login work --harness claude
 ```
+
+`--harness` defaults to the account's harness (`claude` unless set otherwise), so `cw account
+login work` also works once the account only ever uses one harness. `--no-browser` and
+`--with-api-key -` are also accepted, but what they do depends on the harness: today only Codex
+honors `--no-browser` (it adds its own device-code flag), and only a harness with an API-key
+import path accepts `--with-api-key -`. Claude's login is always the interactive browser flow.
 
 If you have multiple accounts (work + personal), add them separately:
 
 ```bash
 cw account add personal
-cw launch personal
-# /login with different credentials
+cw account login personal --harness claude
 ```
 
 ### 3. Register Your Projects

@@ -1,4 +1,9 @@
-# CW Demo — Claude Workspace Manager
+# CW Demo — the same ticket opened on two harnesses
+# Assumes a real cw on PATH with an initialized ~/.cw
+# Assumes "demo-app" is registered under a claude account and a codex account
+# Only the claude leg has been run against a real binary as of 0.3.0
+# The codex leg is aspirational until codex is installed and this is re-recorded
+# Not yet recorded — no vhs binary was available when this script was written
 Output docs/assets/demo.gif
 
 Set Shell "zsh"
@@ -10,54 +15,18 @@ Set Padding 20
 Set TypingSpeed 40ms
 Set CursorBlink false
 
-# Use the mock cw for demo
-Env PATH "/Users/joselito/Workspace/personal/cw-repo/docs/assets:$PATH"
-Env CW_DEMO "1"
-
-# Help
+# Open ticket SEI-214 on the account's default harness (claude)
 Sleep 0.5s
-Type "cw help"
-Enter
-Sleep 3s
-
-# Accounts
-Type "cw account list"
-Enter
-Sleep 2.5s
-
-# Projects
-Type "cw project list"
-Enter
-Sleep 2.5s
-
-# Work on a Linear ticket
-Type "cw work noteflow https://linear.app/team/issue/AUTH-247"
+Type "cw work demo-app SEI-214"
 Enter
 Sleep 4s
 
-# Check active spaces
+# Open the same ticket on a second account, this time on codex
+Type "cw work demo-app SEI-214 --harness codex"
+Enter
+Sleep 4s
+
+# Both sessions, with their harness column
 Type "cw spaces"
 Enter
 Sleep 3s
-
-# Review a PR
-Type "cw review noteflow 42"
-Enter
-Sleep 4s
-
-# Check spaces with everything active
-Type "cw spaces"
-Enter
-Sleep 3s
-
-# Close the review
-Type "cw review noteflow 42 --done"
-Enter
-Sleep 2.5s
-
-# Create a new project
-Type 'cw create "Habit tracker with streaks and analytics"'
-Enter
-Sleep 4s
-
-Sleep 2s

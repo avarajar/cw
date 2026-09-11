@@ -35,6 +35,49 @@ CW launches Claude with the correct account, fetches the ticket from Linear, cre
 
 ---
 
+## One Flow, Any Harness
+
+`cw work`, `review`, `loop`, `plan`, `create` and `open` don't hard-code Claude Code. Each goes
+through a driver layer, so the same command runs on whichever coding-agent CLI ("harness") the
+account is bound to:
+
+```bash
+cw work my-app fix-auth                    # uses the account's own harness
+cw work my-app fix-auth --harness codex    # same task, run on Codex CLI instead
+```
+
+Four harnesses ship today — `claude`, `codex`, `pi`, `opencode` — each with a driver in
+`lib/harnesses/`. **Only `claude` has been exercised against a real installed binary.** The
+`codex`, `pi` and `opencode` drivers are tested against recording fakes, not the real CLIs, so
+treat them as reviewed rather than field-proven until someone runs them against the genuine
+binary. `cw doctor` and `cw harness list` tell you which harnesses are actually installed on
+your machine.
+
+Accounts aren't limited to Claude's own login — a harness, a provider and a model are all
+per-account fields:
+
+```bash
+cw account add glm --harness opencode --provider zai --model glm-5.1
+cw account login glm --harness opencode
+```
+
+`cw account login` also takes `--no-browser` (print a URL/device code instead of opening a
+browser — only honored by harnesses that implement a device-code flow; Codex is the one that
+does today) and `--with-api-key -` (read a key from stdin, for a harness with an API-key import
+path).
+
+Not every harness supports every feature `cw` knows about (agent teams, MCP, hooks,
+skip-permissions, a statusline, and more). Before using one, `cw` checks the harness's declared
+capabilities: a command that can proceed without a capability degrades — one dim warning, then
+continues — while a command that is meaningless without it (`cw mcp` on a harness with no MCP
+support) errors instead of silently doing nothing.
+
+The workflow stays portable because `cw` itself fetches Linear, GitHub and Notion context into
+`TASK_NOTES.md` before it launches anything — Linear via `LINEAR_API_KEY`, GitHub via the `gh`
+CLI's own auth, Notion via `NOTION_TOKEN` (env var or `~/.cw/tokens.env`). That context doesn't
+depend on the harness having its own MCP connectors; if no credential is configured, `cw` falls
+back to asking the agent to fetch it itself, same as before.
+
 ## Quick Start
 
 ```bash
@@ -44,7 +87,7 @@ git clone https://github.com/avarajar/cw.git && cd cw && ./install.sh
 # Setup
 cw init
 cw account add work
-cw launch work                    # authenticate with /login
+cw account login work --harness claude
 cw project register ~/code/my-app --account work
 
 # Go
@@ -297,10 +340,11 @@ CW finds the best review skill for each project:
 
 ### Requirements
 
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI — the default harness, and the only one this project has actually run against a real binary
 - Git 2.15+
 - Python 3.6+
 - Bash 4+ or Zsh
+- *(Optional)* Codex CLI, Pi, or OpenCode, if you want an account to use one of those harnesses instead
 
 ### Setup
 
@@ -440,6 +484,14 @@ No. You can use plain branch names (`cw work my-app fix-auth`). URL integration 
 | `cw arcade` | Live activity dashboard |
 | `cw arcade --setup` | Install activity hooks |
 | `cw account add\|list\|remove` | Manage accounts |
+| `cw account add <name> --harness <h> --provider <p> --model <m>` | Create an account for a specific harness/provider/model |
+| `cw account login <name> --harness <h>` | Authenticate an account for a harness |
+| `cw account migrate <name>` | Move a flat account's Claude state into `<account>/claude/` |
+| `cw harness list` | Show the harnesses cw knows about and which are installed |
+| `cw harness doctor` | Alias for `cw doctor` |
+| `cw doctor --json` | Machine-readable health and account × harness matrix |
+| `cw spaces --json` | Machine-readable active spaces |
+| `cw work <project> <task> --harness <h>` | Run this task on a specific harness (also on `review`, `loop`, `plan`, `create`, `open`, `project register`) |
 | `cw project register\|list\|info` | Manage projects |
 | `cw project setup-mcps <name>` | Configure MCPs for a project |
 | `cw project setup-agents <name>` | Install agents for a project |
