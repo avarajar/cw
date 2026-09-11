@@ -2870,6 +2870,19 @@ Set up the workspace:
             fi
         fi
 
+        # a non-claude fallback prompt attaches an existing branch instead of deleting it
+        if [[ "$CW_HARNESS" != "claude" ]] && ! $cw_worktree; then
+            init_prompt=$(CW_P="$init_prompt" CW_T="$task" python3 -c '
+import os, re
+t = os.environ["CW_T"]
+def attach(m):
+    n, what, branch = m.group(1), m.group(2), m.group(3)
+    return (f"{n}. If {what} exists locally, do not delete or reset it: attach the worktree to it "
+            f"with `git worktree add .tasks/{t} {branch}` and skip step {int(n) + 1}.")
+step = r"^(\d+)\. If (.+?) exists locally, delete it: `?git branch -D (\S+?)`? \(ignore errors\)$"
+print(re.sub(step, attach, os.environ["CW_P"], flags=re.M), end="")')
+        fi
+
         # a worktree cw already created gets a prompt with no setup steps in it
         if $cw_worktree; then
             local _lead="" _fill="" _read="Read TASK_NOTES.md for context."

@@ -346,6 +346,39 @@ SLOW
     [ "$(worktree_count "$path")" -eq 3 ]
 }
 
+@test "the fallback prompt tells a non-claude agent to attach an existing branch, never to delete it" {
+    local path; path="$(make_project app)"
+    commit_on "$path" fix-auth
+    run "$CW_BIN" work app fix-auth --harness codex
+    [ "$status" -eq 0 ]
+    [ "$(warnings)" -eq 1 ]
+    [[ "$(call 1)" != *"git branch -D"* ]]
+    [[ "$(call 1)" == *"If branch fix-auth exists locally, do not delete or reset it: attach the worktree to it with \`git worktree add .tasks/fix-auth fix-auth\` and skip step 3."* ]]
+    [[ "$(call 1)" == *"git worktree add .tasks/fix-auth -b fix-auth"* ]]
+}
+
+@test "no non-claude fallback prompt asks the agent to delete a branch, for any task source" {
+    make_project app >/dev/null
+    local t bad="" n=0
+    for t in plain-task https://github.com/org/repo/issues/1 https://github.com/org/repo/pull/42 \
+             https://linear.app/x/issue/SEI-214 https://www.notion.so/Spec-1234567890abcdef1234567890abcdef; do
+        rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
+        run bash -c "unset LINEAR_API_KEY NOTION_TOKEN; '$CW_BIN' work app '$t' --harness codex"
+        [[ "$(call 1)" == *"git branch -D"* ]] && bad="$bad [$t deletes]"
+        [[ "$(call 1)" == *"do not delete or reset it: attach the worktree to it"* ]] || bad="$bad [$t no attach]"
+        n=$((n + 1))
+    done
+    [ "$n" -eq 5 ]
+    [ -z "$bad" ] || { echo "$bad" >&2; return 1; }
+}
+
+@test "claude's legacy prompt still carries its git branch -D step" {
+    make_project app >/dev/null
+    run "$CW_BIN" work app fix-auth
+    [ "$status" -eq 0 ]
+    [[ "$(call 1)" == *"2. If branch fix-auth exists locally, delete it: git branch -D fix-auth (ignore errors)"* ]]
+}
+
 @test "a branch name git would reject is refused before cw fetches or runs git with it" {
     local path; path="$(make_origin_project app)"
     local body
