@@ -415,7 +415,7 @@ _resolve_harness() {
         # an unreadable session must never fall back to a harness it did not record
         if ! recorded=$(_session_field "$session_meta" harness); then
             _err "Cannot read $session_meta — refusing to launch rather than guess its harness."
-            _err "Fix the file, or close the session with --done and start again."
+            _err "Fix the file, or close the session with --done, which sets it aside, and start again."
             return 1
         fi
         [[ -z "$recorded" ]] && recorded="$CW_HARNESS_DEFAULT"
@@ -648,17 +648,23 @@ with open(p, 'w') as f: json.dump(meta, f, indent=2)
 PY
 }
 
-# marks a session done
+# marks a session done; an unreadable one is set aside so the task can start fresh
 _session_close() {
-    CW_META="$1" python3 - <<'PY'
-import json, os
+    CW_META="$1" python3 - <<'PY' 2>/dev/null && return 0
+import json, os, sys
 from datetime import datetime, timezone
 p = os.environ['CW_META']
-with open(p) as f: meta = json.load(f)
+try:
+    with open(p) as f: meta = json.load(f)
+except Exception:
+    sys.exit(2)
+if not isinstance(meta, dict):
+    sys.exit(2)
 meta['status'] = 'done'
 meta['closed'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 with open(p, 'w') as f: json.dump(meta, f, indent=2)
 PY
+    mv "$1" "$1.unreadable" && _warn "Set aside an unreadable $1 as $1.unreadable"
 }
 
 # prints which harnesses are installed on this machine
@@ -2250,15 +2256,7 @@ cmd_loop() {
         local session_dir="$CW_HOME/sessions/$name/loop-$slug"
         _log "Closing loop: ${C}$name${NC} ${Y}$slug${NC}"
         if [[ -f "$session_dir/session.json" ]]; then
-            CW_META_FILE="$session_dir/session.json" python3 - <<'PYEOF'
-import json, os
-from datetime import datetime, timezone
-p = os.environ['CW_META_FILE']
-with open(p) as f: meta = json.load(f)
-meta['status'] = 'done'
-meta['closed'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-with open(p, 'w') as f: json.dump(meta, f, indent=2)
-PYEOF
+            _session_close "$session_dir/session.json"
         fi
         _log "${G}Loop $slug closed${NC}"
         echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) DONE $name loop=$slug" >> "$CW_SESSIONS_LOG"

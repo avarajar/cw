@@ -113,3 +113,26 @@ session_get() {
     [ "$status" -ne 0 ]
     [ "$(call_count)" -eq 0 ]
 }
+
+@test "a url with a backslash and a double quote round-trips through session.json" {
+    make_project app >/dev/null
+    local url='https://example.com/a\\b"c'"'"'d'
+    run "$CW_BIN" work app "$url"
+    [ "$status" -eq 0 ]
+    local meta; meta=$(find "$CW_HOME/sessions/app" -name session.json | head -1)
+    [ "$(session_get "$meta" source_url)" = "$url" ]
+}
+
+@test "--done on an unreadable session sets it aside so the task can start fresh" {
+    make_project app >/dev/null
+    "$CW_BIN" work app fix-auth --harness codex
+    printf 'garbage' > "$CW_HOME/sessions/app/task-fix-auth/session.json"
+    run "$CW_BIN" work app fix-auth --done
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"Traceback"* ]]
+    [ -f "$CW_HOME/sessions/app/task-fix-auth/session.json.unreadable" ]
+    rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
+    run "$CW_BIN" work app fix-auth
+    [ "$status" -eq 0 ]
+    [ "$(call_count)" -eq 1 ]
+}
