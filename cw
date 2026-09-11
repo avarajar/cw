@@ -1998,7 +1998,7 @@ cmd_review() {
 
     if $is_new; then
         _log "New review: ${C}$name${NC} PR #${Y}$pr${NC}"
-        _dim "  Model: ${model:-claude default}"
+        _dim "  Model: ${model:-$harness default}"
 
         # Save session metadata
         CW_S_PROJECT="$name" CW_S_PR="$pr" CW_S_ACCOUNT="$account" CW_S_MODEL="$model" \
@@ -2051,7 +2051,7 @@ PYEOF
     else
         # Existing review - update metadata
         _log "Resuming review: ${C}$name${NC} PR #${Y}$pr${NC}"
-        _dim "  Model: ${model:-claude default}"
+        _dim "  Model: ${model:-$harness default}"
         _session_touch "$session_meta" "$model_override"
     fi
 
@@ -2325,7 +2325,7 @@ cmd_loop() {
 
     if $is_new; then
         _log "New loop: ${C}$name${NC} ${Y}$slug${NC} (${interval:-self-paced})"
-        _dim "  Model: ${model:-claude default}"
+        _dim "  Model: ${model:-$harness default}"
 
         # Save session metadata (env vars → python, no quote injection)
         CW_L_PROJECT="$name" CW_L_SLUG="$slug" CW_L_ACCOUNT="$account" CW_L_MODEL="$model" \
@@ -2378,7 +2378,7 @@ PYEOF
         } > "$notes_file"
     else
         _log "Resuming loop: ${C}$name${NC} ${Y}$slug${NC}"
-        _dim "  Model: ${model:-claude default}"
+        _dim "  Model: ${model:-$harness default}"
         CW_L_META="$session_meta" CW_L_MODEL="$model_override" python3 - <<'PYEOF'
 import json, os
 from datetime import datetime, timezone
@@ -2683,7 +2683,7 @@ cmd_work() {
 
     if $is_new; then
         _log "New task: ${C}$name${NC} task=${Y}$task${NC}"
-        _dim "  Model: ${model:-claude default}"
+        _dim "  Model: ${model:-$harness default}"
 
         # Create notes file in session dir (skip if Forge already pre-wrote one with description)
         if [[ ! -f "$notes_file" ]]; then
@@ -3006,7 +3006,7 @@ PYEOF
 
     else
         _log "Resuming task: ${C}$name${NC} task=${Y}$task${NC}"
-        _dim "  Model: ${model:-claude default}"
+        _dim "  Model: ${model:-$harness default}"
         _session_touch "$session_meta" "$model_override"
     fi
 
@@ -3929,7 +3929,7 @@ cmd_plan() {
     local provider; provider="$(_resolve_provider "$account" "$harness")"
 
     _log "Planning: ${C}$name${NC} — ${Y}$description${NC}"
-    _dim "  Model: ${model:-claude default}"
+    _dim "  Model: ${model:-$harness default}"
     _ensure_statusline "$acct_dir"
 
     local plan_prompt="You are a technical project planner. Analyze this project and create an implementation plan.
@@ -5978,7 +5978,7 @@ PYEOF
     printf '%s' "$init_prompt" > "$prompt_file"
 
     _log "Launching Claude..."
-    _dim "  Model: ${model:-claude default}"
+    _dim "  Model: ${model:-$harness default}"
     [[ -n "$team_env" ]] && _log "Agent teams ${G}enabled${NC}"
     _ensure_statusline "$acct_dir"
 

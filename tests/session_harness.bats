@@ -221,3 +221,26 @@ PY
     [ "$status" -eq 0 ]
     [[ "$output" == *"Launching Claude"* ]]
 }
+
+@test "plan on codex with no model names codex's default, not claude's" {
+    make_project app >/dev/null
+    run "$CW_BIN" plan app "migrate auth" --harness codex
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Model: codex default"* ]]
+    [[ "$output" != *"claude default"* ]]
+}
+
+@test "work on codex with no model names codex's default, not claude's" {
+    make_project app >/dev/null
+    run "$CW_BIN" work app fix-auth --harness codex
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Model: codex default"* ]]
+    [[ "$output" != *"claude default"* ]]
+}
+
+@test "plan on claude with no model keeps its message" {
+    make_project app >/dev/null
+    run "$CW_BIN" plan app "migrate auth"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Model: claude default"* ]]
+}
