@@ -402,3 +402,40 @@ print(\"ok\")'"
     [ -f "$root/claude/.claude.json" ]
     [ -f "$root/meta.json" ]
 }
+
+# a user driver named aider, with its own credential dir under the account
+seed_user_driver() {
+    mkdir -p "$CW_HOME/harnesses" "$CW_HOME/accounts/acct/aider"
+    sed 's/claude_/aider_/g; s/(claude /(aider /g' "$BATS_TEST_DIRNAME/../lib/harnesses/claude.sh" \
+        > "$CW_HOME/harnesses/aider.sh"
+    echo '{"token":"aider-secret"}' > "$CW_HOME/accounts/acct/aider/auth.json"
+}
+
+@test "migrate leaves a user driver's credential dir at the root" {
+    seed_user_driver
+    run "$CW_BIN" account migrate acct
+    [ "$status" -eq 0 ]
+    [ -f "$CW_HOME/accounts/acct/aider/auth.json" ]
+    [ ! -e "$CW_HOME/accounts/acct/claude/aider" ]
+}
+
+@test "harness list includes a user driver" {
+    seed_user_driver
+    run "$CW_BIN" harness list
+    [[ "$output" == *"aider"*"user driver"* ]]
+}
+
+@test "doctor lists a user driver in its inventory and its account matrix" {
+    seed_user_driver
+    run bash -c "'$CW_BIN' doctor --json | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+inv = {h[\"name\"]: h for h in d[\"harnesses\"]}
+assert inv[\"aider\"][\"source\"] == \"user\", inv
+hs = [h[\"harness\"] for h in d[\"accounts\"][0][\"harnesses\"]]
+assert \"aider\" in hs, hs
+print(\"ok\")'"
+    [ "$output" = "ok" ]
+    run "$CW_BIN" doctor
+    [[ "$output" == *"harness drivers:"*"aider (user)"* ]]
+}

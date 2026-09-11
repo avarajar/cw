@@ -228,7 +228,8 @@ _account_scan_dir() {
 # true when a root entry belongs to cw itself or to a harness of its own
 _account_entry_owned() {
     local base="$1" keep
-    for keep in $CW_ACCOUNT_OWNED $CW_HARNESS_ALL; do
+    [[ -n "${_CW_OWNED_NAMES:-}" ]] || _CW_OWNED_NAMES="$CW_ACCOUNT_OWNED $(_harness_names)"
+    for keep in $_CW_OWNED_NAMES; do
         [[ "$base" == "$keep" ]] && return 0
     done
     return 1
@@ -471,6 +472,18 @@ CW_HARNESS_DEFAULT="claude"
 _CW_HARNESS_ENV=""
 CW_HARNESS_ALL="claude codex pi opencode"
 
+# every harness cw knows: the built-ins, then any user driver in $CW_HOME/harnesses
+_harness_names() {
+    local names="$CW_HARNESS_ALL" f n
+    for f in "$CW_HOME"/harnesses/*.sh; do
+        [[ -f "$f" ]] || continue
+        n="$(basename "$f" .sh)"
+        [[ "$n" =~ ^[A-Za-z0-9_-]+$ ]] || continue
+        [[ " $names " == *" $n "* ]] || names="$names $n"
+    done
+    printf '%s' "$names"
+}
+
 # json-encodes a single string argument
 _json_str() {
     python3 -c "import json,sys; print(json.dumps(sys.argv[1]), end='')" "$1"
@@ -640,7 +653,7 @@ PY
 _harness_inventory_json() {
     local first=true h path ver src
     printf '['
-    for h in $CW_HARNESS_ALL; do
+    for h in $(_harness_names); do
         $first || printf ','
         first=false
         src="builtin"; [[ -f "$CW_HOME/harnesses/$h.sh" ]] && src="user"
@@ -671,7 +684,7 @@ _doctor_matrix_json() {
             "$(_json_str "$account")" "$(_json_str "${root%/}")" \
             "$layout" "$(_json_str "$(_account_default_harness "$account")")"
         local first_h=true
-        for h in $CW_HARNESS_ALL; do
+        for h in $(_harness_names); do
             $first_h || printf ','
             first_h=false
             dir="$(_harness_dir "$account" "$h")"
@@ -3386,6 +3399,14 @@ cmd_doctor() {
         warnings=$((warnings+1))
     fi
 
+    # ── Harness drivers ──────────────────────────────────────────────────
+    local drv drv_list=""
+    for drv in $(_harness_names); do
+        [[ -f "$CW_HOME/harnesses/$drv.sh" ]] && drv="$drv (user)"
+        drv_list="${drv_list:+$drv_list, }$drv"
+    done
+    echo -e "  ${G}✓${NC} harness drivers: ${DIM}$drv_list${NC}"
+
     # ── CW initialized ──────────────────────────────────────────────────
     if [[ -f "$CW_CONFIG" ]]; then
         echo -e "  ${G}✓${NC} CW initialized ($CW_HOME)"
@@ -3522,10 +3543,11 @@ cmd_harness() {
     case "$sub" in
         list|ls)
             echo -e "\n${BOLD}Harnesses${NC}\n"
-            local h mark
-            for h in $CW_HARNESS_ALL; do
+            local h mark src
+            for h in $(_harness_names); do
                 if command -v "$h" &>/dev/null; then mark="${G}✓${NC}"; else mark="${DIM}—${NC}"; fi
-                echo -e "  $mark ${C}$h${NC}"
+                src=""; [[ -f "$CW_HOME/harnesses/$h.sh" ]] && src="  ${DIM}(user driver)${NC}"
+                echo -e "  $mark ${C}$h${NC}$src"
             done
             echo ""
             ;;
