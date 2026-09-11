@@ -3363,23 +3363,14 @@ cmd_status() {
 # ════════════════════════════════════════════════════════════════════════════
 # DOCTOR — Health check
 # ════════════════════════════════════════════════════════════════════════════
-cmd_doctor() {
-    local json_out=false
-    while [[ $# -gt 0 ]]; do
-        case "$1" in --json) json_out=true; shift ;; *) shift ;; esac
-    done
+# records one doctor finding: level (ok, warn, issue), code, the human line, plain text, count
+_doctor_add() {
+    DOCTOR_RECORDS+=("$1"$'\x1f'"$2"$'\x1f'"$3"$'\x1f'"${4:-}"$'\x1f'"${5:-}")
+}
 
-    if $json_out; then
-        printf '{"schema":1,"cw_version":"%s","cw_home":%s,"generated":"%s",' \
-            "$CW_VERSION" "$(_json_str "$CW_HOME")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        printf '"harnesses":%s,' "$(_harness_inventory_json)"
-        printf '"accounts":%s,' "$(_doctor_matrix_json)"
-        printf '"issues":[],"warnings":[]}\n'
-        return 0
-    fi
-
-    echo -e "\n${BOLD}CW Doctor${NC}\n"
-    local issues=0 warnings=0
+# runs every doctor check once, so the human report and --json can never disagree
+_doctor_checks() {
+    DOCTOR_RECORDS=()
 
     # ── Git ──────────────────────────────────────────────────────────────
     if command -v git &>/dev/null; then
@@ -3388,31 +3379,27 @@ cmd_doctor() {
         major=$(echo "$git_ver" | cut -d. -f1)
         minor=$(echo "$git_ver" | cut -d. -f2)
         if [[ $major -lt 2 ]] || [[ $major -eq 2 && $minor -lt 15 ]]; then
-            echo -e "  ${R}✗${NC} git $git_ver (need 2.15+)"
-            issues=$((issues+1))
+            _doctor_add issue git_too_old "  ${R}✗${NC} git $git_ver (need 2.15+)" "git $git_ver (need 2.15+)"
         else
-            echo -e "  ${G}✓${NC} git $git_ver"
+            _doctor_add ok git "  ${G}✓${NC} git $git_ver"
         fi
     else
-        echo -e "  ${R}✗${NC} git not found"
-        issues=$((issues+1))
+        _doctor_add issue git_missing "  ${R}✗${NC} git not found" "git not found"
     fi
 
     # ── Python3 ──────────────────────────────────────────────────────────
     if command -v python3 &>/dev/null; then
         local py_ver; py_ver=$(python3 --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
-        echo -e "  ${G}✓${NC} python3 $py_ver"
+        _doctor_add ok python3 "  ${G}✓${NC} python3 $py_ver"
     else
-        echo -e "  ${R}✗${NC} python3 not found"
-        issues=$((issues+1))
+        _doctor_add issue python3_missing "  ${R}✗${NC} python3 not found" "python3 not found"
     fi
 
     # ── Claude CLI ───────────────────────────────────────────────────────
     if command -v claude &>/dev/null; then
-        echo -e "  ${G}✓${NC} claude CLI found"
+        _doctor_add ok claude "  ${G}✓${NC} claude CLI found"
     else
-        echo -e "  ${Y}!${NC} claude CLI not found"
-        warnings=$((warnings+1))
+        _doctor_add warn claude_missing "  ${Y}!${NC} claude CLI not found" "claude CLI not found"
     fi
 
     # ── Harness drivers ──────────────────────────────────────────────────
@@ -3421,65 +3408,67 @@ cmd_doctor() {
         [[ -f "$CW_HOME/harnesses/$drv.sh" ]] && drv="$drv (user)"
         drv_list="${drv_list:+$drv_list, }$drv"
     done
-    echo -e "  ${G}✓${NC} harness drivers: ${DIM}$drv_list${NC}"
+    _doctor_add ok harness_drivers "  ${G}✓${NC} harness drivers: ${DIM}$drv_list${NC}"
 
     # ── CW initialized ──────────────────────────────────────────────────
     if [[ -f "$CW_CONFIG" ]]; then
-        echo -e "  ${G}✓${NC} CW initialized ($CW_HOME)"
+        _doctor_add ok initialized "  ${G}✓${NC} CW initialized ($CW_HOME)"
     else
-        echo -e "  ${Y}!${NC} CW not initialized — run ${C}cw init${NC}"
-        warnings=$((warnings+1))
+        _doctor_add warn not_initialized "  ${Y}!${NC} CW not initialized — run ${C}cw init${NC}" \
+            "CW not initialized — run cw init"
     fi
 
     # ── Accounts ─────────────────────────────────────────────────────────
-    local acct_count=0
+    local acct_count=0 dir
     if [[ -d "$CW_ACCOUNTS_DIR" ]]; then
         for dir in "$CW_ACCOUNTS_DIR"/*/; do
             [[ -d "$dir" ]] && acct_count=$((acct_count+1))
         done
     fi
     if [[ $acct_count -gt 0 ]]; then
-        echo -e "  ${G}✓${NC} $acct_count account(s)"
+        _doctor_add ok accounts "  ${G}✓${NC} $acct_count account(s)"
         for dir in "$CW_ACCOUNTS_DIR"/*/; do
             [[ -d "$dir" ]] || continue
             local n; n=$(basename "$dir")
             local hstatus; hstatus="$(_account_harness_status "$n")"
             if [[ "$hstatus" == "connected" ]]; then
-                echo -e "    ${G}✓${NC} $n — authenticated"
+                _doctor_add ok account "    ${G}✓${NC} $n — authenticated"
             elif [[ "$hstatus" == "local" ]]; then
-                echo -e "    ${G}✓${NC} $n — local (no login needed)"
+                _doctor_add ok account "    ${G}✓${NC} $n — local (no login needed)"
             elif [[ "$hstatus" == "not_installed" ]]; then
                 local nh; nh="$(_account_default_harness "$n")"
-                echo -e "    ${Y}!${NC} $n — ${Y}$nh not installed${NC} (install the $nh CLI first)"
-                warnings=$((warnings+1))
+                _doctor_add warn harness_not_installed \
+                    "    ${Y}!${NC} $n — ${Y}$nh not installed${NC} (install the $nh CLI first)" \
+                    "$n — $nh not installed (install the $nh CLI first)"
             else
-                echo -e "    ${Y}!${NC} $n — ${Y}not authenticated${NC} (run ${C}cw launch $n${NC} then /login)"
-                warnings=$((warnings+1))
+                _doctor_add warn not_authenticated \
+                    "    ${Y}!${NC} $n — ${Y}not authenticated${NC} (run ${C}cw launch $n${NC} then /login)" \
+                    "$n — not authenticated (run cw launch $n then /login)"
             fi
         done
     else
-        echo -e "  ${Y}!${NC} No accounts — run ${C}cw account add <name>${NC}"
-        warnings=$((warnings+1))
+        _doctor_add warn no_accounts "  ${Y}!${NC} No accounts — run ${C}cw account add <name>${NC}" \
+            "No accounts — run cw account add <name>"
     fi
 
     # ── Projects ─────────────────────────────────────────────────────────
     local proj_count=0
     [[ -f "$CW_REGISTRY" ]] && proj_count=$(python3 -c "import json; print(len(json.load(open('$CW_REGISTRY'))))" 2>/dev/null || echo 0)
     if [[ "$proj_count" -gt 0 ]]; then
-        echo -e "  ${G}✓${NC} $proj_count project(s) registered"
-        # Check for projects with missing paths
-        python3 -c "
+        _doctor_add ok projects "  ${G}✓${NC} $proj_count project(s) registered"
+        local p
+        while IFS= read -r p; do
+            [[ -n "$p" ]] || continue
+            _doctor_add warn project_path_missing "    ${Y}!${NC} $p — path missing" "$p — path missing"
+        done < <(python3 -c "
 import json, os
 with open('$CW_REGISTRY') as f: reg = json.load(f)
 for n, i in reg.items():
     if not os.path.isdir(i.get('path', '')): print(n)
-" 2>/dev/null | while IFS= read -r p; do
-            echo -e "    ${Y}!${NC} $p — path missing"
-            warnings=$((warnings+1))
-        done
+" 2>/dev/null)
     else
-        echo -e "  ${Y}!${NC} No projects — run ${C}cw project register${NC}"
-        warnings=$((warnings+1))
+        _doctor_add warn no_projects "  ${Y}!${NC} No projects — run ${C}cw project register${NC}" \
+            "No projects — run cw project register"
     fi
 
     # ── Workflow templates ───────────────────────────────────────────────
@@ -3487,10 +3476,10 @@ for n, i in reg.items():
     if [[ -d "$wf_dir" ]] && ls "$wf_dir"/*.md &>/dev/null; then
         local wf_count; wf_count=$(ls "$wf_dir"/*.md 2>/dev/null | wc -l | tr -d ' ')
         local wf_names; wf_names=$(ls "$wf_dir"/*.md 2>/dev/null | xargs -I{} basename {} .md | tr '\n' ' ')
-        echo -e "  ${G}✓${NC} $wf_count workflow(s): ${DIM}$wf_names${NC}"
+        _doctor_add ok workflows "  ${G}✓${NC} $wf_count workflow(s): ${DIM}$wf_names${NC}"
     else
-        echo -e "  ${Y}!${NC} No workflow templates — run ${C}cw init${NC}"
-        warnings=$((warnings+1))
+        _doctor_add warn no_workflows "  ${Y}!${NC} No workflow templates — run ${C}cw init${NC}" \
+            "No workflow templates — run cw init"
     fi
 
     # ── Stack definitions ─────────────────────────────────────────────
@@ -3498,20 +3487,20 @@ for n, i in reg.items():
     if [[ -d "$stack_dir" ]] && ls "$stack_dir"/*.sh &>/dev/null; then
         local st_count; st_count=$(ls "$stack_dir"/*.sh 2>/dev/null | wc -l | tr -d ' ')
         local st_names; st_names=$(ls "$stack_dir"/*.sh 2>/dev/null | xargs -I{} basename {} .sh | tr '\n' ' ')
-        echo -e "  ${G}✓${NC} $st_count stack(s): ${DIM}$st_names${NC}"
+        _doctor_add ok stacks "  ${G}✓${NC} $st_count stack(s): ${DIM}$st_names${NC}"
     else
-        echo -e "  ${Y}!${NC} No stack definitions — run ${C}cw init${NC}"
-        warnings=$((warnings+1))
+        _doctor_add warn no_stacks "  ${Y}!${NC} No stack definitions — run ${C}cw init${NC}" \
+            "No stack definitions — run cw init"
     fi
 
     # ── Stale sessions ───────────────────────────────────────────────────
     local stale; stale=$(_find_stale_spaces)
     if [[ -n "$stale" ]]; then
         local stale_count; stale_count=$(echo "$stale" | wc -l | tr -d ' ')
-        echo -e "  ${Y}!${NC} $stale_count stale session(s) — run ${C}cw clean${NC}"
-        warnings=$((warnings+1))
+        _doctor_add warn stale_sessions "  ${Y}!${NC} $stale_count stale session(s) — run ${C}cw clean${NC}" \
+            "$stale_count stale session(s) — run cw clean" "$stale_count"
     else
-        echo -e "  ${G}✓${NC} No stale sessions"
+        _doctor_add ok stale_sessions "  ${G}✓${NC} No stale sessions"
     fi
 
     # ── Orphaned worktrees ───────────────────────────────────────────────
@@ -3535,9 +3524,57 @@ print(count)
 " 2>/dev/null || echo 0)
     fi
     if [[ "$orphaned" -gt 0 ]]; then
-        echo -e "  ${Y}!${NC} $orphaned orphaned worktree dir(s)"
-        warnings=$((warnings+1))
+        _doctor_add warn orphaned_worktrees "  ${Y}!${NC} $orphaned orphaned worktree dir(s)" \
+            "$orphaned orphaned worktree dir(s)" "$orphaned"
     fi
+}
+
+# the issues and warnings arrays for doctor --json, built from the same checks
+_doctor_findings_json() {
+    _doctor_checks
+    local rec out=""
+    for rec in ${DOCTOR_RECORDS[@]+"${DOCTOR_RECORDS[@]}"}; do
+        out+="$rec"$'\x1e'
+    done
+    CW_DOCTOR_RECORDS="$out" python3 - <<'PY'
+import json, os
+issues, warnings = [], []
+for rec in filter(None, os.environ["CW_DOCTOR_RECORDS"].split("\x1e")):
+    level, code, _human, plain, count = rec.split("\x1f")
+    if level == "ok":
+        continue
+    item = {"code": code, "message": plain}
+    if count:
+        item["count"] = int(count)
+    (issues if level == "issue" else warnings).append(item)
+print('"issues":%s,"warnings":%s' % (json.dumps(issues), json.dumps(warnings)), end="")
+PY
+}
+
+cmd_doctor() {
+    local json_out=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in --json) json_out=true; shift ;; *) shift ;; esac
+    done
+
+    if $json_out; then
+        printf '{"schema":1,"cw_version":"%s","cw_home":%s,"generated":"%s",' \
+            "$CW_VERSION" "$(_json_str "$CW_HOME")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '"harnesses":%s,' "$(_harness_inventory_json)"
+        printf '"accounts":%s,' "$(_doctor_matrix_json)"
+        printf '%s}\n' "$(_doctor_findings_json)"
+        return 0
+    fi
+
+    echo -e "\n${BOLD}CW Doctor${NC}\n"
+    local issues=0 warnings=0 rec level human
+    _doctor_checks
+    for rec in ${DOCTOR_RECORDS[@]+"${DOCTOR_RECORDS[@]}"}; do
+        IFS=$'\x1f' read -r level _ human _ _ <<< "$rec"
+        echo -e "$human"
+        [[ "$level" == "issue" ]] && issues=$((issues+1))
+        [[ "$level" == "warn" ]] && warnings=$((warnings+1))
+    done
 
     # ── Summary ──────────────────────────────────────────────────────────
     echo ""
