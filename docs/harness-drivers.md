@@ -95,7 +95,7 @@ parse `cw`'s own argv.
 | `CW_SESSION_REF` | Harness-native session id recorded in `session.json`, or empty |
 | `CW_WORKDIR` | Directory the harness is launched in |
 | `CW_NOTES_FILE` | The session's notes file (`TASK_NOTES.md`, `REVIEW_NOTES.md`, `LOOP_NOTES.md`), or empty |
-| `CW_CONTINUE_LAST_SAFE` | Non-empty only when `cw` vouches that "the last conversation in `CW_WORKDIR`" can only be this session's — today, a task's own worktree that this session has already launched in. Never set for the shared project root, where reviews, loops and new tasks run |
+| `CW_CONTINUE_LAST_SAFE` | Non-empty only when `cw` vouches that "the last conversation in `CW_WORKDIR`" can only be this session's — today, a task's own worktree that this session has already launched in, which on every harness but claude `cw work` creates before the first launch. Never set for the shared project root, where reviews, loops, and a task whose worktree `cw` could not create run |
 | `CW_PROMPT` | Prompt text, or empty |
 | `CW_MODEL` | Resolved model, or empty |
 | `CW_PROVIDER` | Resolved provider, defaults to `native` |
