@@ -72,18 +72,14 @@ opencode_launch() {
     return 0
 }
 
-# unverified: whether --continue is scoped to the working directory the way codex's --last is
-# continue the last session here, then a recorded session id
+# only a recorded session id can be attributed to this session; --continue is never used
+# unverified: --continue picks opencode's last session with no confirmed per-worktree scope
 opencode_resume() {
     local attempt="$1"
+    [[ "$attempt" == "1" && -n "$CW_SESSION_REF" ]] || return 1
     _opencode_write_config
     _opencode_base
-    case "$attempt" in
-        1) HARNESS_ARGV=(opencode run "$CW_PROMPT" --continue) ;;
-        2) [[ -n "$CW_SESSION_REF" ]] || return 1
-           HARNESS_ARGV=(opencode run "$CW_PROMPT" --session "$CW_SESSION_REF") ;;
-        *) return 1 ;;
-    esac
+    HARNESS_ARGV=(opencode run "$CW_PROMPT" --session "$CW_SESSION_REF")
     [[ -n "$CW_MODEL" ]] && HARNESS_ARGV+=(--model "$(_opencode_model_ref)")
     return 0
 }

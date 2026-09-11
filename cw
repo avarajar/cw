@@ -542,7 +542,7 @@ _harness_launch() {
     _harness_exec
 }
 
-# tries each resume attempt until one succeeds
+# tries each resume attempt the driver can attribute to this session, then starts fresh
 _harness_resume() {
     local attempt=1 rc=1
     while :; do
@@ -552,20 +552,39 @@ _harness_resume() {
         rc=$?
         attempt=$((attempt + 1))
     done
-    return $rc
+    # claude's own chain already ends by starting a fresh named session
+    harness_supports resume_by_name && return $rc
+    _harness_resume_fresh
 }
 
-# records the harness's own session reference after a successful launch
+# the last resume rung: nothing attributable to resume, so start over from the notes file
+_harness_resume_fresh() {
+    local notes="${CW_NOTES_FILE:-}" nl=$'\n'
+    if [[ -n "$notes" ]]; then
+        _warn "No earlier $CW_HARNESS conversation can be attributed to this session — starting a fresh one from $notes"
+        CW_PROMPT="${CW_PROMPT:+$CW_PROMPT$nl$nl}The previous conversation for this session could not be resumed, so this one starts fresh. Read $notes first: it holds the objective, context and decisions so far."
+    else
+        _warn "No earlier $CW_HARNESS conversation can be attributed to this session — starting a fresh one"
+    fi
+    _harness_launch
+}
+
+# records the harness's own session reference and launch dir after a run
 _record_harness_ref() {
     local session_meta="$1"
     [[ -f "$session_meta" ]] || return 0
     local ref; ref=$(harness_session_ref 2>/dev/null || true)
-    [[ -n "$ref" ]] || return 0
-    CW_META="$session_meta" CW_REF="$ref" python3 - <<'PY'
+    local workdir=""
+    harness_supports resume_by_name || workdir="$PWD"
+    [[ -n "$ref" || -n "$workdir" ]] || return 0
+    CW_META="$session_meta" CW_REF="$ref" CW_WORKDIR_NOW="$workdir" python3 - <<'PY'
 import json, os
 p = os.environ['CW_META']
 with open(p) as f: meta = json.load(f)
-meta['harness_session_id'] = os.environ['CW_REF']
+if os.environ['CW_REF']:
+    meta['harness_session_id'] = os.environ['CW_REF']
+if os.environ['CW_WORKDIR_NOW']:
+    meta['harness_workdir'] = os.environ['CW_WORKDIR_NOW']
 with open(p, 'w') as f: json.dump(meta, f, indent=2)
 PY
 }
@@ -772,6 +791,9 @@ _harness_context() {
     _install_account_instructions "${CW_ACCOUNT:-}" "$CW_HARNESS" "$CW_HARNESS_DIR"
     CW_SESSION_NAME="${CW_SESSION_NAME:-}"
     CW_SESSION_REF="${CW_SESSION_REF:-}"
+    CW_WORKDIR="$PWD"
+    CW_NOTES_FILE="${CW_NOTES_FILE:-}"
+    CW_CONTINUE_LAST_SAFE="${CW_CONTINUE_LAST_SAFE:-}"
     CW_PROMPT="${CW_PROMPT:-}"
     CW_MODEL="${CW_MODEL:-}"
     CW_PROVIDER="${CW_PROVIDER:-native}"
@@ -2020,6 +2042,8 @@ If I say 'none', do not post. If I say 'edit', let me modify before posting."
         CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
         CW_PROMPT="$(cat "$prompt_file")"
         CW_SESSION_REF="$(_read_harness_ref "$session_meta")"
+        # reviews run in the shared project root, so "the last conversation here" is never ours
+        CW_NOTES_FILE="$notes_file" CW_CONTINUE_LAST_SAFE=""
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
         _harness_resume
@@ -2110,7 +2134,7 @@ If I say 'none', do not post. If I say 'edit', let me modify the findings before
         printf '%s' "$review_prompt" > "$prompt_file"
         CW_PROJECT="$name" CW_TASK="pr-$pr" CW_TASK_TYPE="review" CW_ACCOUNT="$account"
         CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
-        CW_PROMPT="$(cat "$prompt_file")"
+        CW_PROMPT="$(cat "$prompt_file")" CW_NOTES_FILE="$notes_file"
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
         _harness_launch
@@ -2320,7 +2344,7 @@ PYEOF
         printf '%s' "$init_prompt" > "$session_dir/loop_prompt.txt"
         CW_PROJECT="$name" CW_TASK="loop-$slug" CW_TASK_TYPE="loop" CW_ACCOUNT="$account"
         CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
-        CW_PROMPT="$(cat "$session_dir/loop_prompt.txt")"
+        CW_PROMPT="$(cat "$session_dir/loop_prompt.txt")" CW_NOTES_FILE="$notes_file"
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
         _harness_launch
@@ -2331,6 +2355,8 @@ PYEOF
         CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
         CW_PROMPT="$resume_prompt"
         CW_SESSION_REF="$(_read_harness_ref "$session_meta")"
+        # loops run in the shared project root, so "the last conversation here" is never ours
+        CW_NOTES_FILE="$notes_file" CW_CONTINUE_LAST_SAFE=""
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
         _harness_resume
@@ -2788,7 +2814,7 @@ After setting up the workspace, analyze the task scope and create an agent team 
 MANDATORY — Comment & notes style: Keep every comment to a single short line. Never write multi-line comment blocks or docstring-style explanations. This applies both to comments in code and to notes you write in TASK_NOTES.md or any task file. Comments must never reference task IDs, branch names, or GitHub/Linear issue or PR numbers — that context belongs in the PR description, not in the code. This rule is not optional; follow it in every file you touch."
         printf '%s' "$init_prompt" > "$prompt_file"
         CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
-        CW_TEAM_ENV="$team_env" CW_PROMPT="$(cat "$prompt_file")"
+        CW_TEAM_ENV="$team_env" CW_PROMPT="$(cat "$prompt_file")" CW_NOTES_FILE="$notes_file"
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
         _harness_launch
@@ -2825,6 +2851,11 @@ $acct_resume"
         CW_HARNESS_DIR="$acct_dir" CW_SESSION_NAME="$session_name" CW_MODEL="$model" CW_PROVIDER="$provider"
         CW_TEAM_ENV="$team_env" CW_PROMPT="$resume_msg"
         CW_SESSION_REF="$(_read_harness_ref "$session_meta")"
+        CW_NOTES_FILE="$notes_file" CW_CONTINUE_LAST_SAFE=""
+        # only the task's own worktree, already used by this session, holds nothing but ours
+        if [[ "$open_dir" == "$wt_dir" && "$(_session_field "$session_meta" harness_workdir)" == "$wt_dir" ]]; then
+            CW_CONTINUE_LAST_SAFE=1
+        fi
         _harness_load "$CW_HARNESS" || return 1
         _harness_context
         _harness_resume

@@ -90,7 +90,10 @@ parse `cw`'s own argv.
 | `CW_HARNESS` | Resolved harness name |
 | `CW_HARNESS_DIR` | This account's credential dir for `CW_HARNESS`, from `_harness_dir <account> <harness>` — the account root itself for a flat `claude` account, otherwise `<account root>/<harness>` |
 | `CW_SESSION_NAME` | `<account>/<project>/<task>`, or empty |
-| `CW_SESSION_REF` | Harness-native session id, or empty |
+| `CW_SESSION_REF` | Harness-native session id recorded in `session.json`, or empty |
+| `CW_WORKDIR` | Directory the harness is launched in |
+| `CW_NOTES_FILE` | The session's notes file (`TASK_NOTES.md`, `REVIEW_NOTES.md`, `LOOP_NOTES.md`), or empty |
+| `CW_CONTINUE_LAST_SAFE` | Non-empty only when `cw` vouches that "the last conversation in `CW_WORKDIR`" can only be this session's — today, a task's own worktree that this session has already launched in. Never set for the shared project root, where reviews, loops and new tasks run |
 | `CW_PROMPT` | Prompt text, or empty |
 | `CW_MODEL` | Resolved model, or empty |
 | `CW_PROVIDER` | Resolved provider, defaults to `native` |
@@ -118,6 +121,23 @@ HARNESS_ENV=(CODEX_HOME=/Users/x/.cw/accounts/monoku/codex)
 
 `_harness_launch` and `_harness_resume` reset both arrays to empty before calling into the driver,
 so a driver only ever needs to set what it uses.
+
+## Resume must be attributable
+
+`<h>_resume` may only offer an attempt that can be attributed to this session: a recorded
+`CW_SESSION_REF`, or "continue the last conversation" when `CW_CONTINUE_LAST_SAFE` is set. It must
+never offer "the last conversation here" in a directory other tasks share, because that silently
+reopens another task's conversation. When the driver has nothing safe to offer it returns 1 for
+attempt 1.
+
+After the driver's attempts are exhausted, `cw` itself takes the last rung for any harness without
+`resume_by_name`: it prints one line saying so and launches fresh with the resume prompt plus a
+pointer to `CW_NOTES_FILE`. Claude's own three-step chain is unchanged and ends inside its driver.
+
+`<h>_session_ref` runs after every launch. It may print an id only when it can prove the
+conversation is this session's; the codex driver looks for exactly one new rollout file under
+`$CODEX_HOME/sessions/` that mentions `CW_NOTES_FILE`, and prints nothing otherwise. That file
+layout is unverified against a real codex install, so the capture fails safe to a fresh start.
 
 ## A minimal custom driver
 

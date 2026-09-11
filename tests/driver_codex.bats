@@ -25,17 +25,17 @@ PY
     ! call_argv 1 | grep -q -- '--name'
 }
 
-@test "codex resume uses resume --last from the working directory" {
+@test "codex resume from the shared project root does not use resume --last" {
     local path; path="$(make_project app)"
     "$CW_BIN" work app fix-auth
     rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
     run "$CW_BIN" work app fix-auth
-    [ "$(call_argv 1 | sed -n 1p)" = "resume" ]
-    [ "$(call_argv 1 | sed -n 2p)" = "--last" ]
+    [ "$(call_count)" -eq 1 ]
+    [ "$(call_argv 1 | sed -n 1p)" != "resume" ]
     [ "$(call_field 1 cwd)" = "$path" ]
 }
 
-@test "codex resume falls back to a recorded session id" {
+@test "codex resume tries a recorded session id first" {
     make_project app >/dev/null
     "$CW_BIN" work app fix-auth
     python3 - "$CW_HOME/sessions/app/task-fix-auth/session.json" <<'PY'
@@ -45,12 +45,13 @@ m = json.load(open(p)); m["harness_session_id"] = "abc-123"
 json.dump(m, open(p, "w"))
 PY
     rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
-    CW_FAKE_EXIT_SEQ="1 0" run "$CW_BIN" work app fix-auth
-    [ "$(call_count)" -eq 2 ]
-    [ "$(call_argv 2 | sed -n 2p)" = "abc-123" ]
+    run "$CW_BIN" work app fix-auth
+    [ "$(call_count)" -eq 1 ]
+    [ "$(call_argv 1 | sed -n 1p)" = "resume" ]
+    [ "$(call_argv 1 | sed -n 2p)" = "abc-123" ]
 }
 
-@test "codex review resume falls back to a recorded session id" {
+@test "codex review resume tries a recorded session id first" {
     make_project app >/dev/null
     "$CW_BIN" review app 123
     python3 - "$CW_HOME/sessions/app/review-pr-123/session.json" <<'PY'
@@ -60,12 +61,12 @@ m = json.load(open(p)); m["harness_session_id"] = "review-abc-123"
 json.dump(m, open(p, "w"))
 PY
     rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
-    CW_FAKE_EXIT_SEQ="1 0" run "$CW_BIN" review app 123
-    [ "$(call_count)" -eq 2 ]
-    [ "$(call_argv 2 | sed -n 2p)" = "review-abc-123" ]
+    run "$CW_BIN" review app 123
+    [ "$(call_count)" -eq 1 ]
+    [ "$(call_argv 1 | sed -n 2p)" = "review-abc-123" ]
 }
 
-@test "codex loop resume falls back to a recorded session id" {
+@test "codex loop resume tries a recorded session id first" {
     make_project app >/dev/null
     "$CW_BIN" loop app "check the deploy" --name lp
     python3 - "$CW_HOME/sessions/app/loop-lp/session.json" <<'PY'
@@ -75,9 +76,9 @@ m = json.load(open(p)); m["harness_session_id"] = "loop-abc-123"
 json.dump(m, open(p, "w"))
 PY
     rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
-    CW_FAKE_EXIT_SEQ="1 0" run "$CW_BIN" loop app "check the deploy" --name lp
-    [ "$(call_count)" -eq 2 ]
-    [ "$(call_argv 2 | sed -n 2p)" = "loop-abc-123" ]
+    run "$CW_BIN" loop app "check the deploy" --name lp
+    [ "$(call_count)" -eq 1 ]
+    [ "$(call_argv 1 | sed -n 2p)" = "loop-abc-123" ]
 }
 
 @test "codex degrades agent teams instead of failing" {

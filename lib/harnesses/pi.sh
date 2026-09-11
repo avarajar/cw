@@ -38,15 +38,10 @@ pi_launch() {
     return 0
 }
 
-# unverified: no resume mechanism confirmed, so this is one fresh-launch attempt
-# the resume prompt plus TASK_NOTES.md carry context instead of a real resume
+# unverified: no resume mechanism confirmed, so there is no attempt to offer
+# cw then starts fresh from the resume prompt and the notes file, and says so
 pi_resume() {
-    local attempt="$1"
-    [[ "$attempt" == "1" ]] || return 1
-    _pi_base
-    [[ -n "$CW_MODEL" ]] && HARNESS_ARGV+=(--model "$CW_MODEL")
-    [[ -n "$CW_PROMPT" ]] && HARNESS_ARGV+=("$CW_PROMPT")
-    return 0
+    return 1
 }
 
 pi_doctor() {

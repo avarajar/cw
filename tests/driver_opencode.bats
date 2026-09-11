@@ -19,12 +19,13 @@ setup() {
     [ "$output" != "0" ]
 }
 
-@test "opencode resume uses run --continue" {
+@test "opencode resume never uses --continue" {
     "$CW_BIN" work app fix-auth
     rm -f "$CW_FAKE_LOG" "$CW_FAKE_LOG.n"
     "$CW_BIN" work app fix-auth
+    [ "$(call_count)" -eq 1 ]
     run bash -c "grep -c -- '^arg=--continue$' '$CW_FAKE_LOG'"
-    [ "$output" = "1" ]
+    [ "$output" = "0" ]
 }
 
 @test "opencode carries the account provider through to doctor" {
