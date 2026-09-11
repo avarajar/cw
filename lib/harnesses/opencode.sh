@@ -1,9 +1,11 @@
 # opencode driver
+# continue_last is not claimed: its --continue has no confirmed per-worktree scope
 opencode_supports() {
-    case "$1" in
-        continue_last|non_interactive_prompt|model_flag|custom_provider) return 0 ;;
-        *) return 1 ;;
-    esac
+    local cap
+    for cap in non_interactive_prompt model_flag custom_provider; do
+        [[ "$1" == "$cap" ]] && return 0
+    done
+    return 1
 }
 
 opencode_config_env() {

@@ -64,7 +64,7 @@ The capability enumeration is fixed; an unknown capability is always unsupported
 | `agent_teams` | Supports the agent-teams env flag |
 | `plugins` | Has a plugin CLI `cw stack` can drive |
 | `model_flag` | Accepts a model on argv |
-| `custom_provider` | Accepts a non-native provider endpoint |
+| `custom_provider` | Applies a non-native `CW_PROVIDER` itself. Declare it only if the driver really reads `CW_PROVIDER`: `cw` refuses to launch a harness without it when a non-native provider is configured, rather than run it silently on its own login. Today codex and opencode declare it; claude and pi do not |
 | `statusline` | Has a statusline `cw` can configure |
 | `instructions_file` | Has a user-level instructions file `cw` can install `CLAUDE.md`-equivalent content into |
 | `skills` | Has a user-level skills directory `cw` can symlink account skills into |

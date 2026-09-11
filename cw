@@ -549,9 +549,20 @@ _harness_available() {
     command -v "${HARNESS_ARGV[0]}" >/dev/null 2>&1
 }
 
+# refuses a launch whose configured provider the driver would silently ignore
+_harness_provider_applies() {
+    local provider="${CW_PROVIDER:-native}"
+    [[ "$provider" == "native" ]] && return 0
+    harness_supports custom_provider && return 0
+    _err "Provider '$provider' is configured, but the $CW_HARNESS driver cannot apply a provider."
+    _err "Refusing to run $CW_HARNESS on its own login instead. Remove the provider from $CW_ACCOUNTS_DIR/${CW_ACCOUNT:-<account>}/meta.json, or use a harness that applies it."
+    return 1
+}
+
 # a driver that refuses to build a launch sets _CW_LAUNCH_REFUSED so callers can fail
 _harness_launch() {
     HARNESS_ARGV=(); HARNESS_ENV=()
+    _harness_provider_applies || { _CW_LAUNCH_REFUSED=1; return 1; }
     harness_launch || { _CW_LAUNCH_REFUSED=1; return 1; }
     _harness_exec
 }
@@ -559,6 +570,7 @@ _harness_launch() {
 # tries each resume attempt the driver can attribute to this session, then starts fresh
 _harness_resume() {
     local attempt=1 rc=1
+    _harness_provider_applies || { _CW_LAUNCH_REFUSED=1; return 1; }
     while :; do
         HARNESS_ARGV=(); HARNESS_ENV=()
         harness_resume "$attempt" || break
@@ -1158,6 +1170,10 @@ with open(os.environ["CW_A_META"], "w") as f: json.dump(meta, f, indent=2)
 PY
             [[ -n "$provider" ]] && _account_meta_set "$name" "$harness" provider "$provider"
             [[ -n "$model" ]]    && _account_meta_set "$name" "$harness" model "$model"
+            if [[ -n "$provider" && "$provider" != "native" ]] && _harness_load "$harness" 2>/dev/null \
+                && ! harness_supports custom_provider; then
+                _warn "The $harness driver cannot apply provider '$provider' yet — cw will refuse to launch this account on $harness until it is removed."
+            fi
 
             # Auto-install arcade hooks if setup was done
             if [[ -f "$CW_HOME/.arcade-hook" ]]; then

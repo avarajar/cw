@@ -1,12 +1,13 @@
 # claude code driver
+# no custom_provider: the Anthropic-compatible endpoint path is not built, CW_PROVIDER is never read
 claude_supports() {
-    case "$1" in
-        resume_by_name|continue_last|non_interactive_prompt|interactive_prompt) return 0 ;;
-        mcp|hooks|skip_permissions|agent_teams|plugins) return 0 ;;
-        model_flag|statusline|instructions_file|skills|custom_provider) return 0 ;;
-        slash_commands) return 0 ;;
-        *) return 1 ;;
-    esac
+    local cap
+    for cap in resume_by_name continue_last non_interactive_prompt interactive_prompt \
+               mcp hooks skip_permissions agent_teams plugins \
+               model_flag statusline instructions_file skills slash_commands; do
+        [[ "$1" == "$cap" ]] && return 0
+    done
+    return 1
 }
 
 claude_config_env() {

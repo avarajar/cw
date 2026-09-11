@@ -236,7 +236,7 @@ Create a new account profile.
 
 **Options:**
 - `--harness, -H <name>` — harness this account uses by default (`claude` \| `codex` \| `pi` \| `opencode`); defaults to `claude`
-- `--provider, -p <name>` — provider for that harness (`native`, `ollama`, `lmstudio`, `llamacpp`, or any other name — anything not `native`/local is treated as a remote API provider)
+- `--provider, -p <name>` — provider for that harness (`native`, `ollama`, `lmstudio`, `llamacpp`, or any other name — anything not `native`/local is treated as a remote API provider). Only the codex and opencode drivers apply a provider today; for claude or pi, `cw` warns here and refuses to launch that account until the provider is removed
 - `--model, -m <name>` — default model for that harness/provider
 
 ```bash

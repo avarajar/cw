@@ -1,10 +1,12 @@
 # pi coding agent driver
 # unverified: entire capability set below is inferred from docs, no binary to check against
+# no custom_provider: this driver does not apply CW_PROVIDER yet
 pi_supports() {
-    case "$1" in
-        model_flag|custom_provider|instructions_file) return 0 ;;
-        *) return 1 ;;
-    esac
+    local cap
+    for cap in model_flag instructions_file; do
+        [[ "$1" == "$cap" ]] && return 0
+    done
+    return 1
 }
 
 pi_config_env() {

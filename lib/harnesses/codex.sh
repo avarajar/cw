@@ -1,12 +1,12 @@
 # codex cli driver
 # unverified: no skip-permissions equivalent flag confirmed, so it stays unsupported
 codex_supports() {
-    case "$1" in
-        continue_last|non_interactive_prompt|model_flag|custom_provider) return 0 ;;
-        instructions_file|api_key_login) return 0 ;;
-        headless_login) return 0 ;;
-        *) return 1 ;;
-    esac
+    local cap
+    for cap in continue_last non_interactive_prompt model_flag custom_provider \
+               instructions_file api_key_login headless_login; do
+        [[ "$1" == "$cap" ]] && return 0
+    done
+    return 1
 }
 
 codex_config_env() {
