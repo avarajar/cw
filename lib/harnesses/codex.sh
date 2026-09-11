@@ -25,8 +25,7 @@ _codex_snapshot() {
     _CW_CODEX_BEFORE="$(_codex_rollouts)"
 }
 
-# unverified: rollout file naming and json-lines layout under $CODEX_HOME/sessions
-# prints the id of the one new rollout that mentions this session's notes file, else nothing
+# unverified rollout layout: prints the id of the one new rollout naming the notes file, else nothing
 codex_session_ref() {
     local marker="${CW_NOTES_FILE:-}"
     [[ -n "$marker" && "${CW_PROMPT:-}" == *"$marker"* ]] || return 0
@@ -60,8 +59,7 @@ PY
     return 0
 }
 
-# sets only the top-level model and model_provider keys in the account's config.toml
-# everything else in the file is left byte-identical; anything it cannot edit safely is refused
+# sets only the top-level model keys in config.toml, refusing any file it cannot edit safely
 _codex_write_provider() {
     local provider="$1" model="$2"
     [[ -n "$provider" && "$provider" != "native" ]] || return 0
@@ -206,9 +204,7 @@ codex_launch() {
     return 0
 }
 
-# only attempts that can be attributed to this session: its recorded id, then --last
-# where cw vouches the directory holds nothing but this session's conversations
-# unverified: that codex scopes resume --last to the working directory
+# unverified --last scope: offers the recorded id, then --last only where cw vouches for the dir
 codex_resume() {
     local attempt="$1"
     local -a plan=()

@@ -95,7 +95,10 @@ cw spaces --json     # machine-readable list, for scripts/dashboards
 `--json` prints `{"schema": 1, "spaces": [...]}`, one object per active task/review with
 `project`, `account`, `type`, `id`, `harness`, `provider`, `model`, `opens`, `last_opened`,
 `worktree`, `resume` and `close` (the two commands to run). A session with no `harness` recorded
-(pre-0.3.0 sessions) reports `"claude"`; no `provider` recorded reports `"native"`.
+(pre-0.3.0 sessions) reports `"claude"`; no `provider` recorded reports `"native"`. `account` is
+the account the session was created on (the project's account for sessions that recorded none),
+and when it differs from the project's, `resume` and `close` carry `--account <name>` so the
+suggested command runs on the right credentials under every harness.
 
 ---
 

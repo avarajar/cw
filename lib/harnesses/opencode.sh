@@ -89,8 +89,7 @@ opencode_launch() {
     return 0
 }
 
-# only a recorded session id can be attributed to this session; --continue is never used
-# unverified: --continue picks opencode's last session with no confirmed per-worktree scope
+# only a recorded id is attributable; --continue has no confirmed worktree scope, so it is unused
 opencode_resume() {
     local attempt="$1"
     [[ "$attempt" == "1" && -n "$CW_SESSION_REF" ]] || return 1

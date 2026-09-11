@@ -40,8 +40,7 @@ pi_launch() {
     return 0
 }
 
-# unverified: no resume mechanism confirmed, so there is no attempt to offer
-# cw then starts fresh from the resume prompt and the notes file, and says so
+# unverified resume mechanism, so no attempt is offered and cw starts fresh from the notes
 pi_resume() {
     return 1
 }

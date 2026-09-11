@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# emulates gh issue/pr view, resolving a bare number from the cwd's origin like real gh
-# answers only the exact argv context_fetch_github is meant to send, and logs every call
+# answers only the exact gh view call the fetcher should make; a bare number resolves from cwd like real gh
 [[ -n "${CW_FAKE_GH_LOG:-}" ]] && { printf '%s\n' "cwd=$PWD" "$@" "--- end ---" >> "$CW_FAKE_GH_LOG"; }
 fixtures="${CW_FAKE_GH_FIXTURES:?CW_FAKE_GH_FIXTURES must be set}"
 [[ $# -eq 5 && ( "$1" == issue || "$1" == pr ) && "$2" == view && "$4" == --json \
