@@ -391,3 +391,35 @@ SLOW
     [[ "$output" == *"Could not create the worktree ('bad..name' is not a valid branch name)"* ]]
     [ ! -e "$path/.tasks/SEI-214" ]
 }
+
+@test "work run from HOME writes the exclude entries into the project, not into HOME" {
+    local path; path="$(make_project app)"
+    run bash -c "cd '$HOME' && '$CW_BIN' work app fix-auth"
+    [ "$status" -eq 0 ]
+    [ ! -e "$HOME/.git" ]
+    grep -qx '.tasks' "$path/.git/info/exclude"
+    grep -qx 'TASK_NOTES.md' "$path/.git/info/exclude"
+    grep -qx 'SHARED_CONTEXT.md' "$path/.git/info/exclude"
+}
+
+@test "work run from inside an unrelated repo leaves that repo's exclude untouched" {
+    local path; path="$(make_project app)"
+    local other="$BATS_TEST_TMPDIR/unrelated"
+    mkdir -p "$other"
+    git -C "$other" init -q -b main
+    local before; before="$(cat "$other/.git/info/exclude" 2>/dev/null; echo end)"
+    run bash -c "cd '$other' && '$CW_BIN' work app fix-auth"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$other/.git/info/exclude" 2>/dev/null; echo end)" = "$before" ]
+    grep -qx '.tasks' "$path/.git/info/exclude"
+}
+
+@test "the task files cw links into its worktree never show up in git status there" {
+    local path; path="$(make_origin_project app)"
+    run bash -c "cd '$HOME' && '$CW_BIN' work app fix-auth --harness codex"
+    [ "$status" -eq 0 ]
+    local st; st="$(git -C "$path/.tasks/fix-auth" status --porcelain --untracked-files=all)"
+    [[ "$st" != *"TASK_NOTES.md"* ]]
+    [[ "$st" != *"SHARED_CONTEXT.md"* ]]
+    [[ "$(git -C "$path" status --porcelain --untracked-files=all)" != *".tasks"* ]]
+}

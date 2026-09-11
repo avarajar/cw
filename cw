@@ -2966,7 +2966,8 @@ $acct_ctx"
         # Exclude .tasks from git (but DON'T pre-create the task dir — worktree needs it empty)
         mkdir -p "$path/.tasks"
         local proj_git_dir
-        proj_git_dir=$(cd "$path" && git rev-parse --git-dir 2>/dev/null) || true
+        # the project's own shared git dir, whichever directory cw was run from
+        proj_git_dir=$(cd "$path" && d=$(git rev-parse --git-common-dir 2>/dev/null) && cd "$d" && pwd) || true
         if [[ -n "$proj_git_dir" ]]; then
             local proj_exclude="$proj_git_dir/info/exclude"
             mkdir -p "$(dirname "$proj_exclude")" 2>/dev/null || true
