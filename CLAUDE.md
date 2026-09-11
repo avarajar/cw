@@ -1,38 +1,43 @@
 # CW — Claude Workspace Manager
 
-Multi-project orchestrator for Claude Code. Single Bash script (`cw`, ~2000 lines) that manages accounts, projects, worktrees, sessions, and integrations.
+Multi-project orchestrator for coding agents: Claude Code, Codex CLI, Pi and OpenCode. A Bash script (`cw`, ~6200 lines) that manages accounts, projects, worktrees, sessions and integrations, plus one driver per harness.
 
 ## Project Structure
 
 ```
 cw                          # Main executable (Bash)
 cw-shell-integration.sh     # Shell aliases, completions, shortcuts
-install.sh                  # Installation script
+install.sh                  # Installation script (copies cw and lib/ into ~/.cw)
 agents/                     # Bundled agent definitions (.md with frontmatter)
 templates/                  # CLAUDE.template.md for new projects
-docs/                       # architecture.md, commands.md, getting-started.md, claude-md.md
+docs/                       # architecture.md, commands.md, harness-drivers.md, getting-started.md, claude-md.md
 hooks/                      # Claude Code hooks (Python handler + audio + config)
+lib/harnesses/              # One driver per harness: claude, codex, pi, opencode
+lib/context/                # Ticket fetchers: github, linear, notion
 lib/                        # iterm2.sh, dashboard/ (SSE server + web UI)
 mcps/                       # MCP integration configs
+tests/                      # bats suite, fake harness binaries in tests/fakes/
 ```
 
 Runtime data lives in `~/.cw/` (accounts, sessions, projects.json, config.yaml).
 
-## Architecture (3 Concerns)
+## Architecture (4 Concerns)
 
-1. **Account Routing** — maps projects to Claude accounts via `CLAUDE_CONFIG_DIR`
-2. **Workspace Isolation** — git worktrees (`.tasks/`, `.reviews/`) for parallel work
-3. **Session Persistence** — metadata + notes files survive conversation loss
+1. **Account Routing** — maps projects to accounts; each account holds credentials per harness
+2. **Harness Routing** — every agent launch goes through the driver layer (`_harness_exec` is the only spawn point); see `docs/harness-drivers.md`
+3. **Workspace Isolation** — git worktrees under `.tasks/` for parallel work; reviews and loops run in the project root
+4. **Session Persistence** — metadata + notes files survive conversation loss
 
 ## Code Conventions
 
 - **Language**: Pure Bash (4+), no external build tools
-- **Public commands**: `cmd_<name>()` functions (init, account, project, work, review, create, spaces, open, help, etc.)
+- **Public commands**: `cmd_<name>()` functions (init, account, project, work, review, loop, create, spaces, open, harness, help, etc.)
 - **Internal helpers**: `_<name>()` functions (prefixed with underscore)
 - **Output helpers**: `_log()`, `_warn()`, `_err()`, `_dim()` — colored output with `$C`, `$BOLD`, `$NC`, etc.
 - **Error handling**: `set -uo pipefail`, guard with `${var:?Usage: ...}` for required args
 - **JSON handling**: `python3 -c` inline for reading/writing JSON (no jq dependency)
 - **Config**: YAML parsed with simple grep/sed patterns, not a full parser
+- **Harness features**: gate them with `harness_supports <capability>`; compare the harness name only to keep claude's legacy behaviour
 
 ## Key Commands
 
@@ -40,38 +45,44 @@ Runtime data lives in `~/.cw/` (accounts, sessions, projects.json, config.yaml).
 |---------|----------|-------------|
 | `cw create` | `cmd_create` | Bootstrap project from description or URL |
 | `cw work <project> <task>` | `cmd_work` | Start task in worktree with session |
-| `cw review <project> <PR>` | `cmd_review` | Review PR in isolated session |
+| `cw review <project> <PR>` | `cmd_review` | Review PR in its own session (no worktree) |
+| `cw loop <project> "<prompt>"` | `cmd_loop` | Recurring `/loop` session (claude only) |
 | `cw plan <project> "<desc>"` | `cmd_plan` | Plan & auto-split task into sub-worktrees |
 | `cw open <project>` | `cmd_open` | Quick open (no worktree) |
-| `cw account add/list/remove` | `cmd_account` | Manage Claude accounts |
+| `cw launch [account]` | `cmd_launch` | Open an account's agent, no project |
+| `cw account add/list/remove/login/migrate` | `cmd_account` | Manage accounts |
 | `cw project register/remove/list` | `cmd_project` | Manage project registry |
-| `cw spaces` | `cmd_spaces` | Show active tasks and reviews |
+| `cw harness list/doctor` | `cmd_harness` | Installed drivers |
+| `cw spaces` | `cmd_spaces` | Show active tasks and reviews (`--json`) |
 | `cw stats` | `cmd_stats` | Session metrics and productivity stats |
-| `cw doctor` | `cmd_doctor` | Health check — verify setup and diagnose issues |
+| `cw doctor` | `cmd_doctor` | Health check, account × harness matrix (`--json`) |
 | `cw dashboard` | `cmd_dashboard` | Full workspace overview |
 
 ## Working on This Project
 
 ```bash
-# Test changes directly — it's a single script
-chmod +x cw && ./cw help
-
-# Install locally to test full flow
-./install.sh
+git submodule update --init   # bats, once
+./tests/run.sh                # full suite (~330 tests, a few minutes)
+./tests/run.sh -f 'pattern'   # only tests whose name matches
+./install.sh                  # install locally to test the full flow
 ```
 
-- No tests, no CI — test manually
-- Changes to `cw` are the main work; everything else is supporting config/docs
-- The script dispatches commands at the bottom via a case statement in the main `_main()` function
-- When adding a new command: create `cmd_<name>()`, add case in `_main()`, add to `cmd_help()`
+- No CI — run the suite before pushing
+- `tests/launch_sites.bats` pins claude's exact argv at every launch site; don't edit it to make a change pass
+- Tests run against a throwaway `CW_HOME`/`HOME` and the fakes in `tests/fakes/`; only claude has been run against a real binary
+- `source ./cw` binds `CW_HOME` to the real `~/.cw` unless you export a scratch `CW_HOME` and `HOME` first
+- The script dispatches commands at the bottom via a case statement in `main()`
+- When adding a new command: create `cmd_<name>()`, add case in `main()`, add to `cmd_help()`
 - Workflow templates live in `~/.cw/templates/workflows/` (generated by `_generate_workflows()`)
 - Shared context files (`SHARED_CONTEXT.md`) are per-project in `~/.cw/sessions/<project>/`
 
 ## Environment Variables
 
 - `CW_HOME` — Config directory (default: `~/.cw`)
-- `CLAUDE_CONFIG_DIR` — Set per-account for routing
-- `CW_CLAUDE_FLAGS` — Extra flags for claude invocations
+- `CW_HARNESS` — Harness for a command without `--harness`
+- `CW_CLAUDE_FLAGS` — Extra flags for claude only; other harnesses read `CW_<HARNESS>_FLAGS`
+- `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, … — Set per account by each driver's `<h>_config_env`
+- `LINEAR_API_KEY`, `NOTION_TOKEN` — Read by the context fetchers (or from `~/.cw/tokens.env`), never passed to an agent
 - `CW_PROJECT`, `CW_TASK`, `CW_TASK_TYPE`, `CW_ACCOUNT` — Exported session context
 
 ## Do NOT
@@ -79,5 +90,6 @@ chmod +x cw && ./cw help
 - Add external dependencies (no jq, no node, keep it pure bash + python3)
 - Keep command logic in the single `cw` script; harness drivers live in `lib/harnesses/<name>.sh`
   and context fetchers in `lib/context/<source>.sh`
+- Spawn an agent anywhere but `_harness_exec`
 - Modify session/config files outside of `~/.cw/`
-- Commit `.tasks/`, `.reviews/`, or `*_NOTES.md` (excluded via `.git/info/exclude`)
+- Commit `.tasks/` or `*_NOTES.md` (excluded via `.git/info/exclude`)
