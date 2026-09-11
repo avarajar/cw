@@ -5687,10 +5687,10 @@ ${BOLD}GLOBAL FLAGS${NC}
                                         skip_permissions: true
                                       Or via env: CW_CLAUDE_FLAGS="--dangerously-skip-permissions"
   --harness, -H <name>                 Run this command on a specific harness
-                                       (claude | codex | pi | opencode)
-                                       Accepted by work, review, loop, plan,
-                                       create, open, account login/add and
-                                       project register
+                                      (claude | codex | pi | opencode)
+                                      Accepted by work, review, loop, plan,
+                                      create, open, account login/add and
+                                      project register
 
 ${BOLD}EXAMPLES${NC}
   cw create "SaaS de analytics con Stripe"          # New project from description
