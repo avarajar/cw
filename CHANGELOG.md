@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `cw work` records `base_branch` in a new task's `session.json`: the `origin/` ref its worktree
+  starts from (`--base`, else the remote's default branch, else `origin/main`). Resumed sessions
+  keep what they have; sessions created before this change have no `base_branch`.
+
 ## 0.3.0
 
 ### Added
