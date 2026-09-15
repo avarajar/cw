@@ -2981,7 +2981,7 @@ $acct_ctx"
         CW_S_PROJECT="$name" CW_S_TASK="$task" CW_S_ACCOUNT="$account" CW_S_WORKFLOW="$workflow" \
         CW_S_WORKTREE="$wt_dir" CW_S_NOTES="$notes_file" CW_S_SOURCE="$task_source" \
         CW_S_SOURCE_URL="$task_url" CW_S_MODEL="$model" CW_S_HARNESS="$harness" \
-        CW_S_PROVIDER="$provider" CW_S_META="$session_meta" python3 - <<'PYEOF'
+        CW_S_PROVIDER="$provider" CW_S_BASE="$base_branch" CW_S_META="$session_meta" python3 - <<'PYEOF'
 import json, os
 from datetime import datetime, timezone
 e = os.environ
@@ -2990,6 +2990,7 @@ meta = {
     'account': e['CW_S_ACCOUNT'], 'workflow': e['CW_S_WORKFLOW'],
     'worktree': e['CW_S_WORKTREE'], 'notes': e['CW_S_NOTES'],
     'source': e['CW_S_SOURCE'], 'source_url': e['CW_S_SOURCE_URL'],
+    'base_branch': e['CW_S_BASE'],
     'model': e['CW_S_MODEL'],
     'harness': e['CW_S_HARNESS'],
     'harness_session_id': '',

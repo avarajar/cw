@@ -423,3 +423,31 @@ SLOW
     [[ "$st" != *"SHARED_CONTEXT.md"* ]]
     [[ "$(git -C "$path" status --porcelain --untracked-files=all)" != *".tasks"* ]]
 }
+
+# prints one field of a session.json exactly
+base_of() {
+    python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("base_branch", "<missing>"))' "$1"
+}
+
+@test "a new task records the base branch its worktree started from" {
+    make_origin_project app >/dev/null
+    run "$CW_BIN" work app fix-auth --harness codex
+    [ "$status" -eq 0 ]
+    [ "$(base_of "$CW_HOME/sessions/app/task-fix-auth/session.json")" = "origin/main" ]
+}
+
+@test "--base records the requested base branch with its origin prefix" {
+    local path; path="$(make_origin_project app)"
+    commit_on "$path" develop
+    git -C "$path" push -q origin develop
+    run "$CW_BIN" work app fix-auth --harness codex --base develop
+    [ "$status" -eq 0 ]
+    [ "$(base_of "$CW_HOME/sessions/app/task-fix-auth/session.json")" = "origin/develop" ]
+}
+
+@test "a claude task with agent-driven setup records the base branch too" {
+    make_origin_project app >/dev/null
+    run "$CW_BIN" work app fix-auth
+    [ "$status" -eq 0 ]
+    [ "$(base_of "$CW_HOME/sessions/app/task-fix-auth/session.json")" = "origin/main" ]
+}

@@ -141,7 +141,7 @@ DONE: cw work app fix-auth --done
   "provider": "native",
   "model": "sonnet",
   "workflow": "bugfix",
-  "branch": "joselito/proj-123-fix-auth",
+  "base_branch": "origin/main",
   "worktree": "/path/to/.tasks/fix-auth",
   "notes": "/path/to/sessions/.../TASK_NOTES.md",
   "source": "linear",
