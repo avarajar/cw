@@ -1100,13 +1100,14 @@ tools:
   repo: github
 
 # Default Claude model per task type (opus, sonnet, haiku, opusplan, opus[1m], sonnet[1m])
-models:
-  work: sonnet
-  review: sonnet
-  plan: opus
-  create: haiku
-  open: sonnet
-  loop: sonnet
+# Leave commented to use Claude Code's own configured default (/model) for every task type
+#models:
+#  work: sonnet
+#  review: sonnet
+#  plan: opus
+#  create: haiku
+#  open: sonnet
+#  loop: sonnet
 YAML
     fi
 
