@@ -2,8 +2,11 @@
 set -euo pipefail
 
 # CW Installer — Coding Workspace
-# Usage: ./install.sh
+# Usage: ./install.sh [--no-shell]
 #   or:  curl -fsSL https://raw.githubusercontent.com/avarajar/cw/main/install.sh | bash
+#
+#   --no-shell  install without adding the shell integration to ~/.zshrc or
+#               ~/.bashrc (for installers such as Forge that call cw by path)
 
 CW_HOME="${CW_HOME:-$HOME/.cw}"
 REPO_URL="https://github.com/avarajar/cw"
@@ -199,6 +202,15 @@ setup_shell() {
 # ── Main ────────────────────────────────────────────────────────────────────
 
 main() {
+    local shell_integration=true
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --no-shell) shell_integration=false ;;
+            *) err "Unknown option: $1"; echo "Usage: ./install.sh [--no-shell]" >&2; exit 1 ;;
+        esac
+        shift
+    done
+
     echo ""
     echo -e "${BOLD}CW — Coding Workspace${NC}"
     echo -e "Installing to ${C}$CW_HOME${NC}"
@@ -206,13 +218,21 @@ main() {
 
     check_requirements
     install_files
-    setup_shell
+    if $shell_integration; then
+        setup_shell
+    else
+        log "Skipped shell integration (--no-shell): run ${C}$CW_HOME/bin/cw${NC} by path"
+    fi
 
     echo ""
     ok "Installation complete!"
     echo ""
     echo -e "  ${BOLD}Next steps:${NC}"
-    echo -e "  1. Restart your terminal (or: ${C}source ~/.zshrc${NC})"
+    if $shell_integration; then
+        echo -e "  1. Restart your terminal (or: ${C}source ~/.zshrc${NC})"
+    else
+        echo -e "  1. Add ${C}$CW_HOME/bin${NC} to your PATH to run cw from a terminal"
+    fi
     echo -e "  2. ${C}cw init${NC}"
     echo -e "  3. ${C}cw account add work${NC}"
     echo -e "  4. ${C}cw project register <path> --account work${NC}"

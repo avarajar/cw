@@ -402,6 +402,8 @@ cd cw
 
 The installer copies CW to `~/.cw/bin/` together with its harness drivers and context fetchers in `~/.cw/lib/`, installs hooks, agents and templates, and adds shell integration to `.zshrc` / `.bashrc` with tab completion and aliases. It never touches your existing accounts, sessions or projects.
 
+`./install.sh --no-shell` installs without touching `.zshrc` or `.bashrc`, for tools that run `~/.cw/bin/cw` by path. Forge uses it when it installs CW for you.
+
 To update, pull and run `./install.sh` again. Copying only the `cw` script is not enough: without its drivers, it can't launch any harness.
 
 ## Configuration
