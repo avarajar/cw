@@ -4127,10 +4127,10 @@ cmd_forge() {
     if command -v forge &>/dev/null; then
         forge console --port "$port"
     elif command -v npx &>/dev/null; then
-        npx @forge-dev/platform --port "$port"
+        npx forge-cw --port "$port"
     else
         _err "Node.js / npx not found. Install Node.js >= 20 first."
-        _err "Then: npm i -g @forge-dev/platform"
+        _err "Then: npm i -g forge-cw"
         return 1
     fi
 }

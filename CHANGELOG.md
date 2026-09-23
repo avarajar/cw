@@ -4,9 +4,16 @@
 
 ### Added
 
+- `install.sh --no-shell` installs CW without adding the shell integration to `.zshrc` or
+  `.bashrc`, for installers that run `~/.cw/bin/cw` by path. An unknown option now stops the
+  installer before it copies anything.
 - `cw work` records `base_branch` in a new task's `session.json`: the `origin/` ref its worktree
   starts from (`--base`, else the remote's default branch, else `origin/main`). Resumed sessions
   keep what they have; sessions created before this change have no `base_branch`.
+
+### Changed
+
+- `cw forge` runs Forge's npm package under its new name, `forge-cw` (`npx forge-cw`).
 
 ## 0.3.0
 
