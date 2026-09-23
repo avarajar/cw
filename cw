@@ -155,6 +155,29 @@ _link_account_skills() {
     done
 }
 
+# links global and account skills into the config dir the harness reads, since CLAUDE_CONFIG_DIR hides ~/.claude/skills
+_link_shared_skills() {
+    local harness_dir="${1:?Usage: _link_shared_skills <harness_dir> <acct_root>}" acct_root="${2:?}"
+    harness_supports skills || return 0
+    local target_dir="$harness_dir/skills" link src name
+    mkdir -p "$target_dir" 2>/dev/null || return 0
+    # drops links whose skill was removed from its source
+    for link in "$target_dir"/*; do
+        [[ -L "$link" && ! -e "$link" ]] && rm -f "$link"
+    done
+    local sources=("$HOME/.claude/skills")
+    [[ "$acct_root/skills" != "$target_dir" ]] && sources=("$acct_root/skills" "${sources[@]}")
+    for src in "${sources[@]}"; do
+        [[ -d "$src" && "$src" != "$target_dir" ]] || continue
+        for link in "$src"/*/; do
+            [[ -f "$link/SKILL.md" ]] || continue
+            name=$(basename "$link")
+            case "$name" in acct--*) continue ;; esac
+            [[ -e "$target_dir/$name" || -L "$target_dir/$name" ]] || ln -s "${link%/}" "$target_dir/$name"
+        done
+    done
+}
+
 _get_project() {
     CW_REG="$CW_REGISTRY" CW_NAME="$1" python3 -c "
 import json, os, sys
@@ -559,10 +582,17 @@ _harness_provider_applies() {
     return 1
 }
 
+# every launch sees the global skills and its account's skills
+_link_harness_skills() {
+    [[ -n "${CW_HARNESS_DIR:-}" && -n "${CW_ACCOUNT:-}" ]] || return 0
+    _link_shared_skills "$CW_HARNESS_DIR" "$(_account_root "$CW_ACCOUNT")"
+}
+
 # a driver that refuses to build a launch sets _CW_LAUNCH_REFUSED so callers can fail
 _harness_launch() {
     HARNESS_ARGV=(); HARNESS_ENV=()
     _harness_provider_applies || { _CW_LAUNCH_REFUSED=1; return 1; }
+    _link_harness_skills
     harness_launch || { _CW_LAUNCH_REFUSED=1; return 1; }
     _harness_exec
 }
@@ -571,6 +601,7 @@ _harness_launch() {
 _harness_resume() {
     local attempt=1 rc=1
     _harness_provider_applies || { _CW_LAUNCH_REFUSED=1; return 1; }
+    _link_harness_skills
     while :; do
         HARNESS_ARGV=(); HARNESS_ENV=()
         harness_resume "$attempt" || break
@@ -965,6 +996,15 @@ _account_migrate_split() {
 _account_migrate_undo() {
     local account="$1" root="$2" dry="$3"
     [[ -d "$root/claude" ]] || { _warn "Account '$account' is already flat."; return 0; }
+    # launches link skills into claude/skills; the skills themselves live elsewhere
+    if [[ -d "$root/claude/skills" ]]; then
+        if $dry; then
+            _dim "  would drop the skill links in claude/skills"
+        else
+            find "$root/claude/skills" -maxdepth 1 -type l -delete
+            rmdir "$root/claude/skills" 2>/dev/null || true
+        fi
+    fi
     _account_scan_dir "$root/claude"
     local entries=(${CW_ACCOUNT_ENTRIES[@]+"${CW_ACCOUNT_ENTRIES[@]}"})
     local entry base blocked=0
