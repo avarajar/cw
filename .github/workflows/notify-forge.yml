@@ -1,0 +1,27 @@
+name: Notify Forge
+
+# Tells Forge a new CW main exists, so its Bump CW workflow pins, merges and releases it now
+# instead of at the daily run. FORGE_DISPATCH_TOKEN: a fine-grained token with
+# Contents read and write on avarajar/forge.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch cw-updated to Forge
+        env:
+          GH_TOKEN: ${{ secrets.FORGE_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::FORGE_DISPATCH_TOKEN is not set; Forge picks up this CW at its daily run"
+            exit 0
+          fi
+          gh api repos/avarajar/forge/dispatches -f event_type=cw-updated
