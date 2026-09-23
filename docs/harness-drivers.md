@@ -67,7 +67,7 @@ The capability enumeration is fixed; an unknown capability is always unsupported
 | `custom_provider` | Applies a non-native `CW_PROVIDER` itself. Declare it only if the driver really reads `CW_PROVIDER`: `cw` refuses to launch a harness without it when a non-native provider is configured, rather than run it silently on its own login. Today codex and opencode declare it; claude and pi do not |
 | `statusline` | Has a statusline `cw` can configure |
 | `instructions_file` | Has a user-level instructions file `cw` can install `CLAUDE.md`-equivalent content into |
-| `skills` | Has a user-level skills directory `cw` can symlink account skills into |
+| `skills` | Has a user-level skills directory in its config dir; every launch links the global `~/.claude/skills` and the account's skills into it |
 | `api_key_login` | Has an API-key import path `cw account login --with-api-key -` can drive |
 | `headless_login` | Has a login that prints a URL or device code instead of a browser or TUI, so `cw account login --no-browser` can pipe it and emit `CW_LOGIN_URL=` / `CW_LOGIN_CODE=`. Without it `--no-browser` is refused; a normal login always keeps the terminal |
 | `slash_commands` | Understands the Claude Code slash commands `cw` sends as prompts (`/loop`, `/simplify`). `cw loop` refuses on a harness without it, and `cw work` asks for a self-review in plain words instead of `/simplify` |

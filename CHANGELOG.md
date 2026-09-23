@@ -10,6 +10,10 @@
 - `cw work` records `base_branch` in a new task's `session.json`: the `origin/` ref its worktree
   starts from (`--base`, else the remote's default branch, else `origin/main`). Resumed sessions
   keep what they have; sessions created before this change have no `base_branch`.
+- Every Claude Code launch links the global skills in `~/.claude/skills` into the account's config
+  dir, since `CLAUDE_CONFIG_DIR` points Claude away from `~/.claude`. An account skill with the same
+  name wins, links to removed skills are dropped on the next launch, and an account migrated to
+  `accounts/<name>/claude` also gets its own `skills/` linked there.
 
 ### Changed
 
