@@ -11,6 +11,10 @@
   starts from (`--base`, else the remote's default branch, else `origin/main`). Resumed sessions
   keep what they have; sessions created before this change have no `base_branch`.
 
+### Changed
+
+- `cw forge` runs Forge's npm package under its new name, `forge-cw` (`npx forge-cw`).
+
 ## 0.3.0
 
 ### Added

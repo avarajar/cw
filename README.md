@@ -312,11 +312,11 @@ Forge launches Claude Code sessions; choosing a harness from Forge is planned.
 
 **Install:**
 ```bash
-npm i -g @forge-dev/platform    # install once
+npm i -g forge-cw               # install once, CW included
 cw forge                        # launch any time
 ```
 
-Or without installing: `npx @forge-dev/platform`
+Or without installing: `npx forge-cw`. The package carries CW and installs it into `~/.cw` if you do not have it yet.
 
 See the [Forge repo](https://github.com/avarajar/forge) for full docs and screenshots.
 
