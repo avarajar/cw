@@ -24,7 +24,7 @@ claude_plugin() {
     _claude_base_env
     case "$op" in
         list) HARNESS_ARGV=(claude plugin list) ;;
-        add)  HARNESS_ARGV=(claude plugin add "$plugin") ;;
+        add)  HARNESS_ARGV=(claude plugin install "$plugin") ;;
         *)    return 1 ;;
     esac
     return 0

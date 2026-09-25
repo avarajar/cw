@@ -11,6 +11,13 @@ setup() { setup_cw_home; }
     [ "$status" -eq 0 ]
 }
 
+@test "claude installs a plugin with plugin install, which the CLI has, not plugin add" {
+    run bash -c "source '$BATS_TEST_DIRNAME/../lib/harnesses/claude.sh'
+                 CW_HARNESS_DIR=/tmp/acct claude_plugin add vercel && echo \"\${HARNESS_ARGV[*]}\""
+    [ "$status" -eq 0 ]
+    [ "$output" = "claude plugin install vercel" ]
+}
+
 @test "an unknown capability is unsupported" {
     run bash -c "source '$BATS_TEST_DIRNAME/../lib/harnesses/claude.sh'
                  claude_supports teleportation"
