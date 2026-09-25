@@ -15,6 +15,11 @@
   name wins, links to removed skills are dropped on the next launch, and an account migrated to
   `accounts/<name>/claude` also gets its own `skills/` linked there.
 
+### Fixed
+
+- Stack plugins install again: the Claude Code driver ran `claude plugin add`, which the CLI does not
+  have, so every stack plugin failed with "Could not install plugin". It now runs `claude plugin install`.
+
 ### Changed
 
 - `cw forge` runs Forge's npm package under its new name, `forge-cw` (`npx forge-cw`).
