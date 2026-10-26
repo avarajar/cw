@@ -171,6 +171,8 @@ The `--workflow` flag adds structured instructions for different kinds of work:
 
 Workflow templates live in `~/.cw/templates/workflows/` and are fully customizable.
 
+To give every new task the same rules without `--workflow`, write them to `~/.cw/templates/work_init.md`; it applies to all accounts, before an account's own `templates/work_init.md`.
+
 #### Shared Context
 
 All worktrees in the same project share a `SHARED_CONTEXT.md` file, linked in automatically. When one task discovers something relevant to others — a schema change, an API change, a convention — the agent updates the shared context, and the other worktrees see it immediately.
