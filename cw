@@ -2991,19 +2991,23 @@ $(cat "$wf_file")"
             fi
         fi
 
-        # ── Account work context (init) ──────────────────────────────────
-        local acct_init_tpl="$(_account_root "$account")/templates/work_init.md"
-        if [[ -f "$acct_init_tpl" ]]; then
-            local acct_ctx
-            acct_ctx=$(cat "$acct_init_tpl")
-            acct_ctx="${acct_ctx//\$\{task\}/$task}"
-            acct_ctx="${acct_ctx//\$\{project\}/$name}"
-            acct_ctx="${acct_ctx//\$\{branch\}/$task}"
+        # ── Work context (init): global first, then the account's ────────
+        local init_tpl init_ctx
+        for init_tpl in "$CW_HOME/templates/work_init.md" "$(_account_root "$account")/templates/work_init.md"; do
+            [[ -f "$init_tpl" ]] || continue
+            init_ctx=$(cat "$init_tpl")
+            init_ctx="${init_ctx//\$\{task\}/$task}"
+            init_ctx="${init_ctx//\$\{project\}/$name}"
+            init_ctx="${init_ctx//\$\{branch\}/$task}"
             init_prompt="$init_prompt
 
-$acct_ctx"
-            _dim "  Account context: $account"
-        fi
+$init_ctx"
+            if [[ "$init_tpl" == "$CW_HOME/templates/work_init.md" ]]; then
+                _dim "  Work context: global"
+            else
+                _dim "  Account context: $account"
+            fi
+        done
 
         # Exclude .tasks from git (but DON'T pre-create the task dir — worktree needs it empty)
         mkdir -p "$path/.tasks"
